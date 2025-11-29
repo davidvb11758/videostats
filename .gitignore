@@ -9,6 +9,9 @@
 # Still images folder
 still_images/
 
+# Extracted video clips folder
+video_clips/
+
 # Python virtual environment
 venv/
 env/

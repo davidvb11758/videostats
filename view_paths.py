@@ -5,21 +5,224 @@ Displays contacts as dots connected by lines with arrowheads.
 
 import sys
 import math
+import subprocess
 from pathlib import Path
 from PySide6.QtWidgets import (
     QMainWindow, QMessageBox, QApplication, QGraphicsScene, 
     QGraphicsView, QGraphicsEllipseItem, QGraphicsLineItem, 
     QGraphicsPathItem, QGraphicsRectItem, QVBoxLayout, QHBoxLayout, QWidget,
     QListWidget, QListWidgetItem, QCheckBox, QLabel, QGroupBox, QTableWidget,
-    QTableWidgetItem, QHeaderView, QAbstractItemView
+    QTableWidgetItem, QHeaderView, QAbstractItemView, QPushButton, QSlider,
+    QProgressDialog
 )
-from PySide6.QtCore import Qt, QPointF, QRectF, QUrl
-from PySide6.QtGui import QPen, QBrush, QColor, QPainterPath, QPolygonF, QPainter
+from PySide6.QtCore import Qt, QPointF, QRectF, QUrl, QSize, QThread, Signal
+from PySide6.QtGui import QPen, QBrush, QColor, QPainterPath, QPolygonF, QPainter, QFont
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
 from PySide6.QtUiTools import QUiLoader
 from database import VideoStatsDB
 from typing import Optional, List, Tuple
+
+
+class VideoClipExtractor(QThread):
+    """Thread for extracting video clips using ffmpeg."""
+    
+    finished = Signal(bool, str)  # Success flag and message
+    
+    def __init__(self, input_path: str, output_path: str, start_ms: int, duration_ms: int):
+        super().__init__()
+        self.input_path = input_path
+        self.output_path = output_path
+        self.start_ms = start_ms
+        self.duration_ms = duration_ms
+    
+    def run(self):
+        """Extract video clip using ffmpeg."""
+        try:
+            # Convert milliseconds to seconds for ffmpeg
+            start_seconds = self.start_ms / 1000.0
+            duration_seconds = self.duration_ms / 1000.0
+            
+            # ffmpeg command to extract clip
+            # -ss: start time, -t: duration, -c copy: copy codec (fast, no re-encoding)
+            cmd = [
+                'ffmpeg',
+                '-ss', str(start_seconds),
+                '-i', self.input_path,
+                '-t', str(duration_seconds),
+                '-c', 'copy',
+                '-y',  # Overwrite output file if exists
+                self.output_path
+            ]
+            
+            print(f"DEBUG: Running ffmpeg command: {' '.join(cmd)}")
+            
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+            )
+            
+            if result.returncode == 0:
+                self.finished.emit(True, f"Video clip saved to:\n{self.output_path}")
+            else:
+                error_msg = result.stderr if result.stderr else "Unknown error"
+                self.finished.emit(False, f"FFmpeg error:\n{error_msg}")
+                
+        except FileNotFoundError:
+            self.finished.emit(False, "FFmpeg not found. Please install FFmpeg and add it to your PATH.")
+        except Exception as e:
+            self.finished.emit(False, f"Error extracting clip:\n{str(e)}")
+
+
+class VideoPlayerWindow(QMainWindow):
+    """Separate window for video playback."""
+    
+    def __init__(self, video_path: str, contact_timecode_ms: int = 0, contact_info: str = "", parent=None):
+        super().__init__(parent)
+        window_title = f"Video Player - {contact_info}" if contact_info else "Video Player"
+        self.setWindowTitle(window_title)
+        self.resize(1000, 600)
+        
+        # Calculate playback window: 3 seconds before to 3 seconds after contact
+        self.contact_timecode_ms = contact_timecode_ms if contact_timecode_ms else 0
+        self.start_time_ms = max(0, self.contact_timecode_ms - 3000)  # 3 seconds before
+        self.end_time_ms = self.contact_timecode_ms + 3000  # 3 seconds after
+        self.auto_started = False
+        
+        # Create central widget and layout
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        layout = QVBoxLayout(central_widget)
+        layout.setContentsMargins(5, 5, 5, 5)
+        layout.setSpacing(5)
+        
+        # Create graphics scene and view for video
+        self.scene = QGraphicsScene(0, 0, 1000, 600)
+        self.view = QGraphicsView(self.scene)
+        self.view.setRenderHint(QPainter.RenderHint.Antialiasing)
+        self.view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        layout.addWidget(self.view)
+        
+        # Video controls layout
+        controls_layout = QHBoxLayout()
+        
+        self.play_pause_btn = QPushButton("Pause")
+        self.play_pause_btn.setFont(QFont('Arial', 10))
+        self.play_pause_btn.clicked.connect(self.toggle_play_pause)
+        controls_layout.addWidget(self.play_pause_btn)
+        
+        self.video_slider = QSlider(Qt.Orientation.Horizontal)
+        self.video_slider.sliderMoved.connect(self.seek_video)
+        controls_layout.addWidget(self.video_slider)
+        
+        self.time_label = QLabel("00:00:00 / 00:00:00")
+        self.time_label.setFont(QFont('Arial', 10))
+        controls_layout.addWidget(self.time_label)
+        
+        # Contact moment indicator
+        contact_time_formatted = self.format_time(contact_timecode_ms)
+        self.contact_indicator = QLabel(f"Contact @ {contact_time_formatted}")
+        self.contact_indicator.setFont(QFont('Arial', 10, QFont.Weight.Bold))
+        self.contact_indicator.setStyleSheet("color: red;")
+        controls_layout.addWidget(self.contact_indicator)
+        
+        layout.addLayout(controls_layout)
+        
+        # Create media player
+        self.media_player = QMediaPlayer()
+        self.audio_output = QAudioOutput()
+        self.media_player.setAudioOutput(self.audio_output)
+        
+        # Create video item
+        self.video_item = QGraphicsVideoItem()
+        self.video_item.setSize(QRectF(0, 0, 1000, 600).size())
+        self.scene.addItem(self.video_item)
+        
+        # Set video output
+        self.media_player.setVideoOutput(self.video_item)
+        
+        # Connect signals
+        self.media_player.positionChanged.connect(self.update_position)
+        self.media_player.durationChanged.connect(self.update_duration)
+        
+        # Load video
+        self.media_player.setSource(QUrl.fromLocalFile(video_path))
+        
+        # Seek to start time and auto-play when video is loaded
+        self.media_player.mediaStatusChanged.connect(self.on_media_status_changed)
+    
+    def on_media_status_changed(self, status):
+        """Handle media status changes to seek to initial timecode and auto-play."""
+        if status == QMediaPlayer.MediaStatus.LoadedMedia:
+            # Video is loaded, seek to start time (3 seconds before contact)
+            self.media_player.setPosition(self.start_time_ms)
+            # Auto-start playback
+            self.media_player.play()
+            self.play_pause_btn.setText("Pause")
+            self.auto_started = True
+            print(f"DEBUG: Video auto-started at {self.start_time_ms}ms, will stop at {self.end_time_ms}ms")
+            # Disconnect this handler
+            self.media_player.mediaStatusChanged.disconnect(self.on_media_status_changed)
+    
+    def toggle_play_pause(self):
+        """Toggle between play and pause."""
+        if self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+            self.media_player.pause()
+            self.play_pause_btn.setText("Play")
+        else:
+            self.media_player.play()
+            self.play_pause_btn.setText("Pause")
+    
+    def seek_video(self, position):
+        """Seek to a specific position in the video."""
+        self.media_player.setPosition(position)
+    
+    def update_position(self, position):
+        """Update the slider position as the video plays."""
+        if not self.video_slider.isSliderDown():
+            self.video_slider.setValue(position)
+        
+        # Update time label
+        current_time = self.format_time(position)
+        duration = self.media_player.duration()
+        total_time = self.format_time(duration)
+        self.time_label.setText(f"{current_time} / {total_time}")
+        
+        # Highlight contact indicator when near contact moment
+        if abs(position - self.contact_timecode_ms) < 500:  # Within 0.5 seconds
+            self.contact_indicator.setStyleSheet("color: white; background-color: red; padding: 2px;")
+        else:
+            self.contact_indicator.setStyleSheet("color: red;")
+        
+        # Check if we've reached the end time (3 seconds after contact)
+        if position >= self.end_time_ms and self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+            self.media_player.pause()
+            self.play_pause_btn.setText("Play")
+            print(f"DEBUG: Auto-paused at {position}ms (end time: {self.end_time_ms}ms)")
+    
+    def update_duration(self, duration):
+        """Update the slider range when video duration is known."""
+        self.video_slider.setRange(0, duration)
+    
+    def format_time(self, ms):
+        """Format milliseconds to HH:MM:SS."""
+        total_seconds = ms // 1000
+        hours = total_seconds // 3600
+        minutes = (total_seconds % 3600) // 60
+        seconds = total_seconds % 60
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+    
+    def resizeEvent(self, event):
+        """Handle window resize to scale video."""
+        super().resizeEvent(event)
+        if self.video_item and self.view:
+            # Scale video to fit view
+            view_size = self.view.viewport().size()
+            self.video_item.setSize(QRectF(0, 0, view_size.width(), view_size.height()).size())
+            self.scene.setSceneRect(0, 0, view_size.width(), view_size.height())
 
 
 class ContactPathViewer(QMainWindow):
@@ -64,14 +267,11 @@ class ContactPathViewer(QMainWindow):
         # Display mode (drawing or video)
         self.display_mode = 'drawing'  # 'drawing' or 'video'
         
-        # Video player components
-        self.media_player = QMediaPlayer()
-        self.audio_output = QAudioOutput()
-        self.media_player.setAudioOutput(self.audio_output)
-        self.video_item = None
-        
         # Contact list table for video mode
         self.contact_table = None
+        
+        # Video container for table + button
+        self.video_container = None
         
         # Setup UI
         self.setup_graphics_view()
@@ -220,46 +420,130 @@ class ContactPathViewer(QMainWindow):
                 court_rect = outer_court.geometry()
                 
                 # Make contact table a child of outerCourt (same as graphics_view)
+                # Top-aligned, leave room at bottom for button (70px = button height + margins)
+                table_height = court_rect.height() - 70  # Leave room for button
                 self.contact_table.setParent(outer_court)
-                self.contact_table.setGeometry(0, 0, court_rect.width(), court_rect.height())
-                print(f"DEBUG: Contact table embedded in outerCourt at (0,0,{court_rect.width()},{court_rect.height()})")
+                # Top-aligned: y=0
+                self.contact_table.setGeometry(0, 0, court_rect.width(), table_height)
+                print(f"DEBUG: Contact table embedded in outerCourt at (0, 0, {court_rect.width()}, {table_height})")
             else:
                 # Add to layout if outerCourt doesn't exist
+                # Create a container widget to hold table and button vertically
                 central = self.ui.centralwidget if hasattr(self.ui, 'centralwidget') else None
                 if central:
-                    layout = central.layout()
-                    if layout:
-                        # Match the graphics_view size
-                        self.contact_table.setFixedSize(640, 1000)
-                        print(f"DEBUG: Adding contact table to existing layout: {type(layout)}")
-                        # Insert at position 0 (same as graphics_view)
-                        layout.insertWidget(0, self.contact_table)
-                    else:
-                        print("DEBUG: No layout found in central widget")
+                    # Create a container widget with vertical layout for table + button
+                    # Make it a DIRECT child of centralwidget with absolute positioning
+                    self.video_container = QWidget(central)
+                    video_layout = QVBoxLayout(self.video_container)
+                    video_layout.setContentsMargins(0, 0, 0, 0)
+                    video_layout.setSpacing(10)
+                    
+                    # Set table size and add to container
+                    self.contact_table.setFixedSize(640, 700)
+                    video_layout.addWidget(self.contact_table)
+                    
+                    # Use absolute positioning (300px from left, top-aligned)
+                    self.video_container.setGeometry(300, 0, 640, 800)
+                    
+                    print(f"DEBUG: Created video container at absolute position (300, 0, 640, 800)")
+                    print(f"DEBUG: Adding contact table to video container layout")
+                    
+                    # Don't add to layout - use absolute positioning instead
+                    # The container is already a child of centralwidget
+                    print(f"DEBUG: Video container uses absolute positioning (not in layout)")
         
         if not self.contact_table:
             print("ERROR: Failed to create/find contact table!")
             return
         
         # Configure table
-        self.contact_table.setColumnCount(5)
-        self.contact_table.setHorizontalHeaderLabels(['Timecode', 'Player #', 'Player Name', 'Contact Type', 'Outcome'])
+        self.contact_table.setColumnCount(7)
+        self.contact_table.setHorizontalHeaderLabels(['Select', 'Player', 'Contact Type', 'Outcome', 'Rally/Seq', 'Timecode', 'View'])
+        
+        # Make sure headers are visible
+        self.contact_table.horizontalHeader().setVisible(True)
+        self.contact_table.verticalHeader().setVisible(True)
+        
+        print(f"DEBUG: Table configured with {self.contact_table.columnCount()} columns")
+        print(f"DEBUG: Table headers: {[self.contact_table.horizontalHeaderItem(i).text() for i in range(self.contact_table.columnCount())]}")
         
         # Set column widths
         header = self.contact_table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)  # Timecode
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)  # Player #
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)  # Player Name
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)  # Contact Type
-        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)  # Outcome
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)  # Select checkbox
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)  # Player (# + name)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)  # Contact Type
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)  # Outcome
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)  # Rally/Seq
+        header.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)  # Timecode
+        header.setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)  # View button
         
         # Set selection mode
         self.contact_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.contact_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         
+        # Set alternating row colors for better visibility
+        self.contact_table.setAlternatingRowColors(True)
+        
+        # Set stylesheet to ensure table is visible
+        self.contact_table.setStyleSheet("""
+            QTableWidget {
+                background-color: white;
+                gridline-color: #d0d0d0;
+                alternate-background-color: #f5f5f5;
+            }
+            QTableWidget::item {
+                padding: 5px;
+            }
+        """)
+        
         # Hide by default (shown only in video mode)
         self.contact_table.setVisible(False)
         print(f"DEBUG: Contact table setup complete, initial visibility: {self.contact_table.isVisible()}")
+        
+        # Create "Create Highlight Video" button
+        # Try to use button from UI file, otherwise create it
+        if hasattr(self.ui, 'pushButtonCreateHighlight'):
+            self.create_highlight_btn = self.ui.pushButtonCreateHighlight
+            print("DEBUG: Using pushButtonCreateHighlight from UI file")
+        else:
+            print("DEBUG: Creating new Create Highlight button")
+            self.create_highlight_btn = QPushButton("Create Highlight Video")
+            self.create_highlight_btn.setFont(QFont('Arial', 12))
+            
+            # Position button below the contact table (200px wide)
+            if hasattr(self.ui, 'outerCourt'):
+                # If table is in outerCourt, position button below it
+                outer_court = self.ui.outerCourt
+                court_rect = outer_court.geometry()
+                table_height = court_rect.height() - 70  # Match table height calculation
+                button_y = table_height + 10  # 10px gap below table
+                button_width = 200  # Fixed 200px width as requested
+                button_height = 50
+                
+                self.create_highlight_btn.setParent(outer_court)
+                # Center the button horizontally (optional) or left-align (x=10)
+                # Let's left-align with 10px margin
+                self.create_highlight_btn.setGeometry(10, button_y, button_width, button_height)
+                print(f"DEBUG: Button positioned at (10, {button_y}, {button_width}, {button_height})")
+            else:
+                # Add button to video_container's vertical layout (below table)
+                if hasattr(self, 'video_container'):
+                    video_layout = self.video_container.layout()
+                    if video_layout:
+                        self.create_highlight_btn.setFixedWidth(200)  # Set 200px width
+                        video_layout.addWidget(self.create_highlight_btn)
+                        print(f"DEBUG: Button added to video_container layout")
+                    else:
+                        print("DEBUG: WARNING - video_container has no layout")
+                else:
+                    print("DEBUG: WARNING - no video_container found")
+        
+        # Connect signal (works whether button is from UI or created)
+        self.create_highlight_btn.clicked.connect(self.create_highlight_video)
+        
+        # Hide button by default (shown only in video mode)
+        self.create_highlight_btn.setVisible(False)
+        print(f"DEBUG: Create Highlight button setup complete")
     
     def populate_games_dropdown(self):
         """Populate the games comboBox with all games from the database."""
@@ -404,10 +688,6 @@ class ContactPathViewer(QMainWindow):
         
         if hasattr(self.ui, 'radioButtonViewVideo'):
             self.ui.radioButtonViewVideo.toggled.connect(self.on_display_mode_changed)
-        
-        # Connect table row click to seek video
-        if self.contact_table:
-            self.contact_table.cellClicked.connect(self.on_contact_row_clicked)
     
     def on_game_selected(self, index: int):
         """Handle game selection from dropdown."""
@@ -463,94 +743,70 @@ class ContactPathViewer(QMainWindow):
         print(f"DEBUG: update_display_mode_ui called, mode = {self.display_mode}")
         
         if self.display_mode == 'drawing':
-            # Show court drawing (graphics view), hide contact table
+            # Show court drawing (graphics view), hide contact table and highlight button
             if self.graphics_view:
                 self.graphics_view.setVisible(True)
                 print("DEBUG: Graphics view visible = True")
             if self.contact_table:
                 self.contact_table.setVisible(False)
                 print("DEBUG: Contact table visible = False")
+            if hasattr(self, 'video_container') and self.video_container:
+                self.video_container.setVisible(False)
+                print("DEBUG: Video container visible = False")
+            if hasattr(self, 'create_highlight_btn') and self.create_highlight_btn:
+                self.create_highlight_btn.setVisible(False)
+                print("DEBUG: Create Highlight button visible = False")
             # Make sure court background is drawn
             self.draw_court_background()
         else:  # video mode
-            # Hide court drawing (graphics view), show contact table in its place
+            # Hide court drawing (graphics view), show contact table and highlight button in its place
+            # Video will open in separate windows when View buttons are clicked
             if self.graphics_view:
                 self.graphics_view.setVisible(False)
+                self.graphics_view.hide()  # Explicitly hide
                 print("DEBUG: Graphics view visible = False (hidden for video mode)")
+            if hasattr(self, 'video_container') and self.video_container:
+                self.video_container.setVisible(True)
+                self.video_container.show()
+                self.video_container.raise_()
+                print(f"DEBUG: Video container visible = True, geometry = {self.video_container.geometry()}")
             if self.contact_table:
                 self.contact_table.setVisible(True)
+                self.contact_table.show()  # Explicitly show
+                self.contact_table.raise_()  # Bring to front
                 print(f"DEBUG: Contact table visible = True, isVisible={self.contact_table.isVisible()}")
+                print(f"DEBUG: Contact table geometry = {self.contact_table.geometry()}")
             else:
                 print("DEBUG: WARNING - contact_table is None!")
-    
-    def load_video_for_game(self):
-        """Load video file for the selected game."""
-        if not self.game_id:
-            return
-        
-        if not self.db.conn:
-            self.db.connect()
-        
-        # Get video path from database
-        cursor = self.db.conn.cursor()
-        cursor.execute("SELECT video_file_path FROM games WHERE game_id = ?", (self.game_id,))
-        result = cursor.fetchone()
-        
-        if not result or not result[0]:
-            QMessageBox.warning(self, "No Video", "No video file associated with this game.")
-            return
-        
-        video_path = result[0]
-        
-        # Create video item if not exists
-        if not self.video_item:
-            self.video_item = QGraphicsVideoItem()
-            # Size video to fit the scene (with apron)
-            total_width = self.court_width + (self.apron_size * 2)
-            total_height = self.court_height + (self.apron_size * 2)
-            self.video_item.setSize(QRectF(0, 0, total_width, total_height).size())
-            self.scene.addItem(self.video_item)
-            self.video_item.setZValue(-1)
-            self.video_item.setPos(0, 0)
-        
-        # Set video output and load video
-        self.media_player.setVideoOutput(self.video_item)
-        self.media_player.setSource(QUrl.fromLocalFile(video_path))
-        self.video_item.setVisible(True)
-        
-        print(f"DEBUG: Loaded video: {video_path}")
-    
-    def on_contact_row_clicked(self, row, column):
-        """Handle contact table row click - seek video to timecode."""
-        if not self.contact_table or row < 0:
-            return
-        
-        # Get timecode from first column (stored in milliseconds as user data)
-        timecode_item = self.contact_table.item(row, 0)
-        if timecode_item:
-            timecode_ms = timecode_item.data(Qt.UserRole)
-            if timecode_ms is not None:
-                # Seek video to this timecode
-                self.media_player.setPosition(timecode_ms)
-                # Pause video at this position
-                self.media_player.pause()
-                print(f"DEBUG: Seeked to timecode: {timecode_ms}ms")
+            if hasattr(self, 'create_highlight_btn') and self.create_highlight_btn:
+                self.create_highlight_btn.setVisible(True)
+                self.create_highlight_btn.show()  # Explicitly show
+                self.create_highlight_btn.raise_()  # Bring to front
+                print("DEBUG: Create Highlight button visible = True")
+                print(f"DEBUG: Create Highlight button geometry = {self.create_highlight_btn.geometry()}")
     
     def display_contacts(self):
         """Display contacts for the selected game with filtering."""
+        print(f"DEBUG: ========== display_contacts() CALLED ==========")
+        print(f"DEBUG: Current display_mode = '{self.display_mode}'")
+        print(f"DEBUG: game_id = {self.game_id}")
+        
         if not self.game_id:
+            print("DEBUG: ERROR - No game selected!")
             QMessageBox.warning(self, "No Game Selected", "Please select a game first!")
             return
         
-        print(f"DEBUG: display_contacts called, mode = {self.display_mode}")
+        print(f"DEBUG: Game selected, routing based on mode: {self.display_mode}")
         
         # Route to appropriate display method based on mode
         if self.display_mode == 'video':
-            print("DEBUG: Routing to display_contacts_video_mode()")
+            print("DEBUG: *** Routing to display_contacts_video_mode() ***")
             self.display_contacts_video_mode()
         else:
-            print("DEBUG: Routing to display_contacts_drawing_mode()")
+            print("DEBUG: *** Routing to display_contacts_drawing_mode() ***")
             self.display_contacts_drawing_mode()
+        
+        print(f"DEBUG: ========== display_contacts() COMPLETED ==========")
     
     def display_contacts_drawing_mode(self):
         """Display contacts in drawing mode (existing functionality)."""
@@ -747,12 +1003,18 @@ class ContactPathViewer(QMainWindow):
     
     def display_contacts_video_mode(self):
         """Display contacts in video mode - show table with contact list."""
+        print("DEBUG: ===== display_contacts_video_mode CALLED =====")
+        
         if not self.contact_table:
+            print("DEBUG: ERROR - contact_table is None!")
             QMessageBox.warning(self, "UI Error", "Contact table not initialized!")
             return
         
+        print(f"DEBUG: contact_table exists, current row count = {self.contact_table.rowCount()}")
+        
         # Clear previous table data
         self.contact_table.setRowCount(0)
+        print("DEBUG: Cleared table, row count now = 0")
         
         # Get filter criteria (same as drawing mode)
         selected_player_ids = []
@@ -867,50 +1129,123 @@ class ContactPathViewer(QMainWindow):
         
         query += " ORDER BY r.rally_number, c.sequence_number"
         
+        print(f"DEBUG: Executing query with params: {params}")
+        print(f"DEBUG: Query: {query}")
+        
         cursor.execute(query, params)
         contacts = cursor.fetchall()
         
         print(f"DEBUG: display_contacts_video_mode - Found {len(contacts)} contacts")
+        
+        if contacts:
+            print(f"DEBUG: Sample contact data: {contacts[0]}")
         
         if not contacts:
             QMessageBox.information(self, "No Contacts", 
                                    "No contacts match the selected filter criteria.")
             return
         
-        # Make sure table is visible
+        # Make sure table is visible and on top
         if self.contact_table:
             self.contact_table.setVisible(True)
+            self.contact_table.raise_()  # Bring to front
             print(f"DEBUG: Contact table visibility: {self.contact_table.isVisible()}")
         
         # Populate table
+        print(f"DEBUG: About to populate table with {len(contacts)} contacts")
         self.contact_table.setRowCount(len(contacts))
         print(f"DEBUG: Set table row count to {len(contacts)}")
         
+        # Clear any existing content first
+        self.contact_table.clearContents()
+        print(f"DEBUG: Cleared table contents")
+        
+        print(f"DEBUG: Starting to populate {len(contacts)} rows...")
         for row_idx, contact in enumerate(contacts):
+            if row_idx < 3:  # Log first 3 rows
+                print(f"DEBUG: Processing row {row_idx}: {contact}")
             (contact_id, timecode_ms, player_number, player_name, 
              contact_type, outcome, rally_number, sequence_number) = contact
             
             # Format timecode as HH:MM:SS.mmm
             timecode_str = self.format_timecode(timecode_ms) if timecode_ms is not None else "--:--:--.---"
             
-            # Create table items
-            timecode_item = QTableWidgetItem(timecode_str)
-            timecode_item.setData(Qt.UserRole, timecode_ms)  # Store actual timecode for seeking
+            # Column 0: Checkbox for selection
+            checkbox_item = QTableWidgetItem()
+            checkbox_item.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
+            checkbox_item.setCheckState(Qt.CheckState.Unchecked)
+            # Store contact_id and timecode in checkbox item for later retrieval
+            checkbox_item.setData(Qt.UserRole, {
+                'contact_id': contact_id,
+                'timecode_ms': timecode_ms,
+                'rally_number': rally_number,
+                'sequence_number': sequence_number,
+                'contact_type': contact_type,
+                'player_number': player_number
+            })
             
-            player_num_item = QTableWidgetItem(player_number if player_number else "")
-            player_name_item = QTableWidgetItem(player_name if player_name else "")
+            # Column 1: Player (# + name concatenated)
+            if player_number and player_name:
+                player_display = f"{player_number} - {player_name}"
+            elif player_number:
+                player_display = f"{player_number}"
+            elif player_name:
+                player_display = player_name
+            else:
+                player_display = "Floor"
+            player_item = QTableWidgetItem(player_display)
+            
+            # Column 2: Contact Type
             contact_type_item = QTableWidgetItem(contact_type)
+            
+            # Column 3: Outcome
             outcome_item = QTableWidgetItem(outcome)
             
+            # Column 4: Rally/Seq (e.g., "5/3")
+            rally_seq_str = f"{rally_number}/{sequence_number}"
+            rally_seq_item = QTableWidgetItem(rally_seq_str)
+            
+            # Column 5: Timecode
+            timecode_item = QTableWidgetItem(timecode_str)
+            
             # Set items in table
-            self.contact_table.setItem(row_idx, 0, timecode_item)
-            self.contact_table.setItem(row_idx, 1, player_num_item)
-            self.contact_table.setItem(row_idx, 2, player_name_item)
-            self.contact_table.setItem(row_idx, 3, contact_type_item)
-            self.contact_table.setItem(row_idx, 4, outcome_item)
+            self.contact_table.setItem(row_idx, 0, checkbox_item)
+            self.contact_table.setItem(row_idx, 1, player_item)
+            self.contact_table.setItem(row_idx, 2, contact_type_item)
+            self.contact_table.setItem(row_idx, 3, outcome_item)
+            self.contact_table.setItem(row_idx, 4, rally_seq_item)
+            self.contact_table.setItem(row_idx, 5, timecode_item)
+            
+            # Column 6: View button
+            player_str = f"{player_number}" if player_number else "Floor"
+            contact_info_str = f"{contact_type} - {player_str} @ {timecode_str}"
+            
+            view_btn = QPushButton("View")
+            view_btn.setFont(QFont('Arial', 9))
+            view_btn.clicked.connect(lambda checked=False, tc=timecode_ms, info=contact_info_str: 
+                                    self.open_video_player(tc, info))
+            self.contact_table.setCellWidget(row_idx, 6, view_btn)
+            
+            if row_idx < 3:  # Log first 3 rows
+                print(f"DEBUG: Row {row_idx} - Set all items and button")
             
             if row_idx == 0:
-                print(f"DEBUG: First row - timecode={timecode_str}, player={player_number}, type={contact_type}")
+                print(f"DEBUG: First row - timecode={timecode_str}, player={player_display}, type={contact_type}")
+        
+        print(f"DEBUG: Finished populating {len(contacts)} rows")
+        print(f"DEBUG: Table row count = {self.contact_table.rowCount()}")
+        print(f"DEBUG: Table column count = {self.contact_table.columnCount()}")
+        print(f"DEBUG: Table is visible = {self.contact_table.isVisible()}")
+        print(f"DEBUG: Table geometry = {self.contact_table.geometry()}")
+        
+        # Force table to update display
+        self.contact_table.viewport().update()
+        self.contact_table.update()
+        print(f"DEBUG: Called update on table")
+        
+        # Check if any items are actually set
+        first_item = self.contact_table.item(0, 0)
+        print(f"DEBUG: First item (0,0) = {first_item}, checkState = {first_item.checkState() if first_item else 'N/A'}")
         
         QMessageBox.information(self, "Contacts Displayed", 
                                f"Displaying {len(contacts)} contacts in table.")
@@ -928,6 +1263,283 @@ class ContactPathViewer(QMainWindow):
         seconds = total_seconds % 60
         
         return f"{hours:02d}:{minutes:02d}:{seconds:02d}.{milliseconds:03d}"
+    
+    def write_video_clip(self, timecode_ms, contact_info, contact_id):
+        """Extract and write video clip for this contact."""
+        if not self.game_id:
+            QMessageBox.warning(self, "No Game", "No game selected!")
+            return
+        
+        if timecode_ms is None:
+            QMessageBox.warning(self, "No Timecode", "This contact has no timecode!")
+            return
+        
+        # Get video path from database
+        if not self.db.conn:
+            self.db.connect()
+        
+        cursor = self.db.conn.cursor()
+        cursor.execute("SELECT video_file_path FROM games WHERE game_id = ?", (self.game_id,))
+        result = cursor.fetchone()
+        
+        if not result or not result[0]:
+            QMessageBox.warning(self, "No Video", "No video file associated with this game.")
+            return
+        
+        video_path = result[0]
+        
+        # Check if video file exists
+        if not Path(video_path).exists():
+            QMessageBox.warning(self, "Video Not Found", 
+                              f"Video file not found:\n{video_path}")
+            return
+        
+        # Calculate clip times (3 seconds before to 3 seconds after)
+        start_ms = max(0, timecode_ms - 3000)
+        duration_ms = 6000  # 6 seconds total
+        
+        # Create output filename
+        # Sanitize contact_info for filename
+        safe_info = contact_info.replace(':', '-').replace('/', '-').replace('\\', '-').replace(' ', '_')
+        output_dir = Path("video_clips")
+        output_dir.mkdir(exist_ok=True)
+        
+        output_filename = f"game{self.game_id}_contact{contact_id}_{safe_info}.mp4"
+        output_path = output_dir / output_filename
+        
+        # Show progress dialog
+        progress = QProgressDialog("Extracting video clip...", "Cancel", 0, 0, self)
+        progress.setWindowTitle("Extracting Video")
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setCancelButton(None)  # No cancel button for now
+        progress.show()
+        
+        # Create extractor thread
+        self.extractor = VideoClipExtractor(video_path, str(output_path), start_ms, duration_ms)
+        self.extractor.finished.connect(lambda success, msg: self.on_clip_extracted(success, msg, progress))
+        self.extractor.start()
+        
+        print(f"DEBUG: Extracting clip from {start_ms}ms for {duration_ms}ms to {output_path}")
+    
+    def on_clip_extracted(self, success, message, progress_dialog):
+        """Handle completion of video clip extraction."""
+        progress_dialog.close()
+        
+        if success:
+            QMessageBox.information(self, "Success", message)
+        else:
+            QMessageBox.warning(self, "Extraction Failed", message)
+    
+    def create_highlight_video(self):
+        """Create a highlight video from selected contacts."""
+        if not self.game_id:
+            QMessageBox.warning(self, "No Game", "No game selected!")
+            return
+        
+        if not self.contact_table:
+            QMessageBox.warning(self, "UI Error", "Contact table not initialized!")
+            return
+        
+        # Get selected rows
+        selected_contacts = []
+        for row_idx in range(self.contact_table.rowCount()):
+            checkbox_item = self.contact_table.item(row_idx, 0)
+            if checkbox_item and checkbox_item.checkState() == Qt.CheckState.Checked:
+                contact_data = checkbox_item.data(Qt.UserRole)
+                if contact_data:
+                    selected_contacts.append(contact_data)
+        
+        if not selected_contacts:
+            QMessageBox.warning(self, "No Selection", "Please select at least one contact to include in the highlight video!")
+            return
+        
+        print(f"DEBUG: Creating highlight video with {len(selected_contacts)} clips")
+        
+        # Get video path from database
+        if not self.db.conn:
+            self.db.connect()
+        
+        cursor = self.db.conn.cursor()
+        cursor.execute("SELECT video_file_path FROM games WHERE game_id = ?", (self.game_id,))
+        result = cursor.fetchone()
+        
+        if not result or not result[0]:
+            QMessageBox.warning(self, "No Video", "No video file associated with this game.")
+            return
+        
+        video_path = result[0]
+        
+        # Check if video file exists
+        if not Path(video_path).exists():
+            QMessageBox.warning(self, "Video Not Found", 
+                              f"Video file not found:\n{video_path}")
+            return
+        
+        # Create output directory
+        output_dir = Path("video_clips")
+        output_dir.mkdir(exist_ok=True)
+        
+        # Create highlight video filename
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        highlight_filename = f"game{self.game_id}_highlight_{timestamp}.mp4"
+        highlight_path = output_dir / highlight_filename
+        
+        # Show progress dialog
+        progress = QProgressDialog("Creating highlight video...", "Cancel", 0, len(selected_contacts) + 1, self)
+        progress.setWindowTitle("Creating Highlight")
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setCancelButton(None)
+        progress.show()
+        progress.setValue(0)
+        
+        # Create temporary directory for individual clips
+        import tempfile
+        temp_dir = Path(tempfile.mkdtemp())
+        
+        try:
+            # Extract individual clips
+            clip_files = []
+            for idx, contact_data in enumerate(selected_contacts):
+                timecode_ms = contact_data['timecode_ms']
+                if timecode_ms is None:
+                    print(f"DEBUG: Skipping contact {contact_data['contact_id']} - no timecode")
+                    continue
+                
+                # Calculate clip times
+                start_ms = max(0, timecode_ms - 3000)
+                duration_ms = 6000
+                
+                # Create temporary clip filename
+                clip_filename = f"clip_{idx:03d}.mp4"
+                clip_path = temp_dir / clip_filename
+                
+                # Extract clip using ffmpeg
+                start_seconds = start_ms / 1000.0
+                duration_seconds = duration_ms / 1000.0
+                
+                cmd = [
+                    'ffmpeg',
+                    '-ss', str(start_seconds),
+                    '-i', video_path,
+                    '-t', str(duration_seconds),
+                    '-c', 'copy',
+                    '-y',
+                    str(clip_path)
+                ]
+                
+                print(f"DEBUG: Extracting clip {idx + 1}/{len(selected_contacts)}")
+                
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+                )
+                
+                if result.returncode == 0:
+                    clip_files.append(clip_path)
+                    progress.setValue(idx + 1)
+                else:
+                    print(f"DEBUG: Failed to extract clip {idx}: {result.stderr}")
+            
+            if not clip_files:
+                progress.close()
+                QMessageBox.warning(self, "Extraction Failed", "Failed to extract any clips!")
+                return
+            
+            # Create concat file for ffmpeg
+            concat_file = temp_dir / "concat.txt"
+            with open(concat_file, 'w') as f:
+                for clip_file in clip_files:
+                    # Use forward slashes for ffmpeg compatibility
+                    clip_path_str = str(clip_file).replace('\\', '/')
+                    f.write(f"file '{clip_path_str}'\n")
+            
+            print(f"DEBUG: Concatenating {len(clip_files)} clips into highlight video")
+            
+            # Concatenate clips using ffmpeg
+            cmd = [
+                'ffmpeg',
+                '-f', 'concat',
+                '-safe', '0',
+                '-i', str(concat_file),
+                '-c', 'copy',
+                '-y',
+                str(highlight_path)
+            ]
+            
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+            )
+            
+            progress.setValue(len(selected_contacts) + 1)
+            progress.close()
+            
+            if result.returncode == 0:
+                QMessageBox.information(self, "Success", 
+                                       f"Highlight video created successfully!\n\n"
+                                       f"File: {highlight_path}\n"
+                                       f"Clips: {len(clip_files)}")
+            else:
+                error_msg = result.stderr if result.stderr else "Unknown error"
+                QMessageBox.warning(self, "Concatenation Failed", 
+                                   f"Failed to create highlight video:\n{error_msg}")
+        
+        except FileNotFoundError:
+            progress.close()
+            QMessageBox.warning(self, "FFmpeg Not Found", 
+                              "FFmpeg not found. Please install FFmpeg and add it to your PATH.")
+        except Exception as e:
+            progress.close()
+            QMessageBox.warning(self, "Error", f"Error creating highlight video:\n{str(e)}")
+        
+        finally:
+            # Clean up temporary files
+            import shutil
+            try:
+                shutil.rmtree(temp_dir)
+                print(f"DEBUG: Cleaned up temporary directory: {temp_dir}")
+            except Exception as e:
+                print(f"DEBUG: Failed to clean up temp directory: {e}")
+    
+    def open_video_player(self, timecode_ms, contact_info=""):
+        """Open video player window at specified timecode."""
+        if not self.game_id:
+            QMessageBox.warning(self, "No Game", "No game selected!")
+            return
+        
+        if timecode_ms is None:
+            timecode_ms = 0
+        
+        # Get video path from database
+        if not self.db.conn:
+            self.db.connect()
+        
+        cursor = self.db.conn.cursor()
+        cursor.execute("SELECT video_file_path FROM games WHERE game_id = ?", (self.game_id,))
+        result = cursor.fetchone()
+        
+        if not result or not result[0]:
+            QMessageBox.warning(self, "No Video", "No video file associated with this game.")
+            return
+        
+        video_path = result[0]
+        
+        # Check if video file exists
+        if not Path(video_path).exists():
+            QMessageBox.warning(self, "Video Not Found", 
+                              f"Video file not found:\n{video_path}")
+            return
+        
+        # Create and show video player window
+        video_window = VideoPlayerWindow(video_path, timecode_ms, contact_info, parent=self)
+        video_window.show()
+        
+        print(f"DEBUG: Opened video player for {contact_info} at timecode {timecode_ms}ms for video: {video_path}")
     
     def clear_contacts(self):
         """Clear contacts - graphics in drawing mode, table in video mode."""
