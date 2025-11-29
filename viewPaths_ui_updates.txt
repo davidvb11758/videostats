@@ -1,0 +1,95 @@
+================================================================================
+VIEWPATHS.UI UPDATE SUMMARY
+================================================================================
+
+Updated: viewPaths.ui to reflect the current state of view_paths.py
+
+================================================================================
+CHANGES MADE
+================================================================================
+
+1. PLAYER SELECTION - Changed from Single to Multi-Select
+   ----------------------------------------------------------
+   BEFORE: QComboBox "comboBoxSelectPlayer_A" (single selection)
+   AFTER:  QListWidget "playerListWidget" (multi-selection enabled)
+   
+   Details:
+   - Added QListWidget at position (1120, 260) with size 270x150
+   - Set selectionMode to QAbstractItemView::MultiSelection
+   - Kept hidden comboBoxSelectPlayer_A (1x1, invisible) for code compatibility
+   - Updated label text to "Select Players (multi-select):"
+
+2. TEAM FILTERS - New Feature
+   ----------------------------------------------------------
+   ADDED: QGroupBox "groupBoxTeamFilters" containing:
+   - QCheckBox "checkBoxShowTeamA" - "Show Team A" (checked by default)
+   - QCheckBox "checkBoxShowTeamB" - "Show Team B" (checked by default)
+   
+   Details:
+   - Group box at position (1120, 420) with size 270x80
+   - Both checkboxes checked by default (show all teams)
+   - Allows hiding/showing contacts from either team
+
+3. DOWN CHECKBOX - Added Missing Contact Type
+   ----------------------------------------------------------
+   ADDED: QCheckBox "checkBox_down_A" - "Down" contact type
+   
+   Details:
+   - Position (1340, 300) - placed with other contact type checkboxes
+   - Represents floor contacts (ball hitting the floor)
+
+================================================================================
+WIDGET LAYOUT (Y-COORDINATES)
+================================================================================
+
+Game Selection:        y=30
+Team Names:            y=70, 90
+Display Buttons:       y=140
+Filter Criteria Label: y=210
+Player Selection:      y=240 (label), y=260-410 (list widget)
+Team Filters:          y=420-500 (group box)
+Contact Type Filters:  y=280-340 (existing checkboxes)
+
+================================================================================
+COMPATIBILITY NOTES
+================================================================================
+
+1. The hidden comboBoxSelectPlayer_A is kept for code compatibility
+   - Python code looks for this widget to find parent layout
+   - Widget is 1x1 pixels and invisible, so it doesn't show in UI
+   
+2. Widget names match code expectations:
+   - playerListWidget - for the multi-select list
+   - checkBoxShowTeamA - for Team A filter
+   - checkBoxShowTeamB - for Team B filter
+   - checkBox_down_A - for down contact type filter
+
+3. The Python code (view_paths.py) handles:
+   - Populating the player list widget
+   - Connecting signals for smart selection behavior
+   - Processing multi-select values
+   - Applying team filters to queries
+
+================================================================================
+UI DESIGNER NOTES
+================================================================================
+
+If editing in Qt Designer:
+1. The playerListWidget should have MultiSelection mode enabled
+2. Both team filter checkboxes should be checked by default
+3. All contact type checkboxes remain optional (user selects which to filter)
+4. The comboBoxSelectPlayer_A should remain hidden (visible=false)
+
+================================================================================
+TESTING CHECKLIST
+================================================================================
+
+✓ Player list allows multiple selection (Ctrl+Click, Shift+Click)
+✓ Team A checkbox shows/hides Team A contacts
+✓ Team B checkbox shows/hides Team B contacts
+✓ Down checkbox filters floor contacts
+✓ All contact type checkboxes work together
+✓ Default state: All Players selected, both teams shown
+
+================================================================================
+
