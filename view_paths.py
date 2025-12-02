@@ -1171,11 +1171,9 @@ class ContactPathViewer(QMainWindow):
             timecode_str = self.format_timecode(timecode_ms) if timecode_ms is not None else "--:--:--.---"
             
             # Column 0: Checkbox for selection
-            checkbox_item = QTableWidgetItem()
-            checkbox_item.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
-            checkbox_item.setCheckState(Qt.CheckState.Unchecked)
-            # Store contact_id and timecode in checkbox item for later retrieval
-            checkbox_item.setData(Qt.UserRole, {
+            checkbox_widget = QCheckBox()
+            checkbox_widget.setStyleSheet("QCheckBox { margin-left: 10px; }")
+            checkbox_widget.setProperty("contact_data", {
                 'contact_id': contact_id,
                 'timecode_ms': timecode_ms,
                 'rally_number': rally_number,
@@ -1209,7 +1207,7 @@ class ContactPathViewer(QMainWindow):
             timecode_item = QTableWidgetItem(timecode_str)
             
             # Set items in table
-            self.contact_table.setItem(row_idx, 0, checkbox_item)
+            self.contact_table.setCellWidget(row_idx, 0, checkbox_widget)
             self.contact_table.setItem(row_idx, 1, player_item)
             self.contact_table.setItem(row_idx, 2, contact_type_item)
             self.contact_table.setItem(row_idx, 3, outcome_item)
@@ -1343,9 +1341,9 @@ class ContactPathViewer(QMainWindow):
         # Get selected rows
         selected_contacts = []
         for row_idx in range(self.contact_table.rowCount()):
-            checkbox_item = self.contact_table.item(row_idx, 0)
-            if checkbox_item and checkbox_item.checkState() == Qt.CheckState.Checked:
-                contact_data = checkbox_item.data(Qt.UserRole)
+            checkbox_widget = self.contact_table.cellWidget(row_idx, 0)
+            if checkbox_widget and isinstance(checkbox_widget, QCheckBox) and checkbox_widget.isChecked():
+                contact_data = checkbox_widget.property("contact_data")
                 if contact_data:
                     selected_contacts.append(contact_data)
         

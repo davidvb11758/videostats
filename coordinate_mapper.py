@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
     QGraphicsEllipseItem, QGraphicsLineItem, QGraphicsTextItem, QApplication, QPushButton,
     QFileDialog, QSlider, QComboBox
 )
-from PySide6.QtCore import Qt, QPointF, QRectF, Signal, QUrl
+from PySide6.QtCore import Qt, QPointF, QRectF, Signal, QUrl, QTimer
 from PySide6.QtGui import QPen, QBrush, QColor, QFont, QPainter
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
@@ -21,6 +21,10 @@ class CoordinateMapper(QMainWindow):
     # Signal emitted when a point is mapped to logical coordinates
     # Parameters: (logical_x, logical_y, pixel_x, pixel_y, timecode_ms)
     coordinate_mapped = Signal(float, float, float, float, int)
+    
+    # Signal emitted when a double-click is detected (for DOWN contact)
+    # Parameters: (logical_x, logical_y, pixel_x, pixel_y, timecode_ms)
+    double_click_mapped = Signal(float, float, float, float, int)
     
     def __init__(self, parent=None, db=None, game_id=None):
         super().__init__(parent)
@@ -149,7 +153,7 @@ class CoordinateMapper(QMainWindow):
         
         self.speed_combo = QComboBox()
         self.speed_combo.setFont(QFont('Arial', 10))
-        self.speed_combo.addItems(["0.5x", "0.75x", "0.8x", "0.9x", "1.0x"])
+        self.speed_combo.addItems(["0.33x", "0.5x", "0.75x", "0.8x", "0.9x", "1.0x"])
         self.speed_combo.setCurrentText("1.0x")
         self.speed_combo.currentTextChanged.connect(self.change_playback_speed)
         self.speed_combo.setEnabled(False)
@@ -161,8 +165,10 @@ class CoordinateMapper(QMainWindow):
         self.media_player.positionChanged.connect(self.update_position)
         self.media_player.durationChanged.connect(self.update_duration)
         
-        # Install event filter on the view to capture mouse clicks
+        # Install event filter on the view to capture mouse clicks and key presses
         self.view.viewport().installEventFilter(self)
+        self.view.installEventFilter(self)
+        self.installEventFilter(self)
     
     def start_set_boundaries(self):
         """Start the process of setting court boundaries."""
@@ -241,6 +247,41 @@ class CoordinateMapper(QMainWindow):
             self.media_player.play()
             self.play_pause_btn.setText("Pause")
     
+    def keyPressEvent(self, event):
+        """Handle key press events."""
+        self.handle_key_press(event)
+    
+    def handle_key_press(self, event):
+        """Handle key press - called from keyPressEvent and event filter."""
+        if event.key() == Qt.Key.Key_Space:
+            # Toggle play/pause on spacebar
+            if self.video_loaded:
+                self.toggle_play_pause()
+            event.accept()
+            return True
+        elif event.key() == Qt.Key.Key_Right:
+            # Fast-forward 5 seconds on right arrow (works when playing or paused)
+            if self.video_loaded:
+                current_pos = self.media_player.position()
+                new_pos = current_pos + 5000  # 5 seconds in milliseconds
+                duration = self.media_player.duration()
+                if duration > 0 and new_pos > duration:
+                    new_pos = duration
+                self.media_player.setPosition(new_pos)
+                print(f"DEBUG: Fast-forward from {current_pos}ms to {new_pos}ms")
+            event.accept()
+            return True
+        elif event.key() == Qt.Key.Key_Left:
+            # Rewind 5 seconds on left arrow (works when playing or paused)
+            if self.video_loaded:
+                current_pos = self.media_player.position()
+                new_pos = max(0, current_pos - 5000)  # 5 seconds in milliseconds
+                self.media_player.setPosition(new_pos)
+                print(f"DEBUG: Rewind from {current_pos}ms to {new_pos}ms")
+            event.accept()
+            return True
+        return False
+    
     def seek_video(self, position):
         """Seek to a specific position in the video."""
         self.media_player.setPosition(position)
@@ -316,8 +357,26 @@ class CoordinateMapper(QMainWindow):
             print(f"  {label}: [{point[0]:.2f}, {point[1]:.2f}]")
     
     def eventFilter(self, obj, event):
-        """Handle mouse events on the graphics view."""
+        """Handle mouse and key events on the graphics view."""
+        # Handle key press events from any child widget
+        if event.type() == event.Type.KeyPress:
+            if self.handle_key_press(event):
+                return True
+        
         if obj == self.view.viewport():
+            # Handle double-click for DOWN contact
+            if event.type() == event.Type.MouseButtonDblClick:
+                if event.button() == Qt.MouseButton.LeftButton:
+                    # Get click position in scene coordinates
+                    scene_pos = self.view.mapToScene(event.position().toPoint())
+                    x = scene_pos.x()
+                    y = scene_pos.y()
+                    
+                    # Only handle double-click when court is defined and in normal mode
+                    if self.mode == 'normal' and len(self.corner_points) >= 6:
+                        self.handle_double_click(x, y)
+                        return True
+            
             if event.type() == event.Type.MouseButtonPress:
                 if event.button() == Qt.MouseButton.LeftButton:
                     # Get click position in scene coordinates
@@ -794,6 +853,34 @@ class CoordinateMapper(QMainWindow):
             final_residual += out_of_bounds * 100.0
         
         return (u, v, final_residual)
+    
+    def handle_double_click(self, x, y):
+        """Handle double-click for DOWN contact."""
+        # Map the clicked point to logical coordinates
+        logical_coords = self.map_point_to_logical(x, y)
+        
+        if logical_coords is not None:
+            # Display "DOWN" text at the click location
+            text_item = QGraphicsTextItem("DOWN")
+            text_item.setPos(x - 25, y - 15)  # Center the text roughly on the click
+            text_item.setDefaultTextColor(QColor(255, 0, 0))  # Red text
+            font = QFont('Arial', 16, QFont.Weight.Bold)
+            text_item.setFont(font)
+            self.scene.addItem(text_item)
+            
+            # Remove the text after 1 second
+            QTimer.singleShot(1000, lambda: self._remove_down_text(text_item))
+            
+            # Get current video timecode in milliseconds
+            timecode_ms = self.media_player.position()
+            
+            # Emit double-click signal
+            self.double_click_mapped.emit(logical_coords[0], logical_coords[1], x, y, timecode_ms)
+    
+    def _remove_down_text(self, text_item):
+        """Remove the DOWN text from the scene."""
+        if text_item in self.scene.items():
+            self.scene.removeItem(text_item)
     
     def is_configured(self):
         """Check if the coordinate mapper has been configured with 6 control points."""

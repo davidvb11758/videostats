@@ -2,9 +2,9 @@
 Data entry screen for tracking ball contacts during a volleyball game.
 """
 
-from PySide6.QtWidgets import QMainWindow, QMessageBox, QLabel
-from PySide6.QtCore import Qt, QEvent
-from PySide6.QtGui import QMouseEvent
+from PySide6.QtWidgets import QMainWindow, QMessageBox, QLabel, QDialog, QVBoxLayout, QHBoxLayout, QListWidget, QPushButton, QListWidgetItem, QScrollArea, QWidget
+from PySide6.QtCore import Qt, QEvent, QPoint
+from PySide6.QtGui import QMouseEvent, QFont
 from database import VideoStatsDB
 from datetime import datetime
 from typing import Optional
@@ -58,6 +58,10 @@ class DataEntryWindow(QMainWindow):
         self.coordinate_mapper = None
         self.use_coordinate_mapper = False  # Flag to enable/disable mapper
         
+        # Opponent contact sequence tracking (resets when team A contacts)
+        # 1st opponent contact = pass (dig), 2nd = set, 3rd = attack
+        self.opponent_contact_count = 0
+        
         # Setup UI first (populate games dropdown)
         self.setup_ui()
         self.connect_signals()
@@ -87,6 +91,8 @@ class DataEntryWindow(QMainWindow):
         self.coordinate_mapper = CoordinateMapper(parent=self, db=self.db, game_id=self.game_id)
         # Connect signal to receive mapped coordinates
         self.coordinate_mapper.coordinate_mapped.connect(self.on_coordinate_mapped)
+        # Connect double-click signal for DOWN contacts
+        self.coordinate_mapper.double_click_mapped.connect(self.on_double_click_mapped)
         # Show the coordinate mapper window
         self.coordinate_mapper.show()
         # Position it next to the data entry window
@@ -120,11 +126,101 @@ class DataEntryWindow(QMainWindow):
             if hasattr(self.ui, 'tempXYcoord'):
                 self.ui.tempXYcoord.setText(f"({logical_x:.2f}, {logical_y:.2f}) @ {timecode_str} [Mapped]")
             
-            # Update status to indicate coordinate was captured
-            if self.use_coordinate_mapper:
-                self.status_label.setText(f"Coordinate captured: ({logical_x:.2f}, {logical_y:.2f}) @ {timecode_str}. Now click the contact button again to record.")
+            # Handle contacts if game is active and rally in progress
+            if self.game_id and self.rally_in_progress:
+                # Determine which team based on Y coordinate
+                # Y > 300 is far side (opponent/team B), Y <= 300 is near side (team A)
+                is_opponent = logical_y > 300
+                
+                if is_opponent:
+                    # Auto-classify opponent contacts based on sequence
+                    # 1st = pass (dig), 2nd = set, 3rd = attack (then cycle)
+                    contact_sequence = ['pass', 'set', 'attack']
+                    contact_type = contact_sequence[self.opponent_contact_count % 3]
+                    
+                    # Assign opponent player based on sequence: o1, o2, o3
+                    opponent_player_number = f"o{(self.opponent_contact_count % 3) + 1}"
+                    
+                    # Increment opponent contact count
+                    self.opponent_contact_count += 1
+                    
+                    # Set up for recording the contact
+                    self.selected_team_id = self.team_them_id
+                    self.selected_player_number = opponent_player_number
+                    
+                    # Get player_id for the opponent player
+                    if not self.db.conn:
+                        self.db.connect()
+                    player = self.db.get_player_by_number_for_game(self.game_id, self.team_them_id, opponent_player_number)
+                    if player:
+                        self.selected_player_id = player['player_id']
+                    else:
+                        self.selected_player_id = None
+                        print(f"Warning: Opponent player {opponent_player_number} not found in game")
+                    
+                    # Record the contact automatically
+                    self.status_label.setText(f"Recording opponent #{opponent_player_number} {contact_type} at ({logical_x:.2f}, {logical_y:.2f})...")
+                    self.record_contact(contact_type)
+                else:
+                    # Team A contact - reset opponent contact count
+                    self.opponent_contact_count = 0
+                    
+                    # Show player selection dialog for team A
+                    team_id = self.team_us_id
+                    self.show_player_selection_dialog(team_id, logical_x, logical_y, pixel_x, pixel_y)
             else:
-                self.status_label.setText(f"Coordinate captured: ({logical_x:.2f}, {logical_y:.2f}) @ {timecode_str}. Ready to record contact.")
+                # Update status to indicate coordinate was captured
+                if self.use_coordinate_mapper:
+                    self.status_label.setText(f"Coordinate captured: ({logical_x:.2f}, {logical_y:.2f}) @ {timecode_str}. Now click the contact button again to record.")
+                else:
+                    self.status_label.setText(f"Coordinate captured: ({logical_x:.2f}, {logical_y:.2f}) @ {timecode_str}. Ready to record contact.")
+    
+    def on_double_click_mapped(self, logical_x, logical_y, pixel_x, pixel_y, timecode_ms):
+        """Handle double-click from coordinate_mapper - records a DOWN contact."""
+        if not self.game_id:
+            self.status_label.setText("No game selected - cannot record DOWN contact")
+            return
+        
+        if not self.rally_in_progress:
+            self.status_label.setText("No rally in progress - cannot record DOWN contact")
+            return
+        
+        # Store the coordinates
+        self.last_clicked_x = logical_x
+        self.last_clicked_y = logical_y
+        self.last_clicked_timecode = timecode_ms
+        
+        print(f"DEBUG: on_double_click_mapped - DOWN contact at x={logical_x}, y={logical_y}, timecode={timecode_ms}ms")
+        
+        # Determine which team based on Y coordinate (for the losing team)
+        # Y > 300 is opponent side, Y <= 300 is our side
+        if logical_y > 300:
+            # Ball went down on opponent side - we scored
+            losing_team_id = self.team_them_id
+        else:
+            # Ball went down on our side - opponent scored
+            losing_team_id = self.team_us_id
+        
+        # Set up for DOWN contact
+        self.selected_team_id = losing_team_id
+        self.selected_player_number = None
+        self.selected_player_id = None
+        
+        # Format timecode for display
+        seconds = timecode_ms // 1000
+        milliseconds = timecode_ms % 1000
+        minutes = seconds // 60
+        seconds = seconds % 60
+        timecode_str = f"{minutes:02d}:{seconds:02d}.{milliseconds:03d}"
+        
+        # Update display
+        if hasattr(self.ui, 'tempXYcoord'):
+            self.ui.tempXYcoord.setText(f"DOWN @ ({logical_x:.2f}, {logical_y:.2f}) @ {timecode_str}")
+        
+        self.status_label.setText(f"Recording DOWN contact at ({logical_x:.2f}, {logical_y:.2f})...")
+        
+        # Record the DOWN contact
+        self.record_contact("down")
     
     def setup_ui(self):
         """Set up the UI with score display and status."""
@@ -235,6 +331,7 @@ class DataEntryWindow(QMainWindow):
         # Clear any selected player
         self.selected_player_number = None
         self.selected_team_id = None
+        self.opponent_contact_count = 0  # Reset opponent contact sequence
     
     def load_score(self):
         """Load current score from completed rallies."""
@@ -412,6 +509,168 @@ class DataEntryWindow(QMainWindow):
         self.team_1_side = side
         print(f"Team 1 side set to: {side}")
     
+    def show_player_selection_dialog(self, team_id: int, x_coord: float, y_coord: float, pixel_x: float = None, pixel_y: float = None):
+        """Show a dialog to select a player from the specified team.
+        
+        Args:
+            team_id: The team ID to get players from
+            x_coord: X coordinate of the click (logical)
+            y_coord: Y coordinate of the click (logical)
+            pixel_x: Pixel X coordinate for positioning dialog (optional)
+            pixel_y: Pixel Y coordinate for positioning dialog (optional)
+        """
+        if not self.game_id:
+            return
+        
+        # Get players for this team in this game
+        if not self.db.conn:
+            self.db.connect()
+        
+        cursor = self.db.conn.cursor()
+        cursor.execute("""
+            SELECT p.player_id, p.player_number, p.name
+            FROM players p
+            INNER JOIN game_players gp ON p.player_id = gp.player_id
+            WHERE gp.game_id = ? AND gp.team_id = ?
+            ORDER BY CASE 
+                WHEN CAST(p.player_number AS INTEGER) IS NOT NULL 
+                THEN CAST(p.player_number AS INTEGER)
+                ELSE 999
+            END,
+            p.player_number
+        """, (self.game_id, team_id))
+        players = cursor.fetchall()
+        
+        if not players:
+            QMessageBox.warning(self, "No Players", "No players found for this team in this game.")
+            return
+        
+        # Create compact dialog with no title bar
+        dialog = QDialog(self.coordinate_mapper if self.coordinate_mapper else self)
+        dialog.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint)
+        dialog.setModal(True)
+        
+        main_layout = QVBoxLayout()
+        main_layout.setContentsMargins(3, 3, 3, 3)
+        main_layout.setSpacing(2)
+        
+        # Store selected action info
+        selected_action = [None]  # [player_id, action_type] or ["down", "down"]
+        
+        # Define action colors matching the player-contact grid
+        action_colors = {
+            'pass': '#DDA0DD',       # light purple (plum) - for Dig
+            'set': '#ADD8E6',        # light blue
+            'attack': '#E0FFFF',     # light cyan
+            'freeball': '#90EE90',   # light green
+            'block': '#BFFF00'       # lime (light yellowish-green)
+        }
+        
+        # Create a row for each player with action buttons
+        for player_id, player_number, player_name in players:
+            row_layout = QHBoxLayout()
+            row_layout.setSpacing(2)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            
+            # Player label
+            player_text = f"#{player_number} - {player_name}" if player_name else f"#{player_number}"
+            player_label = QLabel(player_text)
+            player_label.setFont(QFont('Arial', 9))
+            player_label.setFixedWidth(100)
+            row_layout.addWidget(player_label, 0)  # 0 stretch factor
+            
+            # Action buttons
+            actions = [
+                ("Dig", "pass"),
+                ("Set", "set"),
+                ("Atk", "attack"),
+                ("Free", "freeball"),
+                ("Blk", "block")
+            ]
+            
+            for action_label, action_type in actions:
+                btn = QPushButton(action_label)
+                btn.setFont(QFont('Arial', 8))
+                btn.setFixedWidth(40)
+                btn.setFixedHeight(22)
+                
+                # Apply background color with border
+                color = action_colors.get(action_type, '#FFFFFF')
+                btn.setStyleSheet(f"background-color: {color}; border: 1px solid #505050;")
+                
+                # Create closure to capture current player_id and action_type
+                def make_handler(pid, atype):
+                    return lambda: (selected_action.__setitem__(0, [pid, atype]), dialog.accept())
+                
+                btn.clicked.connect(make_handler(player_id, action_type))
+                row_layout.addWidget(btn, 0)  # 0 stretch factor
+            
+            main_layout.addLayout(row_layout)
+        
+        # Add "down" button at the bottom for floor contact
+        down_layout = QHBoxLayout()
+        down_btn = QPushButton("down (floor contact)")
+        down_btn.setFont(QFont('Arial', 9))
+        down_btn.clicked.connect(lambda: (selected_action.__setitem__(0, ["down", "down"]), dialog.accept()))
+        down_layout.addWidget(down_btn)
+        main_layout.addLayout(down_layout)
+        
+        dialog.setLayout(main_layout)
+        
+        # Set size - compact width for player name + buttons, tall enough for all players
+        dialog.setFixedWidth(320)
+        # Calculate height: each row is ~26px, plus padding
+        total_rows = len(players) + 1  # +1 for "down" button
+        dialog.setFixedHeight(total_rows * 26 + 20)
+        
+        # Position dialog to the right of the clicked point
+        # Use pixel coordinates if available (from coordinate mapper)
+        if self.coordinate_mapper and pixel_x is not None and pixel_y is not None:
+            # Get the coordinate mapper's global position
+            mapper_pos = self.coordinate_mapper.mapToGlobal(QPoint(0, 0))
+            # Position dialog to the right of the click point
+            dialog_x = mapper_pos.x() + int(pixel_x) + 20  # 20 pixels to the right
+            dialog_y = mapper_pos.y() + int(pixel_y) - 50  # Adjust to center on click
+            dialog.move(dialog_x, dialog_y)
+        elif pixel_x is not None and pixel_y is not None:
+            # Fallback: use logical coordinates for positioning
+            dialog_x = int(pixel_x) + 20
+            dialog_y = int(pixel_y) - 50
+            dialog.move(dialog_x, dialog_y)
+        
+        # Show dialog and get result
+        if dialog.exec() == QDialog.Accepted and selected_action[0]:
+            player_id_or_down, action_type = selected_action[0]
+            
+            # Check if "down" was selected (floor contact)
+            if player_id_or_down == "down":
+                # Record floor contact
+                self.selected_player_id = None
+                self.selected_player_number = None
+                self.selected_team_id = team_id
+                self.status_label.setText("Recording floor contact (down)...")
+                self.record_contact("down")
+            else:
+                # Set the selected player
+                self.selected_player_id = player_id_or_down
+                self.selected_team_id = team_id
+                
+                # Get player info for status message
+                cursor.execute("""
+                    SELECT player_number, name
+                    FROM players
+                    WHERE player_id = ?
+                """, (player_id_or_down,))
+                player_info = cursor.fetchone()
+                if player_info:
+                    player_number, player_name = player_info
+                    self.selected_player_number = str(player_number)
+                    player_display = f"#{player_number} {player_name}" if player_name else f"#{player_number}"
+                    self.status_label.setText(f"Selected: {player_display} - Recording {action_type}...")
+                
+                # Record the contact with the selected action type
+                self.record_contact(action_type)
+    
     def eventFilter(self, obj, event):
         """Event filter to capture mouse clicks on outerCourt and court sides."""
         # If coordinate mapper is configured and enabled, clicks should go to mapper instead
@@ -445,6 +704,12 @@ class DataEntryWindow(QMainWindow):
             if hasattr(self.ui, 'tempXYcoord'):
                 self.ui.tempXYcoord.setText(f"({x_coord}, {y_coord}) Side A")
             
+            # Determine which team based on Y coordinate and show player selection
+            if self.game_id and self.rally_in_progress:
+                # Y > 300 is far side (team B), Y <= 300 is near side (team A)
+                team_id = self.team_them_id if y_coord > 300 else self.team_us_id
+                self.show_player_selection_dialog(team_id, x_coord, y_coord, x, y)
+            
             return False
         
         # Handle clicks on courtSide_B
@@ -472,6 +737,12 @@ class DataEntryWindow(QMainWindow):
             # Display in tempXYcoord label
             if hasattr(self.ui, 'tempXYcoord'):
                 self.ui.tempXYcoord.setText(f"({x_coord}, {y_coord}) Side B")
+            
+            # Determine which team based on Y coordinate and show player selection
+            if self.game_id and self.rally_in_progress:
+                # Y > 300 is far side (team B), Y <= 300 is near side (team A)
+                team_id = self.team_them_id if y_coord > 300 else self.team_us_id
+                self.show_player_selection_dialog(team_id, x_coord, y_coord, x, y)
             
             return False
         
@@ -502,6 +773,12 @@ class DataEntryWindow(QMainWindow):
             # Display in tempXYcoord label
             if hasattr(self.ui, 'tempXYcoord'):
                 self.ui.tempXYcoord.setText(f"({x_coord}, {y_coord})")
+            
+            # Determine which team based on Y coordinate and show player selection
+            if self.game_id and self.rally_in_progress:
+                # Y > 300 is far side (team B), Y <= 300 is near side (team A)
+                team_id = self.team_them_id if y_coord > 300 else self.team_us_id
+                self.show_player_selection_dialog(team_id, x_coord, y_coord, x, y)
             
             # Return False to allow normal event processing to continue
             return False
@@ -694,6 +971,9 @@ class DataEntryWindow(QMainWindow):
             # Debug output
             print(f"DEBUG: Recording contact with coordinates: x={x_coord}, y={y_coord}, timecode={timecode_ms}ms")
             
+            # Set outcome for "down" contacts
+            outcome = "down" if contact_type == "down" else "continue"
+            
             self.db.add_contact(
                 rally_id=self.current_rally_id,
                 sequence_number=self.current_sequence,
@@ -702,10 +982,15 @@ class DataEntryWindow(QMainWindow):
                 player_id=player_id,
                 x=x_coord,
                 y=y_coord,
-                timecode=timecode_ms
+                timecode=timecode_ms,
+                outcome=outcome
             )
             
             print(f"DEBUG: Contact recorded successfully with x={x_coord}, y={y_coord}, timecode={timecode_ms}ms")
+            
+            # Reset opponent contact count if this was a team A contact (not opponent)
+            if team_id == self.team_us_id:
+                self.opponent_contact_count = 0
             
             # Clear the stored coordinates and timecode after recording
             self.last_clicked_x = None
@@ -962,12 +1247,13 @@ class DataEntryWindow(QMainWindow):
             self.current_rally_id = None
             self.current_rally_number += 1
             
-            # Alternate serving team
-            self.serving_team_id = self.team_them_id if self.serving_team_id == self.team_us_id else self.team_us_id
+            # Team that won the point serves next
+            self.serving_team_id = point_winner_id
             
             self.current_sequence = 0
             self.selected_player_number = None
             self.selected_team_id = None
+            self.opponent_contact_count = 0  # Reset opponent contact sequence
             
             self.update_score_display()
             self.update_status()
@@ -1138,6 +1424,7 @@ class DataEntryWindow(QMainWindow):
                 self.score_them = 0
                 self.selected_player_number = None
                 self.selected_team_id = None
+                self.opponent_contact_count = 0  # Reset opponent contact sequence
                 
                 # Update UI
                 self.update_score_display()
