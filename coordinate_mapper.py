@@ -202,7 +202,7 @@ class CoordinateMapper(QMainWindow):
             ellipse.setCursor(Qt.CursorShape.PointingHandCursor)
     
     def load_video(self):
-        """Load a video file and display it in the scene."""
+        """Load a video file via file dialog and display it in the scene."""
         file_path, _ = QFileDialog.getOpenFileName(
             self,
             "Open Video File",
@@ -211,32 +211,50 @@ class CoordinateMapper(QMainWindow):
         )
         
         if file_path:
-            # Remove existing video item if present
-            if self.video_item:
-                self.scene.removeItem(self.video_item)
-            
-            # Create and add video item to scene
-            self.video_item = QGraphicsVideoItem()
-            self.video_item.setSize(QRectF(0, 0, self.canvas_width, self.canvas_height).size())
-            self.scene.addItem(self.video_item)
-            
-            # Set video item to be behind other graphics
-            self.video_item.setZValue(-1)
-            
-            # Set video output
-            self.media_player.setVideoOutput(self.video_item)
-            
-            # Load the video
-            self.media_player.setSource(QUrl.fromLocalFile(file_path))
-            
-            # Enable controls
-            self.play_pause_btn.setEnabled(True)
-            self.video_slider.setEnabled(True)
-            self.speed_combo.setEnabled(True)
-            self.video_loaded = True
-            
-            # Update status
-            self.status_label.setText("Video loaded. Click 'Set Court Boundaries' to start defining the court.")
+            self.load_video_from_path(file_path)
+    
+    def load_video_from_path(self, file_path: str):
+        """Load a video file from the given path and display it in the scene.
+        
+        Args:
+            file_path: Path to the video file to load
+        """
+        if not file_path:
+            return
+        
+        import os
+        if not os.path.exists(file_path):
+            print(f"Warning: Video file not found: {file_path}")
+            self.status_label.setText(f"Video file not found: {file_path}")
+            return
+        
+        # Remove existing video item if present
+        if self.video_item:
+            self.scene.removeItem(self.video_item)
+        
+        # Create and add video item to scene
+        self.video_item = QGraphicsVideoItem()
+        self.video_item.setSize(QRectF(0, 0, self.canvas_width, self.canvas_height).size())
+        self.scene.addItem(self.video_item)
+        
+        # Set video item to be behind other graphics
+        self.video_item.setZValue(-1)
+        
+        # Set video output
+        self.media_player.setVideoOutput(self.video_item)
+        
+        # Load the video
+        self.media_player.setSource(QUrl.fromLocalFile(file_path))
+        
+        # Enable controls
+        self.play_pause_btn.setEnabled(True)
+        self.video_slider.setEnabled(True)
+        self.speed_combo.setEnabled(True)
+        self.video_loaded = True
+        
+        # Update status
+        self.status_label.setText("Video loaded. Click 'Set Court Boundaries' to start defining the court.")
+        print(f"DEBUG: Video loaded from: {file_path}")
     
     def toggle_play_pause(self):
         """Toggle between play and pause."""
@@ -687,11 +705,14 @@ class CoordinateMapper(QMainWindow):
                 self.scene.addItem(line2)
                 self.graphics_items.append(line2)
                 
+                # Centerline - lighter color and 3x wider
+                centerline_pen = QPen(QColor(255, 220, 180), 6)  # Lighter orange, 3x wider (2*3=6)
+                centerline_pen.setStyle(Qt.PenStyle.DashLine)
                 line3 = QGraphicsLineItem(
                     self.corner_points[4][0], self.corner_points[4][1],
                     self.corner_points[5][0], self.corner_points[5][1]
                 )
-                line3.setPen(pen)
+                line3.setPen(centerline_pen)
                 self.scene.addItem(line3)
                 self.graphics_items.append(line3)
                 self.status_label.setText("Plane defined! Click 'Store Court Boundaries' to save and start mapping.")
@@ -1013,11 +1034,14 @@ class CoordinateMapper(QMainWindow):
                 self.scene.addItem(line2)
                 self.graphics_items.append(line2)
                 
+                # Centerline - lighter color and 3x wider
+                centerline_pen = QPen(QColor(255, 220, 180), 6)  # Lighter orange, 3x wider (2*3=6)
+                centerline_pen.setStyle(Qt.PenStyle.DashLine)
                 line3 = QGraphicsLineItem(
                     self.corner_points[4][0], self.corner_points[4][1],
                     self.corner_points[5][0], self.corner_points[5][1]
                 )
-                line3.setPen(pen)
+                line3.setPen(centerline_pen)
                 self.scene.addItem(line3)
                 self.graphics_items.append(line3)
                 

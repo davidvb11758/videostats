@@ -3,12 +3,216 @@ Data entry screen for tracking ball contacts during a volleyball game.
 """
 
 from PySide6.QtWidgets import QMainWindow, QMessageBox, QLabel, QDialog, QVBoxLayout, QHBoxLayout, QListWidget, QPushButton, QListWidgetItem, QScrollArea, QWidget
-from PySide6.QtCore import Qt, QEvent, QPoint
+from PySide6.QtCore import Qt, QEvent, QPoint, Signal, QObject, QThread
 from PySide6.QtGui import QMouseEvent, QFont
 from database import VideoStatsDB
 from datetime import datetime
 from typing import Optional
 from coordinate_mapper import CoordinateMapper
+import json
+import threading
+
+
+# Voice recognition imports - optional if vosk is not installed
+try:
+    from vosk import Model, KaldiRecognizer
+    import pyaudio
+    VOSK_AVAILABLE = True
+except ImportError:
+    VOSK_AVAILABLE = False
+    print("Warning: vosk or pyaudio not installed. Voice input will be disabled.")
+
+
+class VoiceRecognizer(QObject):
+    """Voice recognition handler for player-action pairs."""
+    
+    # Signal emitted when a player-action pair is recognized
+    pair_recognized = Signal(str, str)  # (player_word, action_word)
+    # Signal for status updates
+    status_update = Signal(str)
+    # Signal when listening starts/stops
+    listening_changed = Signal(bool)
+    
+    # Word-to-number mapping for spoken numbers
+    WORD_TO_NUMBER = {
+        "zero": "0", "one": "1", "two": "2", "three": "3", "four": "4",
+        "five": "5", "six": "6", "seven": "7", "eight": "8", "nine": "9",
+        "ten": "10", "eleven": "11", "twelve": "12", "thirteen": "13",
+        "fourteen": "14", "fifteen": "15", "sixteen": "16", "seventeen": "17",
+        "eighteen": "18", "nineteen": "19", "twenty": "20",
+        # Also accept digit strings directly
+        "0": "0", "1": "1", "2": "2", "3": "3", "4": "4",
+        "5": "5", "6": "6", "7": "7", "8": "8", "9": "9",
+        "10": "10", "11": "11", "12": "12", "13": "13", "14": "14",
+        "15": "15", "16": "16", "17": "17", "18": "18", "19": "19", "20": "20",
+    }
+    
+    # Valid action words
+    VALID_ACTIONS = {
+        "serve": "serve", "receive": "receive", "pass": "pass", "dig": "pass",
+        "set": "set", "attack": "attack", "hit": "attack",
+        "free": "freeball", "freeball": "freeball",
+        "block": "block", "down": "down",
+        "net": "net", "fault": "fault"
+    }
+    
+    def __init__(self, model_path: str = r"C:\vosk-model-smEng"):
+        super().__init__()
+        self.model_path = model_path
+        self.model = None
+        self.recognizer = None
+        self.audio_stream = None
+        self.pyaudio_instance = None
+        self._is_listening = False
+        self._stop_requested = False
+        self._listen_thread = None
+        self._words_buffer = []  # Buffer to collect words for pairing
+        
+    def initialize(self) -> bool:
+        """Initialize the voice recognition model and audio. Returns True if successful."""
+        if not VOSK_AVAILABLE:
+            self.status_update.emit("Voice recognition not available - vosk/pyaudio not installed")
+            return False
+        
+        try:
+            self.status_update.emit("Loading voice model...")
+            self.model = Model(self.model_path)
+            
+            # Define grammar for restricted vocabulary
+            number_words = [
+                "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
+                "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen",
+                "seventeen", "eighteen", "nineteen", "twenty"
+            ]
+            digits = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", 
+                     "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20"]
+            actions = ["serve", "receive", "pass", "dig", "set", "attack", "hit",
+                      "free", "freeball", "block", "down", "net", "fault"]
+            
+            grammar = digits + number_words + actions
+            
+            self.recognizer = KaldiRecognizer(self.model, 16000)
+            self.recognizer.SetGrammar(json.dumps(grammar))
+            
+            # Initialize audio
+            self.pyaudio_instance = pyaudio.PyAudio()
+            
+            self.status_update.emit("Voice model loaded successfully")
+            return True
+            
+        except Exception as e:
+            self.status_update.emit(f"Failed to initialize voice recognition: {str(e)}")
+            return False
+    
+    def start_listening(self):
+        """Start listening for voice input in background thread."""
+        if not self.model or not self.recognizer:
+            if not self.initialize():
+                return
+        
+        if self._is_listening:
+            return
+        
+        self._stop_requested = False
+        self._words_buffer = []
+        self._listen_thread = threading.Thread(target=self._listen_loop, daemon=True)
+        self._listen_thread.start()
+        self._is_listening = True
+        self.listening_changed.emit(True)
+        self.status_update.emit("Voice input active - speak player number and action")
+    
+    def stop_listening(self):
+        """Stop listening for voice input."""
+        self._stop_requested = True
+        if self.audio_stream:
+            try:
+                self.audio_stream.stop_stream()
+                self.audio_stream.close()
+            except:
+                pass
+            self.audio_stream = None
+        self._is_listening = False
+        self.listening_changed.emit(False)
+        self.status_update.emit("Voice input stopped")
+    
+    def _listen_loop(self):
+        """Main listening loop - runs in background thread."""
+        try:
+            self.audio_stream = self.pyaudio_instance.open(
+                format=pyaudio.paInt16,
+                channels=1,
+                rate=16000,
+                input=True,
+                frames_per_buffer=8000
+            )
+            self.audio_stream.start_stream()
+            
+            while not self._stop_requested:
+                try:
+                    data = self.audio_stream.read(4000, exception_on_overflow=False)
+                    if self.recognizer.AcceptWaveform(data):
+                        result = json.loads(self.recognizer.Result())
+                        text = result.get("text", "").strip()
+                        
+                        if text:
+                            self._process_recognized_text(text)
+                except Exception as e:
+                    if not self._stop_requested:
+                        print(f"Voice recognition error: {e}")
+                        
+        except Exception as e:
+            self.status_update.emit(f"Audio stream error: {str(e)}")
+        finally:
+            self._is_listening = False
+            self.listening_changed.emit(False)
+    
+    def _process_recognized_text(self, text: str):
+        """Process recognized text and emit signals when a valid pair is found."""
+        words = text.lower().split()
+        print(f"DEBUG VOICE: Heard raw text: '{text}'")
+        print(f"DEBUG VOICE: Split words: {words}")
+        self._words_buffer.extend(words)
+        print(f"DEBUG VOICE: Buffer now: {self._words_buffer}")
+        
+        # Try to form a player-action pair from the buffer
+        while len(self._words_buffer) >= 2:
+            first_word = self._words_buffer[0]
+            second_word = self._words_buffer[1]
+            
+            # Check if first word is a number
+            player_number = self.WORD_TO_NUMBER.get(first_word)
+            # Check if second word is an action
+            action = self.VALID_ACTIONS.get(second_word)
+            
+            print(f"DEBUG VOICE: Checking pair: '{first_word}' -> player={player_number}, '{second_word}' -> action={action}")
+            
+            if player_number and action:
+                # Valid pair found
+                self._words_buffer = self._words_buffer[2:]  # Remove used words
+                print(f"DEBUG VOICE: *** VALID PAIR FOUND: Player {player_number}, Action {action} ***")
+                self.pair_recognized.emit(player_number, action)
+                self.status_update.emit(f"Recognized: Player {player_number} - {action}")
+                return
+            else:
+                # First word is not a valid number, skip it
+                if not player_number:
+                    print(f"DEBUG VOICE: Skipping '{first_word}' - not a valid number")
+                    self._words_buffer.pop(0)
+                # Or second word is not a valid action, skip first word
+                elif not action:
+                    print(f"DEBUG VOICE: Skipping '{first_word}' - '{second_word}' is not a valid action")
+                    self._words_buffer.pop(0)
+    
+    def is_listening(self) -> bool:
+        """Return whether voice recognition is currently listening."""
+        return self._is_listening
+    
+    def cleanup(self):
+        """Clean up resources."""
+        self.stop_listening()
+        if self.pyaudio_instance:
+            self.pyaudio_instance.terminate()
+            self.pyaudio_instance = None
 
 
 class DataEntryWindow(QMainWindow):
@@ -62,11 +266,19 @@ class DataEntryWindow(QMainWindow):
         # 1st opponent contact = pass (dig), 2nd = set, 3rd = attack
         self.opponent_contact_count = 0
         
+        # Voice input tracking
+        self.voice_recognizer = None
+        self.use_voice_input = False
+        self.pending_voice_contact_x = None
+        self.pending_voice_contact_y = None
+        self.pending_voice_contact_timecode = None
+        
         # Setup UI first (populate games dropdown)
         self.setup_ui()
         self.connect_signals()
         self.setup_court_click_tracking()
         self.setup_coordinate_mapper()
+        self.setup_voice_input()
         
         # Initialize with no game selected - labels start blank
         if hasattr(self.ui, 'team_1_name'):
@@ -103,6 +315,123 @@ class DataEntryWindow(QMainWindow):
             1700,  # Width to accommodate 1600 canvas + margins
             1400   # Height to accommodate 1200 canvas + labels
         )
+    
+    def setup_voice_input(self):
+        """Set up voice input functionality."""
+        # Connect checkbox if it exists
+        if hasattr(self.ui, 'checkBox_UseVoiceInput'):
+            self.ui.checkBox_UseVoiceInput.stateChanged.connect(self.on_voice_input_checkbox_changed)
+            # Initialize as unchecked
+            self.ui.checkBox_UseVoiceInput.setChecked(False)
+    
+    def on_voice_input_checkbox_changed(self, state):
+        """Handle voice input checkbox state change."""
+        # In PySide6, stateChanged emits int: 0=Unchecked, 2=Checked
+        self.use_voice_input = (state == Qt.CheckState.Checked.value)
+        print(f"DEBUG VOICE: Checkbox state changed to {state}, use_voice_input={self.use_voice_input}")
+        
+        if self.use_voice_input:
+            # Initialize voice recognizer if not already done
+            if self.voice_recognizer is None:
+                if not VOSK_AVAILABLE:
+                    QMessageBox.warning(self, "Voice Input Unavailable", 
+                                       "Voice input requires vosk and pyaudio packages.\n"
+                                       "Install them with: pip install vosk pyaudio")
+                    self.ui.checkBox_UseVoiceInput.setChecked(False)
+                    self.use_voice_input = False
+                    return
+                
+                self.voice_recognizer = VoiceRecognizer()
+                self.voice_recognizer.pair_recognized.connect(self.on_voice_pair_recognized)
+                self.voice_recognizer.status_update.connect(self.on_voice_status_update)
+            
+            # Start listening
+            self.voice_recognizer.start_listening()
+            self.status_label.setText("Voice input enabled - click location then speak: [number] [action]")
+        else:
+            # Stop listening
+            if self.voice_recognizer:
+                self.voice_recognizer.stop_listening()
+            self.status_label.setText("Voice input disabled")
+    
+    def on_voice_status_update(self, message: str):
+        """Handle voice recognition status updates."""
+        self.status_label.setText(message)
+    
+    def on_voice_pair_recognized(self, player_number: str, action: str):
+        """Handle recognized player-action pair from voice input."""
+        print(f"DEBUG VOICE_HANDLER: ========================================")
+        print(f"DEBUG VOICE_HANDLER: Voice pair recognized - Player: '{player_number}', Action: '{action}'")
+        print(f"DEBUG VOICE_HANDLER: game_id={self.game_id}, rally_in_progress={self.rally_in_progress}")
+        print(f"DEBUG VOICE_HANDLER: pending coords: x={self.pending_voice_contact_x}, y={self.pending_voice_contact_y}")
+        
+        if not self.game_id:
+            print(f"DEBUG VOICE_HANDLER: REJECTED - No game selected")
+            self.status_label.setText("No game selected - cannot record contact")
+            return
+        
+        if not self.rally_in_progress and action != "serve":
+            print(f"DEBUG VOICE_HANDLER: REJECTED - Rally not started and action is not serve")
+            self.status_label.setText("Rally must start with a serve")
+            return
+        
+        # Check if we have pending coordinates
+        if self.pending_voice_contact_x is None or self.pending_voice_contact_y is None:
+            print(f"DEBUG VOICE_HANDLER: REJECTED - No pending coordinates")
+            self.status_label.setText(f"Recognized: {player_number} {action} - but no location set. Click on court first.")
+            return
+        
+        # Use the pending coordinates
+        self.last_clicked_x = self.pending_voice_contact_x
+        self.last_clicked_y = self.pending_voice_contact_y
+        self.last_clicked_timecode = self.pending_voice_contact_timecode
+        print(f"DEBUG VOICE_HANDLER: Using coords: x={self.last_clicked_x}, y={self.last_clicked_y}, timecode={self.last_clicked_timecode}")
+        
+        # Look up the player in the game_players table
+        if not self.db.conn:
+            self.db.connect()
+        
+        # Determine team - for now assume "our team" (team_us_id) for voice input
+        # The Y coordinate could be used to determine team, but voice is simpler with our team
+        team_id = self.team_us_id
+        print(f"DEBUG VOICE_HANDLER: Looking up player #{player_number} in team_id={team_id}, game_id={self.game_id}")
+        
+        player = self.db.get_player_by_number_for_game(self.game_id, team_id, player_number)
+        if not player:
+            print(f"DEBUG VOICE_HANDLER: REJECTED - Player #{player_number} not found in game roster!")
+            self.status_label.setText(f"Player #{player_number} not found in game roster")
+            # Clear pending coordinates since we couldn't use them
+            self.pending_voice_contact_x = None
+            self.pending_voice_contact_y = None
+            self.pending_voice_contact_timecode = None
+            return
+        
+        print(f"DEBUG VOICE_HANDLER: Player found! player_id={player['player_id']}")
+        self.selected_player_id = player['player_id']
+        self.selected_player_number = player_number
+        self.selected_team_id = team_id
+        
+        # Handle special actions: "net" and "fault" have outcome "down"
+        # These contacts end the rally
+        if action in ("net", "fault"):
+            print(f"DEBUG VOICE_HANDLER: Recording net/fault contact...")
+            self.status_label.setText(f"Recording #{player_number} {action} (results in down)...")
+            self.record_contact(action)
+        else:
+            print(f"DEBUG VOICE_HANDLER: Recording {action} contact...")
+            self.status_label.setText(f"Recording #{player_number} {action}...")
+            self.record_contact(action)
+        
+        # Clear pending coordinates after recording
+        self.pending_voice_contact_x = None
+        self.pending_voice_contact_y = None
+        self.pending_voice_contact_timecode = None
+        print(f"DEBUG VOICE_HANDLER: Pending coordinates cleared")
+        
+        # Clear pending coordinates after recording
+        self.pending_voice_contact_x = None
+        self.pending_voice_contact_y = None
+        self.pending_voice_contact_timecode = None
     
     def on_coordinate_mapped(self, logical_x, logical_y, pixel_x, pixel_y, timecode_ms):
         """Handle coordinate mapping from coordinate_mapper."""
@@ -165,9 +494,18 @@ class DataEntryWindow(QMainWindow):
                     # Team A contact - reset opponent contact count
                     self.opponent_contact_count = 0
                     
-                    # Show player selection dialog for team A
-                    team_id = self.team_us_id
-                    self.show_player_selection_dialog(team_id, logical_x, logical_y, pixel_x, pixel_y)
+                    # Check if voice input is enabled
+                    if self.use_voice_input:
+                        # Store coordinates for voice input
+                        self.pending_voice_contact_x = logical_x
+                        self.pending_voice_contact_y = logical_y
+                        self.pending_voice_contact_timecode = timecode_ms
+                        print(f"DEBUG COORD: Voice mode - stored pending coords: x={logical_x}, y={logical_y}, timecode={timecode_ms}")
+                        self.status_label.setText(f"Location captured ({logical_x:.0f}, {logical_y:.0f}). Now speak: [player number] [action]")
+                    else:
+                        # Show player selection dialog for team A
+                        team_id = self.team_us_id
+                        self.show_player_selection_dialog(team_id, logical_x, logical_y, pixel_x, pixel_y)
             else:
                 # Update status to indicate coordinate was captured
                 if self.use_coordinate_mapper:
@@ -332,6 +670,12 @@ class DataEntryWindow(QMainWindow):
         self.selected_player_number = None
         self.selected_team_id = None
         self.opponent_contact_count = 0  # Reset opponent contact sequence
+        
+        # Load video file for this game if available
+        self.load_game_video()
+        
+        # Load court boundaries if available
+        self.load_game_court_boundaries()
     
     def load_score(self):
         """Load current score from completed rallies."""
@@ -396,6 +740,50 @@ class DataEntryWindow(QMainWindow):
             # First rally
             self.current_rally_number = 1
             self.serving_team_id = self.team_us_id
+    
+    def load_game_video(self):
+        """Load the video file associated with the current game."""
+        if not self.game_id:
+            return
+        
+        # Get video path from database
+        video_path = self.db.get_game_video_path(self.game_id)
+        
+        if video_path:
+            print(f"DEBUG: Loading video for game {self.game_id}: {video_path}")
+            # Load video in coordinate mapper
+            if self.coordinate_mapper:
+                self.coordinate_mapper.load_video_from_path(video_path)
+        else:
+            print(f"DEBUG: No video path stored for game {self.game_id}")
+    
+    def load_game_court_boundaries(self):
+        """Load the court boundaries associated with the current game."""
+        if not self.game_id:
+            return
+        
+        # Get court boundaries from database
+        court_boundaries = self.db.get_game_court_boundaries(self.game_id)
+        
+        if court_boundaries:
+            print(f"DEBUG: Loading court boundaries for game {self.game_id}")
+            # Convert to the format expected by coordinate mapper
+            # Database returns: corner_tl, corner_tr, corner_bl, corner_br, centerline_top, centerline_bottom
+            # Coordinate mapper expects: [BL, BR, TR, TL, ML, MR]
+            corner_points = [
+                list(court_boundaries['corner_bl']),      # 0: BL (0,0)
+                list(court_boundaries['corner_br']),      # 1: BR (300,0)
+                list(court_boundaries['corner_tr']),      # 2: TR (300,600)
+                list(court_boundaries['corner_tl']),      # 3: TL (0,600)
+                list(court_boundaries['centerline_bottom']),  # 4: ML (0,300) - left end of centerline
+                list(court_boundaries['centerline_top'])      # 5: MR (300,300) - right end of centerline
+            ]
+            
+            if self.coordinate_mapper:
+                self.coordinate_mapper.set_corner_points(corner_points)
+                print(f"DEBUG: Court boundaries loaded successfully")
+        else:
+            print(f"DEBUG: No court boundaries stored for game {self.game_id}")
     
     def connect_signals(self):
         """Connect all button signals to handlers."""
@@ -509,6 +897,32 @@ class DataEntryWindow(QMainWindow):
         self.team_1_side = side
         print(f"Team 1 side set to: {side}")
     
+    def get_team_contact_count(self, team_id: int) -> int:
+        """Get the number of contacts made by a team in the current rally (excluding 'down' contacts).
+        
+        Args:
+            team_id: The team ID to count contacts for
+            
+        Returns:
+            The number of contacts (1st, 2nd, 3rd, etc.)
+        """
+        if not self.current_rally_id:
+            return 0
+        
+        if not self.db.conn:
+            self.db.connect()
+        
+        cursor = self.db.conn.cursor()
+        cursor.execute("""
+            SELECT COUNT(*) 
+            FROM contacts 
+            WHERE rally_id = ? AND team_id = ? AND contact_type != 'down'
+            ORDER BY sequence_number
+        """, (self.current_rally_id, team_id))
+        
+        result = cursor.fetchone()
+        return result[0] if result else 0
+    
     def show_player_selection_dialog(self, team_id: int, x_coord: float, y_coord: float, pixel_x: float = None, pixel_y: float = None):
         """Show a dialog to select a player from the specified team.
         
@@ -545,6 +959,70 @@ class DataEntryWindow(QMainWindow):
             QMessageBox.warning(self, "No Players", "No players found for this team in this game.")
             return
         
+        # Check if the prior contact was a serve by the opponent team
+        prior_contact_was_opponent_serve = False
+        if self.current_rally_id:
+            cursor.execute("""
+                SELECT contact_type, team_id 
+                FROM contacts 
+                WHERE rally_id = ? AND contact_type != 'down'
+                ORDER BY sequence_number DESC 
+                LIMIT 1
+            """, (self.current_rally_id,))
+            result = cursor.fetchone()
+            if result:
+                last_contact_type, last_contact_team_id = result
+                # Check if it was a serve by the opponent team
+                if last_contact_type == 'serve' and last_contact_team_id != team_id:
+                    prior_contact_was_opponent_serve = True
+        
+        # Get the team's contact count to determine which actions are allowed
+        contact_count = self.get_team_contact_count(team_id)
+        contact_number = contact_count + 1  # This will be the contact number for the next contact
+        
+        # Determine allowed actions based on whether it's after opponent serve or later in rally
+        if prior_contact_was_opponent_serve:
+            # After opponent's serve: receive, then set/attack/free, then attack/free
+            if contact_number == 1:
+                # 1st contact after opponent serve: only receive
+                allowed_actions = ['receive']
+            elif contact_number == 2:
+                # 2nd contact: set, attack, free
+                allowed_actions = ['set', 'attack', 'freeball']
+            elif contact_number == 3:
+                # 3rd contact: attack, free
+                allowed_actions = ['attack', 'freeball']
+            else:
+                # 4th+ contact: repeat pattern - pass/attack/block, then set/attack/free, then attack/free
+                # For 4th+ contacts, cycle back to the pattern
+                cycle_contact = ((contact_number - 1) % 3) + 1
+                if cycle_contact == 1:
+                    allowed_actions = ['pass', 'attack', 'block']
+                elif cycle_contact == 2:
+                    allowed_actions = ['set', 'attack', 'freeball']
+                else:  # cycle_contact == 3
+                    allowed_actions = ['attack', 'freeball']
+        else:
+            # After serving team has their contact(s) or later in rally: pass/attack/block, then set/attack/free, then attack/free
+            if contact_number == 1:
+                # 1st contact: pass, attack, block
+                allowed_actions = ['pass', 'attack', 'block']
+            elif contact_number == 2:
+                # 2nd contact: set, attack, free
+                allowed_actions = ['set', 'attack', 'freeball']
+            elif contact_number == 3:
+                # 3rd contact: attack, free
+                allowed_actions = ['attack', 'freeball']
+            else:
+                # 4th+ contact: repeat pattern - pass/attack/block, then set/attack/free, then attack/free
+                cycle_contact = ((contact_number - 1) % 3) + 1
+                if cycle_contact == 1:
+                    allowed_actions = ['pass', 'attack', 'block']
+                elif cycle_contact == 2:
+                    allowed_actions = ['set', 'attack', 'freeball']
+                else:  # cycle_contact == 3
+                    allowed_actions = ['attack', 'freeball']
+        
         # Create compact dialog with no title bar
         dialog = QDialog(self.coordinate_mapper if self.coordinate_mapper else self)
         dialog.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint)
@@ -559,6 +1037,7 @@ class DataEntryWindow(QMainWindow):
         
         # Define action colors matching the player-contact grid
         action_colors = {
+            'receive': '#FFB3B3',    # light red
             'pass': '#DDA0DD',       # light purple (plum) - for Dig
             'set': '#ADD8E6',        # light blue
             'attack': '#E0FFFF',     # light cyan
@@ -579,8 +1058,9 @@ class DataEntryWindow(QMainWindow):
             player_label.setFixedWidth(100)
             row_layout.addWidget(player_label, 0)  # 0 stretch factor
             
-            # Action buttons
+            # Action buttons - only show allowed actions
             actions = [
+                ("Rcv", "receive"),
                 ("Dig", "pass"),
                 ("Set", "set"),
                 ("Atk", "attack"),
@@ -589,6 +1069,10 @@ class DataEntryWindow(QMainWindow):
             ]
             
             for action_label, action_type in actions:
+                # Only show button if action is allowed for this contact number
+                if action_type not in allowed_actions:
+                    continue
+                
                 btn = QPushButton(action_label)
                 btn.setFont(QFont('Arial', 8))
                 btn.setFixedWidth(40)
@@ -890,12 +1374,17 @@ class DataEntryWindow(QMainWindow):
     
     def record_contact(self, contact_type: str):
         """Record a ball contact."""
-        print(f"DEBUG: record_contact called for {contact_type}")
+        print(f"DEBUG RECORD: ========================================")
+        print(f"DEBUG RECORD: record_contact called for contact_type='{contact_type}'")
+        print(f"DEBUG RECORD: game_id={self.game_id}, rally_in_progress={self.rally_in_progress}")
+        print(f"DEBUG RECORD: selected_team_id={self.selected_team_id}, selected_player_id={getattr(self, 'selected_player_id', None)}")
+        print(f"DEBUG RECORD: selected_player_number={self.selected_player_number}")
+        
         if not self.game_id:
             QMessageBox.warning(self, "No Game Selected", "Please select a game first!")
             return
         
-        print(f"DEBUG: record_contact - last_clicked_x={self.last_clicked_x}, last_clicked_y={self.last_clicked_y}")
+        print(f"DEBUG RECORD: last_clicked_x={self.last_clicked_x}, last_clicked_y={self.last_clicked_y}")
         
         # If rally not started, must start with serve
         if not self.rally_in_progress:
@@ -917,17 +1406,20 @@ class DataEntryWindow(QMainWindow):
             if not self.db.conn:
                 self.db.connect()
             
+            print(f"DEBUG RECORD: Starting new rally - game_id={self.game_id}, rally_number={self.current_rally_number}, serving_team_id={serving_team_id}")
             self.current_rally_id = self.db.start_rally(
                 game_id=self.game_id,
                 rally_number=self.current_rally_number,
                 serving_team_id=serving_team_id
             )
+            print(f"DEBUG RECORD: Rally started! rally_id={self.current_rally_id}")
             self.rally_in_progress = True
             self.current_sequence = 1
             
             # For serve, use selected team and player
             team_id = self.selected_team_id
             player_id = getattr(self, 'selected_player_id', None)
+            print(f"DEBUG RECORD: Serve contact - team_id={team_id}, player_id={player_id}")
         else:
             # Regular contact - must have selected a player/team
             if not self.selected_team_id:
@@ -971,10 +1463,20 @@ class DataEntryWindow(QMainWindow):
             # Debug output
             print(f"DEBUG: Recording contact with coordinates: x={x_coord}, y={y_coord}, timecode={timecode_ms}ms")
             
-            # Set outcome for "down" contacts
-            outcome = "down" if contact_type == "down" else "continue"
+            # Set outcome for "down", "net", and "fault" contacts
+            outcome = "down" if contact_type in ("down", "net", "fault") else "continue"
             
-            self.db.add_contact(
+            print(f"DEBUG RECORD: >>> WRITING TO DATABASE <<<")
+            print(f"DEBUG RECORD:   rally_id={self.current_rally_id}")
+            print(f"DEBUG RECORD:   sequence_number={self.current_sequence}")
+            print(f"DEBUG RECORD:   contact_type='{contact_type}'")
+            print(f"DEBUG RECORD:   team_id={team_id}")
+            print(f"DEBUG RECORD:   player_id={player_id}")
+            print(f"DEBUG RECORD:   x={x_coord}, y={y_coord}")
+            print(f"DEBUG RECORD:   timecode={timecode_ms}")
+            print(f"DEBUG RECORD:   outcome='{outcome}'")
+            
+            contact_id = self.db.add_contact(
                 rally_id=self.current_rally_id,
                 sequence_number=self.current_sequence,
                 contact_type=contact_type,
@@ -986,11 +1488,14 @@ class DataEntryWindow(QMainWindow):
                 outcome=outcome
             )
             
-            print(f"DEBUG: Contact recorded successfully with x={x_coord}, y={y_coord}, timecode={timecode_ms}ms")
+            print(f"DEBUG RECORD: *** SUCCESS! Contact saved with contact_id={contact_id} ***")
             
             # Reset opponent contact count if this was a team A contact (not opponent)
             if team_id == self.team_us_id:
                 self.opponent_contact_count = 0
+            
+            # Save player number for status message before clearing
+            recorded_player_number = self.selected_player_number
             
             # Clear the stored coordinates and timecode after recording
             self.last_clicked_x = None
@@ -1005,12 +1510,14 @@ class DataEntryWindow(QMainWindow):
             self.selected_player_number = None
             self.selected_team_id = None
             
-            # Reset coordinate mapper flag if it was used
+            # Update status with recorded info
             if self.use_coordinate_mapper:
                 self.use_coordinate_mapper = False
-                self.status_label.setText("Contact recorded. Select player for next contact. Click in Coordinate Mapper for location.")
+                self.status_label.setText(f"Contact recorded: #{recorded_player_number or '?'} {contact_type}. Click for next location.")
+            elif self.use_voice_input:
+                self.status_label.setText(f"Contact recorded: #{recorded_player_number or '?'} {contact_type}. Click for next location, then speak.")
             else:
-                self.status_label.setText("Contact recorded. Select player for next contact.")
+                self.status_label.setText(f"Contact recorded: #{recorded_player_number or '?'} {contact_type}. Select player for next contact.")
             
             self.update_ui_state()
             
@@ -1393,6 +1900,12 @@ class DataEntryWindow(QMainWindow):
                                     # Disabled: very light gray background with no border
                                     widget.setStyleSheet("background-color: #F5F5F5; border: none;")
     
+    def closeEvent(self, event):
+        """Clean up resources when window is closed."""
+        if self.voice_recognizer:
+            self.voice_recognizer.cleanup()
+        event.accept()
+    
     def reset_the_game(self):
         """Reset the current game by deleting all rallies and contacts."""
         if not self.game_id:
@@ -1479,7 +1992,7 @@ if __name__ == "__main__":
     db.close()
     
     # Load UI
-    ui_file = Path(__file__).parent / "inputTouches.ui"
+    ui_file = Path(__file__).parent / "inputTouchesVoice.ui"
     loader = QUiLoader()
     ui_widget = loader.load(str(ui_file))
     

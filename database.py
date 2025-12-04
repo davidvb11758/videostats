@@ -126,7 +126,7 @@ class VideoStatsDB:
                 rally_id INTEGER NOT NULL,
                 sequence_number INTEGER NOT NULL,
                 player_id INTEGER,
-                contact_type TEXT NOT NULL CHECK(contact_type IN ('serve', 'pass', 'set', 'attack', 'block', 'receive', 'freeball', 'down')),
+                contact_type TEXT NOT NULL CHECK(contact_type IN ('serve', 'pass', 'set', 'attack', 'block', 'receive', 'freeball', 'down', 'net', 'fault')),
                 team_id INTEGER NOT NULL,
                 x INTEGER,
                 y INTEGER,
@@ -233,7 +233,7 @@ class VideoStatsDB:
         if result and result[0]:
             # Check if it has the old constraint with 'opp' or missing 'receive'/'freeball'/'down'
             sql = result[0]
-            if "'opp'" in sql or "'receive'" not in sql or "'freeball'" not in sql or "'down'" not in sql:
+            if "'opp'" in sql or "'receive'" not in sql or "'freeball'" not in sql or "'down'" not in sql or "'net'" not in sql or "'fault'" not in sql:
                 print("Migrating contact_type constraint in contacts table...")
                 try:
                     # Create new table with updated constraint
@@ -243,7 +243,7 @@ class VideoStatsDB:
                             rally_id INTEGER NOT NULL,
                             sequence_number INTEGER NOT NULL,
                             player_id INTEGER,
-                            contact_type TEXT NOT NULL CHECK(contact_type IN ('serve', 'pass', 'set', 'attack', 'block', 'receive', 'freeball', 'down')),
+                            contact_type TEXT NOT NULL CHECK(contact_type IN ('serve', 'pass', 'set', 'attack', 'block', 'receive', 'freeball', 'down', 'net', 'fault')),
                             team_id INTEGER NOT NULL,
                             x INTEGER,
                             y INTEGER,
@@ -286,7 +286,7 @@ class VideoStatsDB:
                         INSERT INTO contacts_new 
                         SELECT {select_cols}
                         FROM contacts
-                        WHERE contact_type IN ('serve', 'pass', 'set', 'attack', 'block', 'receive', 'freeball', 'down', 'opp')
+                        WHERE contact_type IN ('serve', 'pass', 'set', 'attack', 'block', 'receive', 'freeball', 'down', 'net', 'fault', 'opp')
                     """)
                     
                     # Drop old table and rename new one
@@ -363,7 +363,7 @@ class VideoStatsDB:
                                 rally_id INTEGER NOT NULL,
                                 sequence_number INTEGER NOT NULL,
                                 player_id INTEGER,
-                                contact_type TEXT NOT NULL CHECK(contact_type IN ('serve', 'pass', 'set', 'attack', 'block', 'receive', 'freeball', 'down')),
+                                contact_type TEXT NOT NULL CHECK(contact_type IN ('serve', 'pass', 'set', 'attack', 'block', 'receive', 'freeball', 'down', 'net', 'fault')),
                                 team_id INTEGER NOT NULL,
                                 x INTEGER,
                                 y INTEGER,
