@@ -514,7 +514,11 @@ class DataEntryWindow(QMainWindow):
                     self.status_label.setText(f"Coordinate captured: ({logical_x:.2f}, {logical_y:.2f}) @ {timecode_str}. Ready to record contact.")
     
     def on_double_click_mapped(self, logical_x, logical_y, pixel_x, pixel_y, timecode_ms):
-        """Handle double-click from coordinate_mapper - records a DOWN contact."""
+        """Handle double-click from coordinate_mapper - records a DOWN contact.
+        
+        When double-clicking on team_them_id's side (opponent side), records "down" 
+        with coordinates but does NOT automatically assign it to a player-action.
+        """
         if not self.game_id:
             self.status_label.setText("No game selected - cannot record DOWN contact")
             return
@@ -523,21 +527,22 @@ class DataEntryWindow(QMainWindow):
             self.status_label.setText("No rally in progress - cannot record DOWN contact")
             return
         
+        # Only handle double-clicks on opponent side (team_them_id)
+        # Y > 300 is opponent side, Y <= 300 is our side
+        if logical_y <= 300:
+            # Double-click on our side - ignore or handle differently if needed
+            self.status_label.setText("Double-click on opponent side to record DOWN contact")
+            return
+        
         # Store the coordinates
         self.last_clicked_x = logical_x
         self.last_clicked_y = logical_y
         self.last_clicked_timecode = timecode_ms
         
-        print(f"DEBUG: on_double_click_mapped - DOWN contact at x={logical_x}, y={logical_y}, timecode={timecode_ms}ms")
+        print(f"DEBUG: on_double_click_mapped - DOWN contact at x={logical_x}, y={logical_y}, timecode={timecode_ms}ms (opponent side)")
         
-        # Determine which team based on Y coordinate (for the losing team)
-        # Y > 300 is opponent side, Y <= 300 is our side
-        if logical_y > 300:
-            # Ball went down on opponent side - we scored
-            losing_team_id = self.team_them_id
-        else:
-            # Ball went down on our side - opponent scored
-            losing_team_id = self.team_us_id
+        # Ball went down on opponent side - set team_them_id as losing team
+        losing_team_id = self.team_them_id
         
         # Set up for DOWN contact
         self.selected_team_id = losing_team_id
@@ -557,7 +562,7 @@ class DataEntryWindow(QMainWindow):
         
         self.status_label.setText(f"Recording DOWN contact at ({logical_x:.2f}, {logical_y:.2f})...")
         
-        # Record the DOWN contact
+        # Record the DOWN contact (this is a manual recording, not automatic error assignment)
         self.record_contact("down")
     
     def setup_ui(self):
@@ -1580,6 +1585,15 @@ class DataEntryWindow(QMainWindow):
         # Check if the last contact was by the losing team (indicating an error)
         # or by the winning team (indicating ace or kill)
         
+        # Check if the very last contact is a "down" (manually recorded via double-click)
+        # If so, skip automatic error assignment for losing team contacts
+        last_contact_is_manual_down = False
+        last_contact = contacts[-1] if contacts else None
+        if last_contact and last_contact[4] == 'down':
+            # Last contact is a manually recorded "down" - skip automatic error assignment
+            last_contact_is_manual_down = True
+            print(f"DEBUG: Last contact is manually recorded 'down' - will skip automatic error assignment")
+        
         # Get the very last player contact (not floor contact)
         last_player_contact = None
         for contact in reversed(contacts):
@@ -1597,9 +1611,13 @@ class DataEntryWindow(QMainWindow):
         outcome = 'continue'  # Default
         
         # If the last contact was by the losing team, it's an error
-        if team_id == losing_team_id:
+        # BUT: skip this if the last contact was a manually recorded "down"
+        if team_id == losing_team_id and not last_contact_is_manual_down:
             outcome = 'error'
             print(f"DEBUG: Contact {contact_id} ({contact_type}) assigned outcome 'error' (losing team contact)")
+        elif team_id == losing_team_id and last_contact_is_manual_down:
+            # Skip automatic error assignment when "down" was manually recorded
+            print(f"DEBUG: Contact {contact_id} ({contact_type}) - skipping error assignment (manual 'down' recorded)")
         
         # If the last contact was by the winning team
         elif team_id == point_winner_id:
@@ -2009,4 +2027,3 @@ if __name__ == "__main__":
     else:
         print("Failed to load UI file")
         sys.exit(1)
-
