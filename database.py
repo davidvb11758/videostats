@@ -131,12 +131,55 @@ class VideoStatsDB:
                 x INTEGER,
                 y INTEGER,
                 timecode INTEGER,
-                outcome TEXT DEFAULT 'continue' CHECK(outcome IN ('continue', 'ace', 'kill', 'error', 'down', 'stuff')),
+                outcome TEXT DEFAULT 'continue' CHECK(outcome IN ('continue', 'ace', 'kill', 'error', 'down', 'stuff', 'assist')),
+                rating INTEGER,
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (rally_id) REFERENCES rallies(rally_id),
                 FOREIGN KEY (player_id) REFERENCES players(player_id),
                 FOREIGN KEY (team_id) REFERENCES teams(team_id)
+            )
+        """)
+        
+        # Player Statistics table - tracks statistics by game and by player
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS player_stats (
+                stat_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                game_id INTEGER NOT NULL,
+                player_id INTEGER NOT NULL,
+                -- Receive statistics
+                receive_attempts INTEGER DEFAULT 0,
+                receive_0 INTEGER DEFAULT 0,
+                receive_1 INTEGER DEFAULT 0,
+                receive_2 INTEGER DEFAULT 0,
+                receive_3 INTEGER DEFAULT 0,
+                receive_avg_rating REAL DEFAULT 0.0,
+                -- Attack statistics
+                attack_attempts INTEGER DEFAULT 0,
+                attack_kills INTEGER DEFAULT 0,
+                attack_errors INTEGER DEFAULT 0,
+                attack_kill_pct REAL DEFAULT 0.0,
+                attack_hitting_pct REAL DEFAULT 0.0,
+                attack_efficiency REAL DEFAULT 0.0,
+                -- Set statistics
+                set_attempts INTEGER DEFAULT 0,
+                set_assists INTEGER DEFAULT 0,
+                -- Serve statistics
+                serve_attempts INTEGER DEFAULT 0,
+                serve_aces INTEGER DEFAULT 0,
+                serve_errors INTEGER DEFAULT 0,
+                serve_ace_pct REAL DEFAULT 0.0,
+                serve_in_pct REAL DEFAULT 0.0,
+                -- Dig statistics
+                dig_attempts INTEGER DEFAULT 0,
+                dig_successful INTEGER DEFAULT 0,
+                -- Block statistics
+                block_solo INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (game_id) REFERENCES games(game_id) ON DELETE CASCADE,
+                FOREIGN KEY (player_id) REFERENCES players(player_id),
+                UNIQUE(game_id, player_id)
             )
         """)
         
@@ -149,6 +192,8 @@ class VideoStatsDB:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_game_players_game ON game_players(game_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_game_players_team ON game_players(team_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_game_players_player ON game_players(player_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_player_stats_game ON player_stats(game_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_player_stats_player ON player_stats(player_id)")
         
         self.conn.commit()
         print("Database tables created successfully!")
@@ -337,6 +382,18 @@ class VideoStatsDB:
             except Exception as e:
                 print(f"Failed to add timecode column: {e}")
         
+        # Add rating column to contacts table if it doesn't exist
+        cursor.execute("PRAGMA table_info(contacts)")
+        columns = [row[1] for row in cursor.fetchall()]
+        if 'rating' not in columns:
+            print("Adding rating column to contacts table...")
+            try:
+                cursor.execute("ALTER TABLE contacts ADD COLUMN rating INTEGER")
+                self.conn.commit()
+                print("rating column added successfully!")
+            except Exception as e:
+                print(f"Failed to add rating column: {e}")
+        
         # Add outcome column to contacts table if it doesn't exist
         if 'outcome' not in columns:
             print("Adding outcome column to contacts table...")
@@ -347,14 +404,19 @@ class VideoStatsDB:
             except Exception as e:
                 print(f"Failed to add outcome column: {e}")
         else:
-            # Check if the outcome column has the old constraint (without 'stuff')
+            # Check if the outcome column has the old constraint (without 'stuff' or 'assist')
             cursor.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='contacts'")
             result = cursor.fetchone()
             if result and result[0]:
                 sql = result[0]
-                # Check if 'stuff' is missing from the outcome constraint
-                if "'stuff'" not in sql:
-                    print("Migrating outcome column constraint to include 'stuff'...")
+                # Check if 'stuff' or 'assist' is missing from the outcome constraint
+                if "'stuff'" not in sql or "'assist'" not in sql:
+                    missing = []
+                    if "'stuff'" not in sql:
+                        missing.append("'stuff'")
+                    if "'assist'" not in sql:
+                        missing.append("'assist'")
+                    print(f"Migrating outcome column constraint to include {', '.join(missing)}...")
                     try:
                         # Create new table with updated constraint
                         cursor.execute("""
@@ -368,7 +430,8 @@ class VideoStatsDB:
                                 x INTEGER,
                                 y INTEGER,
                                 timecode INTEGER,
-                                outcome TEXT DEFAULT 'continue' CHECK(outcome IN ('continue', 'ace', 'kill', 'error', 'down', 'stuff')),
+                                outcome TEXT DEFAULT 'continue' CHECK(outcome IN ('continue', 'ace', 'kill', 'error', 'down', 'stuff', 'assist')),
+                                rating INTEGER,
                                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                                 FOREIGN KEY (rally_id) REFERENCES rallies(rally_id),
@@ -377,11 +440,21 @@ class VideoStatsDB:
                             )
                         """)
                         
-                        # Copy data
-                        cursor.execute("""
+                        # Copy data - check if rating column exists in old table
+                        cursor.execute("PRAGMA table_info(contacts)")
+                        old_columns = [row[1] for row in cursor.fetchall()]
+                        has_rating = 'rating' in old_columns
+                        
+                        select_cols = "contact_id, rally_id, sequence_number, player_id, contact_type, team_id, x, y, timecode, outcome"
+                        if has_rating:
+                            select_cols += ", rating"
+                        else:
+                            select_cols += ", NULL as rating"
+                        select_cols += ", timestamp, created_at"
+                        
+                        cursor.execute(f"""
                             INSERT INTO contacts_new 
-                            SELECT contact_id, rally_id, sequence_number, player_id, contact_type, 
-                                   team_id, x, y, timecode, outcome, timestamp, created_at
+                            SELECT {select_cols}
                             FROM contacts
                         """)
                         
@@ -443,6 +516,58 @@ class VideoStatsDB:
         
         # The game_players table will be created automatically if it doesn't exist
         # No migration needed as it's a new table
+        
+        # Check if player_stats table exists, if not create it
+        cursor.execute("""
+            SELECT name FROM sqlite_master 
+            WHERE type='table' AND name='player_stats'
+        """)
+        if not cursor.fetchone():
+            print("Creating player_stats table...")
+            cursor.execute("""
+                CREATE TABLE player_stats (
+                    stat_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    game_id INTEGER NOT NULL,
+                    player_id INTEGER NOT NULL,
+                    -- Receive statistics
+                    receive_attempts INTEGER DEFAULT 0,
+                    receive_0 INTEGER DEFAULT 0,
+                    receive_1 INTEGER DEFAULT 0,
+                    receive_2 INTEGER DEFAULT 0,
+                    receive_3 INTEGER DEFAULT 0,
+                    receive_avg_rating REAL DEFAULT 0.0,
+                    -- Attack statistics
+                    attack_attempts INTEGER DEFAULT 0,
+                    attack_kills INTEGER DEFAULT 0,
+                    attack_errors INTEGER DEFAULT 0,
+                    attack_kill_pct REAL DEFAULT 0.0,
+                    attack_hitting_pct REAL DEFAULT 0.0,
+                    attack_efficiency REAL DEFAULT 0.0,
+                    -- Set statistics
+                    set_attempts INTEGER DEFAULT 0,
+                    set_assists INTEGER DEFAULT 0,
+                    -- Serve statistics
+                    serve_attempts INTEGER DEFAULT 0,
+                    serve_aces INTEGER DEFAULT 0,
+                    serve_errors INTEGER DEFAULT 0,
+                    serve_ace_pct REAL DEFAULT 0.0,
+                    serve_in_pct REAL DEFAULT 0.0,
+                    -- Dig statistics
+                    dig_attempts INTEGER DEFAULT 0,
+                    dig_successful INTEGER DEFAULT 0,
+                    -- Block statistics
+                    block_solo INTEGER DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (game_id) REFERENCES games(game_id) ON DELETE CASCADE,
+                    FOREIGN KEY (player_id) REFERENCES players(player_id),
+                    UNIQUE(game_id, player_id)
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_player_stats_game ON player_stats(game_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_player_stats_player ON player_stats(player_id)")
+            self.conn.commit()
+            print("player_stats table created successfully!")
     
     # Helper methods for common operations
     
@@ -530,7 +655,7 @@ class VideoStatsDB:
                    team_id: int, player_id: Optional[int] = None, 
                    x: Optional[int] = None, y: Optional[int] = None,
                    timecode: Optional[int] = None,
-                   outcome: str = 'continue') -> int:
+                   outcome: str = 'continue', rating: Optional[int] = None) -> int:
         """Add a ball contact and return contact_id.
         
         Args:
@@ -543,14 +668,15 @@ class VideoStatsDB:
             y: Optional y coordinate on the court
             timecode: Optional video timecode in milliseconds
             outcome: Outcome of the contact (continue, ace, kill, error, down, stuff). Defaults to 'continue'
+            rating: Optional rating (integer) for the contact
         """
         if not self.conn:
             self.connect()
         cursor = self.conn.cursor()
         cursor.execute(
-            """INSERT INTO contacts (rally_id, sequence_number, contact_type, team_id, player_id, x, y, timecode, outcome)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (rally_id, sequence_number, contact_type, team_id, player_id, x, y, timecode, outcome)
+            """INSERT INTO contacts (rally_id, sequence_number, contact_type, team_id, player_id, x, y, timecode, outcome, rating)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (rally_id, sequence_number, contact_type, team_id, player_id, x, y, timecode, outcome, rating)
         )
         self.conn.commit()
         return cursor.lastrowid
