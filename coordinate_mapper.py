@@ -1,9 +1,10 @@
 """
 Coordinate Mapper - Maps pixel coordinates to logical coordinates using perspective correction.
-Ported from Tkinter to PySide6/Qt for integration with the volleyball stats application.
+Uses OpenCV homography for accurate perspective transformation.
 """
 
 import numpy as np
+import cv2
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGraphicsView, QGraphicsScene,
     QGraphicsEllipseItem, QGraphicsLineItem, QGraphicsTextItem, QApplication, QPushButton,
@@ -43,12 +44,16 @@ class CoordinateMapper(QMainWindow):
         self.canvas_height = 1000
         
         # Storage for clicks
-        self.corner_points = []  # Will store 4 corners + 2 midpoints (6 total)
+        self.corner_points = []  # Will store 4 corners + 6 horizontal line points (10 total)
+        # Order: [BL, BR, TR, TL, ML(300), MR(300), Y200L(200), Y200R(200), Y400L(400), Y400R(400)]
         self.mapped_points = []  # Will store subsequent points
         
         # Graphics items for drawing
         self.graphics_items = []  # Store all graphics items for easy clearing
-        self.point_ellipses = []  # Store ellipse items for the 6 corner/midpoints
+        self.point_ellipses = []  # Store ellipse items for the 10 corner/midpoints
+        
+        # OpenCV homography matrix for perspective transformation
+        self.homography_matrix = None
         
         # Interaction modes
         self.mode = 'normal'  # 'normal', 'setup', 'modify'
@@ -189,7 +194,7 @@ class CoordinateMapper(QMainWindow):
     
     def start_modify_court(self):
         """Start the process of modifying court boundaries."""
-        if len(self.corner_points) < 6:
+        if len(self.corner_points) < 10:
             return
         
         # Enter modify mode
@@ -334,20 +339,25 @@ class CoordinateMapper(QMainWindow):
     
     def store_court_boundaries(self):
         """Store the court boundaries to the database and prepare for contact location clicks."""
-        if len(self.corner_points) < 6:
+        if len(self.corner_points) < 10:
             self.status_label.setText("Error: Court boundaries not fully defined!")
             return
         
         # Map corner_points indices to database field names
-        # corner_points order: [BL, BR, TR, TL, ML, MR]
+        # corner_points order: [BL, BR, TR, TL, ML, MR, Y200L, Y200R, Y400L, Y400R]
         # Database expects: corner_tl, corner_tr, corner_bl, corner_br, centerline_top, centerline_bottom
+        # Note: Y200 and Y400 points will be stored in additional fields if database supports them
         court_points_dict = {
             'corner_bl': tuple(self.corner_points[0]),  # Bottom-left
             'corner_br': tuple(self.corner_points[1]),  # Bottom-right
             'corner_tr': tuple(self.corner_points[2]),  # Top-right
             'corner_tl': tuple(self.corner_points[3]),  # Top-left
             'centerline_bottom': tuple(self.corner_points[4]),  # Mid-left (left end of centerline)
-            'centerline_top': tuple(self.corner_points[5])  # Mid-right (right end of centerline)
+            'centerline_top': tuple(self.corner_points[5]),  # Mid-right (right end of centerline)
+            'y200_left': tuple(self.corner_points[6]),  # Y200L (left point of Y=200 line)
+            'y200_right': tuple(self.corner_points[7]),  # Y200R (right point of Y=200 line)
+            'y400_left': tuple(self.corner_points[8]),  # Y400L (left point of Y=400 line)
+            'y400_right': tuple(self.corner_points[9])  # Y400R (right point of Y=400 line)
         }
         
         # Save to database if db and game_id are available
@@ -370,7 +380,8 @@ class CoordinateMapper(QMainWindow):
         
         # Print for debugging
         print("Court boundaries stored:")
-        labels = ['BL (0,0)', 'BR (300,0)', 'TR (300,600)', 'TL (0,600)', 'ML (0,300)', 'MR (300,300)']
+        labels = ['BL (0,0)', 'BR (300,0)', 'TR (300,600)', 'TL (0,600)', 'ML (0,300)', 'MR (300,300)',
+                 'Y200L (0,200)', 'Y200R (300,200)', 'Y400L (0,400)', 'Y400R (300,400)']
         for i, (label, point) in enumerate(zip(labels, self.corner_points)):
             print(f"  {label}: [{point[0]:.2f}, {point[1]:.2f}]")
     
@@ -391,7 +402,7 @@ class CoordinateMapper(QMainWindow):
                     y = scene_pos.y()
                     
                     # Only handle double-click when court is defined and in normal mode
-                    if self.mode == 'normal' and len(self.corner_points) >= 6:
+                    if self.mode == 'normal' and len(self.corner_points) >= 10:
                         self.handle_double_click(x, y)
                         return True
             
@@ -448,7 +459,7 @@ class CoordinateMapper(QMainWindow):
                     elif self.mode == 'setup' or (self.mode == 'normal' and len(self.corner_points) < 6):
                         self.on_click(x, y)
                         return True
-                    elif self.mode == 'normal' and len(self.corner_points) >= 6:
+                    elif self.mode == 'normal' and len(self.corner_points) >= 10:
                         self.on_click(x, y)
                         return True
             
@@ -494,7 +505,7 @@ class CoordinateMapper(QMainWindow):
     
     def find_line_at_position(self, x, y):
         """Find if there's a line near the given position. Returns (point1_idx, point2_idx) or None."""
-        if len(self.corner_points) < 6:
+        if len(self.corner_points) < 10:
             return None
         
         # Define all the lines as pairs of point indices
@@ -508,6 +519,16 @@ class CoordinateMapper(QMainWindow):
             (1, 5),  # bottom-right to mid-right
             (5, 2),  # mid-right to top-right
             (4, 5),  # centerline
+            (0, 6),  # bottom-left to Y200L
+            (6, 4),  # Y200L to mid-left
+            (1, 7),  # bottom-right to Y200R
+            (7, 5),  # Y200R to mid-right
+            (6, 7),  # Y=200 line
+            (4, 8),  # mid-left to Y400L
+            (8, 3),  # Y400L to top-left
+            (5, 9),  # mid-right to Y400R
+            (9, 2),  # Y400R to top-right
+            (8, 9),  # Y=400 line
         ]
         
         threshold = 15  # pixels - distance from line to be considered "on" it
@@ -546,6 +567,9 @@ class CoordinateMapper(QMainWindow):
     def update_point_position(self, index, x, y):
         """Update the position of a corner point."""
         self.corner_points[index] = [x, y]
+        # Recompute homography if we have all 10 points
+        if len(self.corner_points) >= 10:
+            self._compute_homography()
         self._redraw_plane()
     
     def update_line_drag(self, x, y):
@@ -599,7 +623,7 @@ class CoordinateMapper(QMainWindow):
     
     def on_click(self, x, y):
         """Handle a click at the given scene coordinates."""
-        if len(self.corner_points) < 6 and self.mode == 'setup':
+        if len(self.corner_points) < 10 and self.mode == 'setup':
             # Still defining the corners and midpoints
             self.corner_points.append([x, y])
             
@@ -613,7 +637,8 @@ class CoordinateMapper(QMainWindow):
             self.point_ellipses.append(ellipse)  # Store reference
             
             # Label the point
-            labels = ['BL (0,0)', 'BR (300,0)', 'TR (300,600)', 'TL (0,600)', 'ML (0,300)', 'MR (300,300)']
+            labels = ['BL (0,0)', 'BR (300,0)', 'TR (300,600)', 'TL (0,600)', 'ML (0,300)', 'MR (300,300)', 
+                     'Y200L (0,200)', 'Y200R (300,200)', 'Y400L (0,400)', 'Y400R (300,400)']
             text_item = QGraphicsTextItem(labels[len(self.corner_points) - 1])
             text_item.setPos(x, y - 15)
             text_item.setDefaultTextColor(QColor(0, 0, 0))
@@ -715,13 +740,80 @@ class CoordinateMapper(QMainWindow):
                 line3.setPen(centerline_pen)
                 self.scene.addItem(line3)
                 self.graphics_items.append(line3)
+                self.status_label.setText("Click left point of Y=200 line (team_us side)")
+            elif len(self.corner_points) == 7:
+                # Draw Y=200 line (left point)
+                pen = QPen(QColor(0, 255, 0), 2)  # Green for Y=200 line
+                pen.setStyle(Qt.PenStyle.DashLine)
+                line1 = QGraphicsLineItem(
+                    self.corner_points[0][0], self.corner_points[0][1],
+                    self.corner_points[6][0], self.corner_points[6][1]
+                )
+                line1.setPen(pen)
+                self.scene.addItem(line1)
+                self.graphics_items.append(line1)
+                self.status_label.setText("Click right point of Y=200 line (team_us side)")
+            elif len(self.corner_points) == 8:
+                # Draw Y=200 line (right point) and complete the line
+                pen = QPen(QColor(0, 255, 0), 2)  # Green for Y=200 line
+                pen.setStyle(Qt.PenStyle.DashLine)
+                line1 = QGraphicsLineItem(
+                    self.corner_points[6][0], self.corner_points[6][1],
+                    self.corner_points[7][0], self.corner_points[7][1]
+                )
+                line1.setPen(pen)
+                self.scene.addItem(line1)
+                self.graphics_items.append(line1)
+                
+                line2 = QGraphicsLineItem(
+                    self.corner_points[1][0], self.corner_points[1][1],
+                    self.corner_points[7][0], self.corner_points[7][1]
+                )
+                line2.setPen(pen)
+                self.scene.addItem(line2)
+                self.graphics_items.append(line2)
+                self.status_label.setText("Click left point of Y=400 line (team_them side)")
+            elif len(self.corner_points) == 9:
+                # Draw Y=400 line (left point)
+                pen = QPen(QColor(255, 0, 255), 2)  # Magenta for Y=400 line
+                pen.setStyle(Qt.PenStyle.DashLine)
+                line1 = QGraphicsLineItem(
+                    self.corner_points[4][0], self.corner_points[4][1],
+                    self.corner_points[8][0], self.corner_points[8][1]
+                )
+                line1.setPen(pen)
+                self.scene.addItem(line1)
+                self.graphics_items.append(line1)
+                self.status_label.setText("Click right point of Y=400 line (team_them side)")
+            elif len(self.corner_points) == 10:
+                # Draw Y=400 line (right point) and complete the line
+                pen = QPen(QColor(255, 0, 255), 2)  # Magenta for Y=400 line
+                pen.setStyle(Qt.PenStyle.DashLine)
+                line1 = QGraphicsLineItem(
+                    self.corner_points[8][0], self.corner_points[8][1],
+                    self.corner_points[9][0], self.corner_points[9][1]
+                )
+                line1.setPen(pen)
+                self.scene.addItem(line1)
+                self.graphics_items.append(line1)
+                
+                line2 = QGraphicsLineItem(
+                    self.corner_points[5][0], self.corner_points[5][1],
+                    self.corner_points[9][0], self.corner_points[9][1]
+                )
+                line2.setPen(pen)
+                self.scene.addItem(line2)
+                self.graphics_items.append(line2)
                 self.status_label.setText("Plane defined! Click 'Store Court Boundaries' to save and start mapping.")
                 
                 # Enable modify and store buttons, change to normal mode
                 self.modify_court_btn.setEnabled(True)
                 self.store_boundaries_btn.setEnabled(True)
                 self.mode = 'normal'
-        elif self.mode == 'normal' and len(self.corner_points) >= 6:
+                
+                # Compute homography matrix for perspective transformation
+                self._compute_homography()
+        elif self.mode == 'normal' and len(self.corner_points) >= 10:
             # Map the clicked point to logical coordinates
             logical_coords = self.map_point_to_logical(x, y)
             
@@ -757,65 +849,77 @@ class CoordinateMapper(QMainWindow):
                 # Emit signal with mapped coordinates and timecode
                 self.coordinate_mapped.emit(logical_coords[0], logical_coords[1], x, y, timecode_ms)
     
+    def _compute_homography(self):
+        """Compute the homography matrix using OpenCV based on the 10 control points."""
+        if len(self.corner_points) < 10:
+            self.homography_matrix = None
+            return
+        
+        # Define logical coordinates for all 10 control points
+        # Order: [BL, BR, TR, TL, ML, MR, Y200L, Y200R, Y400L, Y400R]
+        logical_coords = np.array([
+            [0, 0],      # BL
+            [300, 0],    # BR
+            [300, 600],  # TR
+            [0, 600],    # TL
+            [0, 300],    # ML
+            [300, 300],  # MR
+            [0, 200],    # Y200L
+            [300, 200],  # Y200R
+            [0, 400],    # Y400L
+            [300, 400]   # Y400R
+        ], dtype=np.float32)
+        
+        # Get pixel coordinates of control points
+        pixel_coords = np.array(self.corner_points, dtype=np.float32)
+        
+        # Compute homography matrix using all 10 points for better accuracy
+        # cv2.findHomography uses RANSAC by default for robust estimation
+        self.homography_matrix, mask = cv2.findHomography(
+            pixel_coords, 
+            logical_coords,
+            method=cv2.RANSAC,
+            ransacReprojThreshold=5.0
+        )
+        
+        if self.homography_matrix is not None:
+            print("Homography matrix computed successfully")
+            print(f"Matrix:\n{self.homography_matrix}")
+        else:
+            print("Warning: Failed to compute homography matrix")
+    
     def map_point_to_logical(self, x, y):
         """
-        Map a pixel coordinate (x, y) to logical coordinates within the defined plane.
-        Uses bilinear interpolation based on the 6 control points (4 corners + 2 midpoints).
+        Map a pixel coordinate (x, y) to logical coordinates using OpenCV homography.
         
-        The control points are:
-        0: bottom-left (0, 0)
-        1: bottom-right (300, 0)
-        2: top-right (300, 600)
-        3: top-left (0, 600)
-        4: mid-left (0, 300)
-        5: mid-right (300, 300)
-        
-        The plane is divided into two halves for better perspective handling.
+        Uses the homography matrix computed from the 10 control points to transform
+        pixel coordinates to logical coordinates. This provides accurate perspective
+        correction using all control points including ML, Y200, and Y400 lines.
         
         Returns:
             [logical_x, logical_y] or None if mapping fails
         """
-        if len(self.corner_points) < 6:
+        if self.homography_matrix is None:
+            # Try to compute homography if we have enough points
+            if len(self.corner_points) >= 10:
+                self._compute_homography()
+            else:
+                return None
+        
+        if self.homography_matrix is None:
             return None
         
-        # Get all control points
-        bl = np.array(self.corner_points[0])  # bottom-left (0, 0)
-        br = np.array(self.corner_points[1])  # bottom-right (300, 0)
-        tr = np.array(self.corner_points[2])  # top-right (300, 600)
-        tl = np.array(self.corner_points[3])  # top-left (0, 600)
-        ml = np.array(self.corner_points[4])  # mid-left (0, 300)
-        mr = np.array(self.corner_points[5])  # mid-right (300, 300)
+        # Transform pixel coordinate to logical coordinate using homography
+        # Convert to homogeneous coordinates
+        pixel_point = np.array([x, y, 1.0], dtype=np.float32).reshape(3, 1)
         
-        # Point to map
-        p = np.array([x, y])
+        # Apply homography transformation
+        mapped = self.homography_matrix @ pixel_point
         
-        # Try both halves and pick the one with better convergence
-        results = []
-        
-        # Bottom half: BL, BR, MR, ML
-        result_bottom = self._map_to_quad(p, bl, br, mr, ml)
-        if result_bottom is not None:
-            u, v, residual = result_bottom
-            # Map to logical coords: bottom half has y from 0 to 300
-            logical_x = u * self.plane_width
-            logical_y = v * (self.plane_height / 2)  # v goes from 0 to 1, map to 0 to 300
-            results.append((logical_x, logical_y, residual))
-        
-        # Top half: ML, MR, TR, TL
-        result_top = self._map_to_quad(p, ml, mr, tr, tl)
-        if result_top is not None:
-            u, v, residual = result_top
-            # Map to logical coords: top half has y from 300 to 600
-            logical_x = u * self.plane_width
-            logical_y = 300 + v * (self.plane_height / 2)  # v goes from 0 to 1, map to 300 to 600
-            results.append((logical_x, logical_y, residual))
-        
-        # Pick the result with smaller residual (better fit)
-        if not results:
-            return None
-        
-        results.sort(key=lambda r: r[2])
-        logical_x, logical_y, _ = results[0]
+        # Convert back from homogeneous coordinates
+        mapped /= mapped[2]
+        logical_x = float(mapped[0][0])
+        logical_y = float(mapped[1][0])
         
         return [logical_x, logical_y]
     
@@ -904,8 +1008,8 @@ class CoordinateMapper(QMainWindow):
             self.scene.removeItem(text_item)
     
     def is_configured(self):
-        """Check if the coordinate mapper has been configured with 6 control points."""
-        return len(self.corner_points) >= 6
+        """Check if the coordinate mapper has been configured with 10 control points."""
+        return len(self.corner_points) >= 10
     
     def get_corner_points(self):
         """Get the current corner points (for saving configuration)."""
@@ -913,12 +1017,25 @@ class CoordinateMapper(QMainWindow):
     
     def set_corner_points(self, points):
         """Set the corner points (for loading configuration)."""
-        if len(points) == 6:
+        if len(points) == 10:
             self.corner_points = [list(p) for p in points]
             self.mode = 'normal'
             self.modify_court_btn.setEnabled(True)
             self.store_boundaries_btn.setEnabled(True)
             self.status_label.setText("Plane defined! Click 'Store Court Boundaries' to save and start mapping.")
+            # Compute homography matrix
+            self._compute_homography()
+            # Redraw the plane
+            self._redraw_plane()
+        elif len(points) == 6:
+            # Backward compatibility: if only 6 points provided, pad with None for Y200 and Y400
+            # This allows loading old configurations
+            self.corner_points = [list(p) for p in points] + [None] * 4
+            self.mode = 'normal'
+            self.modify_court_btn.setEnabled(False)  # Can't modify if not fully configured
+            self.store_boundaries_btn.setEnabled(False)
+            self.status_label.setText("Plane partially defined (6 points). Please set up Y200 and Y400 lines.")
+            self.homography_matrix = None  # Can't compute homography without all points
             # Redraw the plane
             self._redraw_plane()
     
@@ -933,8 +1050,11 @@ class CoordinateMapper(QMainWindow):
         # Redraw all points and lines
         if len(self.corner_points) >= 1:
             # Draw all points
-            labels = ['BL (0,0)', 'BR (300,0)', 'TR (300,600)', 'TL (0,600)', 'ML (0,300)', 'MR (300,300)']
+            labels = ['BL (0,0)', 'BR (300,0)', 'TR (300,600)', 'TL (0,600)', 'ML (0,300)', 'MR (300,300)',
+                     'Y200L (0,200)', 'Y200R (300,200)', 'Y400L (0,400)', 'Y400R (300,400)']
             for i, point in enumerate(self.corner_points):
+                if point is None:  # Skip None points (for backward compatibility)
+                    continue
                 x, y = point
                 radius = 5
                 ellipse = QGraphicsEllipseItem(x - radius, y - radius, radius * 2, radius * 2)
@@ -1042,6 +1162,64 @@ class CoordinateMapper(QMainWindow):
                     self.corner_points[5][0], self.corner_points[5][1]
                 )
                 line3.setPen(centerline_pen)
+                self.scene.addItem(line3)
+                self.graphics_items.append(line3)
+            
+            # Draw Y=200 line if points 6 and 7 exist
+            if len(self.corner_points) >= 8 and self.corner_points[6] is not None and self.corner_points[7] is not None:
+                pen = QPen(QColor(0, 255, 0), 2)  # Green for Y=200 line
+                pen.setStyle(Qt.PenStyle.DashLine)
+                # Horizontal line
+                line1 = QGraphicsLineItem(
+                    self.corner_points[6][0], self.corner_points[6][1],
+                    self.corner_points[7][0], self.corner_points[7][1]
+                )
+                line1.setPen(pen)
+                self.scene.addItem(line1)
+                self.graphics_items.append(line1)
+                # Left edge
+                line2 = QGraphicsLineItem(
+                    self.corner_points[0][0], self.corner_points[0][1],
+                    self.corner_points[6][0], self.corner_points[6][1]
+                )
+                line2.setPen(pen)
+                self.scene.addItem(line2)
+                self.graphics_items.append(line2)
+                # Right edge
+                line3 = QGraphicsLineItem(
+                    self.corner_points[1][0], self.corner_points[1][1],
+                    self.corner_points[7][0], self.corner_points[7][1]
+                )
+                line3.setPen(pen)
+                self.scene.addItem(line3)
+                self.graphics_items.append(line3)
+            
+            # Draw Y=400 line if points 8 and 9 exist
+            if len(self.corner_points) >= 10 and self.corner_points[8] is not None and self.corner_points[9] is not None:
+                pen = QPen(QColor(255, 0, 255), 2)  # Magenta for Y=400 line
+                pen.setStyle(Qt.PenStyle.DashLine)
+                # Horizontal line
+                line1 = QGraphicsLineItem(
+                    self.corner_points[8][0], self.corner_points[8][1],
+                    self.corner_points[9][0], self.corner_points[9][1]
+                )
+                line1.setPen(pen)
+                self.scene.addItem(line1)
+                self.graphics_items.append(line1)
+                # Left edge
+                line2 = QGraphicsLineItem(
+                    self.corner_points[4][0], self.corner_points[4][1],
+                    self.corner_points[8][0], self.corner_points[8][1]
+                )
+                line2.setPen(pen)
+                self.scene.addItem(line2)
+                self.graphics_items.append(line2)
+                # Right edge
+                line3 = QGraphicsLineItem(
+                    self.corner_points[5][0], self.corner_points[5][1],
+                    self.corner_points[9][0], self.corner_points[9][1]
+                )
+                line3.setPen(pen)
                 self.scene.addItem(line3)
                 self.graphics_items.append(line3)
                 

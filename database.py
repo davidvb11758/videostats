@@ -79,6 +79,14 @@ class VideoStatsDB:
                 court_centerline_top_y REAL,
                 court_centerline_bottom_x REAL,
                 court_centerline_bottom_y REAL,
+                court_y200_left_x REAL,
+                court_y200_left_y REAL,
+                court_y200_right_x REAL,
+                court_y200_right_y REAL,
+                court_y400_left_x REAL,
+                court_y400_left_y REAL,
+                court_y400_right_x REAL,
+                court_y400_right_y REAL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (team_us_id) REFERENCES teams(team_id),
                 FOREIGN KEY (team_them_id) REFERENCES teams(team_id),
@@ -502,7 +510,15 @@ class VideoStatsDB:
             'court_corner_bl_x', 'court_corner_bl_y',
             'court_corner_br_x', 'court_corner_br_y',
             'court_centerline_top_x', 'court_centerline_top_y',
-            'court_centerline_bottom_x', 'court_centerline_bottom_y'
+            'court_centerline_bottom_x', 'court_centerline_bottom_y',
+            'court_y200_left_x', 'court_y200_left_y',
+            'court_y200_right_x', 'court_y200_right_y',
+            'court_y400_left_x', 'court_y400_left_y',
+            'court_y400_right_x', 'court_y400_right_y',
+            'court_y200_left_x', 'court_y200_left_y',
+            'court_y200_right_x', 'court_y200_right_y',
+            'court_y400_left_x', 'court_y400_left_y',
+            'court_y400_right_x', 'court_y400_right_y'
         ]
         for col in court_columns:
             if col not in columns:
@@ -958,6 +974,10 @@ class VideoStatsDB:
         br_x, br_y = get_xy(court_points.get('corner_br', (0, 0)))
         ct_x, ct_y = get_xy(court_points.get('centerline_top', (0, 0)))
         cb_x, cb_y = get_xy(court_points.get('centerline_bottom', (0, 0)))
+        y200l_x, y200l_y = get_xy(court_points.get('y200_left', (0, 0)))
+        y200r_x, y200r_y = get_xy(court_points.get('y200_right', (0, 0)))
+        y400l_x, y400l_y = get_xy(court_points.get('y400_left', (0, 0)))
+        y400r_x, y400r_y = get_xy(court_points.get('y400_right', (0, 0)))
         
         cursor.execute("""
             UPDATE games SET
@@ -966,9 +986,14 @@ class VideoStatsDB:
                 court_corner_bl_x = ?, court_corner_bl_y = ?,
                 court_corner_br_x = ?, court_corner_br_y = ?,
                 court_centerline_top_x = ?, court_centerline_top_y = ?,
-                court_centerline_bottom_x = ?, court_centerline_bottom_y = ?
+                court_centerline_bottom_x = ?, court_centerline_bottom_y = ?,
+                court_y200_left_x = ?, court_y200_left_y = ?,
+                court_y200_right_x = ?, court_y200_right_y = ?,
+                court_y400_left_x = ?, court_y400_left_y = ?,
+                court_y400_right_x = ?, court_y400_right_y = ?
             WHERE game_id = ?
-        """, (tl_x, tl_y, tr_x, tr_y, bl_x, bl_y, br_x, br_y, ct_x, ct_y, cb_x, cb_y, game_id))
+        """, (tl_x, tl_y, tr_x, tr_y, bl_x, bl_y, br_x, br_y, ct_x, ct_y, cb_x, cb_y,
+              y200l_x, y200l_y, y200r_x, y200r_y, y400l_x, y400l_y, y400r_x, y400r_y, game_id))
         self.conn.commit()
     
     def get_game_court_boundaries(self, game_id: int) -> Optional[dict]:
@@ -989,7 +1014,11 @@ class VideoStatsDB:
                    court_corner_bl_x, court_corner_bl_y,
                    court_corner_br_x, court_corner_br_y,
                    court_centerline_top_x, court_centerline_top_y,
-                   court_centerline_bottom_x, court_centerline_bottom_y
+                   court_centerline_bottom_x, court_centerline_bottom_y,
+                   court_y200_left_x, court_y200_left_y,
+                   court_y200_right_x, court_y200_right_y,
+                   court_y400_left_x, court_y400_left_y,
+                   court_y400_right_x, court_y400_right_y
             FROM games WHERE game_id = ?
         """, (game_id,))
         result = cursor.fetchone()
@@ -1004,7 +1033,11 @@ class VideoStatsDB:
             'corner_bl': (result[4], result[5]),
             'corner_br': (result[6], result[7]),
             'centerline_top': (result[8], result[9]),
-            'centerline_bottom': (result[10], result[11])
+            'centerline_bottom': (result[10], result[11]),
+            'y200_left': (result[12], result[13]) if result[12] is not None else None,
+            'y200_right': (result[14], result[15]) if result[14] is not None else None,
+            'y400_left': (result[16], result[17]) if result[16] is not None else None,
+            'y400_right': (result[18], result[19]) if result[18] is not None else None
         }
 
 

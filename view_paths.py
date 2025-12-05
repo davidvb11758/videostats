@@ -13,14 +13,15 @@ from PySide6.QtWidgets import (
     QGraphicsPathItem, QGraphicsRectItem, QVBoxLayout, QHBoxLayout, QWidget,
     QListWidget, QListWidgetItem, QCheckBox, QLabel, QGroupBox, QTableWidget,
     QTableWidgetItem, QHeaderView, QAbstractItemView, QPushButton, QSlider,
-    QProgressDialog
+    QProgressDialog, QFrame, QDialog, QRadioButton, QButtonGroup
 )
-from PySide6.QtCore import Qt, QPointF, QRectF, QUrl, QSize, QThread, Signal
+from PySide6.QtCore import Qt, QPointF, QRectF, QUrl, QSize, QThread, Signal, QPoint
 from PySide6.QtGui import QPen, QBrush, QColor, QPainterPath, QPolygonF, QPainter, QFont
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
 from PySide6.QtUiTools import QUiLoader
 from database import VideoStatsDB
+from coordinate_mapper import CoordinateMapper
 from typing import Optional, List, Tuple
 
 
@@ -225,6 +226,840 @@ class VideoPlayerWindow(QMainWindow):
             self.scene.setSceneRect(0, 0, view_size.width(), view_size.height())
 
 
+class ClickableGraphicsScene(QGraphicsScene):
+    """Custom graphics scene that handles mouse clicks on contact dots."""
+    
+    def __init__(self, parent_viewer, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.parent_viewer = parent_viewer
+    
+    def mousePressEvent(self, event):
+        """Handle mouse press events on the graphics scene."""
+        if event.button() == Qt.MouseButton.LeftButton:
+            scene_pos = event.scenePos()
+            
+            # Find items at this position
+            items = self.items(scene_pos)
+            
+            # Look for a contact dot (ellipse or rect with contact data)
+            contact_found = False
+            for item in items:
+                contact_data = item.data(Qt.ItemDataRole.UserRole)
+                if contact_data and isinstance(contact_data, dict):
+                    # Found a contact dot - show popup
+                    self.parent_viewer.show_contact_popup(item, scene_pos, contact_data)
+                    contact_found = True
+                    event.accept()
+                    return
+            
+            # Clicked outside a dot - hide popup if visible
+            if not contact_found:
+                self.parent_viewer.hide_contact_popup()
+        
+        # Call the default scene mouse press handler
+        super().mousePressEvent(event)
+
+
+class ContactInfoPopup(QFrame):
+    """Popup widget to display contact information."""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFrameStyle(QFrame.Shape.Box | QFrame.Shadow.Raised)
+        self.setStyleSheet("""
+            QFrame {
+                background-color: #f0f0f0;
+                border: 1px solid #999;
+                border-radius: 3px;
+                padding: 4px;
+            }
+            QLabel {
+                background-color: transparent;
+                border: none;
+                padding: 0px;
+            }
+        """)
+        
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(2)
+        
+        self.player_label = QLabel("Player: -")
+        self.contact_type_label = QLabel("Type: -")
+        self.outcome_label = QLabel("Outcome: -")
+        self.rating_label = QLabel("Rating: -")
+        
+        font = QFont('Arial', 9)
+        font.setBold(False)
+        
+        # Left align all labels
+        self.player_label.setFont(font)
+        self.player_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        self.contact_type_label.setFont(font)
+        self.contact_type_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        self.outcome_label.setFont(font)
+        self.outcome_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        self.rating_label.setFont(font)
+        self.rating_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        
+        layout.addWidget(self.player_label)
+        layout.addWidget(self.contact_type_label)
+        layout.addWidget(self.outcome_label)
+        layout.addWidget(self.rating_label)
+        
+        # Add edit button
+        self.edit_button = QPushButton("Edit")
+        self.edit_button.setFont(QFont('Arial', 8))
+        self.edit_button.setMaximumHeight(20)
+        layout.addWidget(self.edit_button)
+        
+        self.adjustSize()
+        
+        # Store contact data for edit button
+        self.contact_data = None
+        self.parent_viewer = None
+    
+    def set_contact_info(self, player_name: str, contact_type: str, outcome: str, rating: Optional[int], contact_data: dict = None, parent_viewer=None):
+        """Update the popup with contact information."""
+        player_display = player_name if player_name else "Floor"
+        self.player_label.setText(f"Player: {player_display}")
+        self.contact_type_label.setText(f"Type: {contact_type}")
+        self.outcome_label.setText(f"Outcome: {outcome}")
+        rating_display = str(rating) if rating is not None else "N/A"
+        self.rating_label.setText(f"Rating: {rating_display}")
+        self.contact_data = contact_data
+        self.parent_viewer = parent_viewer
+        self.adjustSize()
+
+
+class ContactEditDialog(QDialog):
+    """Modal dialog for editing contact data with video playback."""
+    
+    def __init__(self, contact_data: dict, db: VideoStatsDB, game_id: int, parent=None):
+        super().__init__(parent)
+        self.contact_data = contact_data
+        self.db = db
+        self.game_id = game_id
+        self.contact_id = contact_data.get('contact_id')
+        self.original_timecode = contact_data.get('timecode', 0) or 0
+        self.current_timecode = self.original_timecode
+        self.start_time_ms = max(0, self.current_timecode - 3000)
+        self.end_time_ms = self.current_timecode + 3000
+        
+        # Track if outcome/rating were manually edited
+        self.outcome_manually_edited = False
+        self.rating_manually_edited = False
+        
+        self.setWindowTitle("Edit Contact")
+        self.setModal(True)
+        self.resize(1600, 900)
+        
+        # Main layout
+        main_layout = QHBoxLayout(self)
+        main_layout.setContentsMargins(10, 10, 10, 10)
+        main_layout.setSpacing(10)
+        
+        # Left side: Video player
+        video_widget = QWidget()
+        video_layout = QVBoxLayout(video_widget)
+        video_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Create custom draggable scene for video
+        class DraggableVideoScene(QGraphicsScene):
+            def __init__(self, parent_dialog):
+                super().__init__()
+                self.parent_dialog = parent_dialog
+            
+            def mousePressEvent(self, event):
+                """Handle mouse press on video scene for dragging dots."""
+                if event.button() == Qt.MouseButton.LeftButton:
+                    scene_pos = event.scenePos()
+                    items = self.items(scene_pos)
+                    for item in items:
+                        if isinstance(item, QGraphicsEllipseItem):
+                            dot_type = item.data(Qt.ItemDataRole.UserRole)
+                            if dot_type in ['source', 'dest']:
+                                self.parent_dialog.dragging_dot = item
+                                self.parent_dialog.drag_start_pos = scene_pos
+                                event.accept()
+                                return
+                super().mousePressEvent(event)
+            
+            def mouseMoveEvent(self, event):
+                """Handle mouse move for dragging dots."""
+                if self.parent_dialog.dragging_dot:
+                    scene_pos = event.scenePos()
+                    # Update dot position
+                    dot_rect = self.parent_dialog.dragging_dot.rect()
+                    new_x = scene_pos.x() - dot_rect.width() / 2
+                    new_y = scene_pos.y() - dot_rect.height() / 2
+                    self.parent_dialog.dragging_dot.setPos(new_x, new_y)
+                    
+                    # Update arrow
+                    self.parent_dialog.update_arrow()
+                    
+                    # Update logical coordinates
+                    dot_type = self.parent_dialog.dragging_dot.data(Qt.ItemDataRole.UserRole)
+                    if self.parent_dialog.coordinate_mapper:
+                        logical_coords = self.parent_dialog.coordinate_mapper.map_point_to_logical(scene_pos.x(), scene_pos.y())
+                        if logical_coords:
+                            if dot_type == 'source':
+                                self.parent_dialog.source_x, self.parent_dialog.source_y = logical_coords
+                            elif dot_type == 'dest':
+                                self.parent_dialog.dest_x, self.parent_dialog.dest_y = logical_coords
+                    event.accept()
+                else:
+                    super().mouseMoveEvent(event)
+            
+            def mouseReleaseEvent(self, event):
+                """Handle mouse release to stop dragging."""
+                if self.parent_dialog.dragging_dot:
+                    self.parent_dialog.dragging_dot = None
+                    self.parent_dialog.drag_start_pos = None
+                    event.accept()
+                else:
+                    super().mouseReleaseEvent(event)
+        
+        self.video_scene = DraggableVideoScene(self)
+        self.video_scene.setSceneRect(0, 0, 1000, 750)
+        self.video_view = QGraphicsView(self.video_scene)
+        self.video_view.setRenderHint(QPainter.RenderHint.Antialiasing)
+        self.video_view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.video_view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        video_layout.addWidget(self.video_view)
+        
+        # Initialize coordinate mapper for mapping video coordinates to court coordinates
+        self.coordinate_mapper = None
+        self.source_dot = None
+        self.dest_dot = None
+        self.arrow_line = None
+        self.arrowhead_item = None
+        self.dragging_dot = None  # Track which dot is being dragged
+        self.drag_start_pos = None
+        
+        # Store current coordinates (in logical court space 0-300 x 0-600)
+        self.source_x = contact_data.get('x')
+        self.source_y = contact_data.get('y')
+        # Get destination coordinates from next contact
+        self.dest_x = None
+        self.dest_y = None
+        self.load_destination_coordinates()
+        
+        # Initialize coordinate mapper
+        self.init_coordinate_mapper()
+        
+        # Video controls
+        controls_layout = QHBoxLayout()
+        self.replay_btn = QPushButton("Replay")
+        self.replay_btn.setFont(QFont('Arial', 10))
+        self.replay_btn.clicked.connect(self.replay_clip)
+        controls_layout.addWidget(self.replay_btn)
+        
+        self.play_pause_btn = QPushButton("Pause")
+        self.play_pause_btn.setFont(QFont('Arial', 10))
+        self.play_pause_btn.clicked.connect(self.toggle_play_pause)
+        controls_layout.addWidget(self.play_pause_btn)
+        
+        self.video_slider = QSlider(Qt.Orientation.Horizontal)
+        self.video_slider.sliderMoved.connect(self.seek_video)
+        controls_layout.addWidget(self.video_slider)
+        
+        self.time_label = QLabel("00:00:00 / 00:00:00")
+        self.time_label.setFont(QFont('Arial', 10))
+        controls_layout.addWidget(self.time_label)
+        
+        video_layout.addLayout(controls_layout)
+        main_layout.addWidget(video_widget, 2)  # 2/3 of space
+        
+        # Right side: Edit panel (compact, 3 columns)
+        edit_panel = QWidget()
+        edit_layout = QVBoxLayout(edit_panel)
+        edit_layout.setContentsMargins(5, 5, 5, 5)
+        edit_layout.setSpacing(5)
+        
+        # Create 3-column layout for radio button groups
+        columns_layout = QHBoxLayout()
+        columns_layout.setSpacing(5)
+        
+        # Column 1: Player and Contact Type
+        col1 = QVBoxLayout()
+        col1.setSpacing(3)
+        
+        # Player selection (compact)
+        player_group = QGroupBox("Player")
+        player_group.setFont(QFont('Arial', 8))
+        player_layout = QVBoxLayout(player_group)
+        player_layout.setContentsMargins(5, 5, 5, 5)
+        player_layout.setSpacing(2)
+        self.player_button_group = QButtonGroup()
+        self.player_button_group.setExclusive(True)
+        self.load_players(player_layout)
+        col1.addWidget(player_group)
+        
+        # Contact type (compact, 3 columns within)
+        type_group = QGroupBox("Type")
+        type_group.setFont(QFont('Arial', 8))
+        type_layout = QVBoxLayout(type_group)
+        type_layout.setContentsMargins(5, 5, 5, 5)
+        type_layout.setSpacing(2)
+        self.type_button_group = QButtonGroup()
+        self.type_button_group.setExclusive(True)
+        contact_types = ['serve', 'receive', 'pass', 'set', 'attack', 'block', 'freeball', 'down', 'net', 'fault']
+        # Arrange in 3 columns
+        type_grid = QHBoxLayout()
+        for i, ct in enumerate(contact_types):
+            rb = QRadioButton(ct)
+            rb.setFont(QFont('Arial', 8))
+            self.type_button_group.addButton(rb)
+            type_grid.addWidget(rb)
+            if ct == contact_data.get('contact_type', ''):
+                rb.setChecked(True)
+            if (i + 1) % 3 == 0:
+                type_layout.addLayout(type_grid)
+                type_grid = QHBoxLayout()
+        if contact_types:
+            type_layout.addLayout(type_grid)
+        col1.addWidget(type_group)
+        columns_layout.addLayout(col1)
+        
+        # Column 2: Rating and Timecode (stacked vertically, shorter)
+        col2 = QVBoxLayout()
+        col2.setSpacing(3)
+        
+        # Rating (compact, horizontal, shorter)
+        rating_group = QGroupBox("Rating")
+        rating_group.setFont(QFont('Arial', 8))
+        rating_layout = QHBoxLayout(rating_group)
+        rating_layout.setContentsMargins(5, 5, 5, 5)
+        rating_layout.setSpacing(5)
+        self.rating_button_group = QButtonGroup()
+        self.rating_button_group.setExclusive(True)
+        for r in [0, 1, 2, 3]:
+            rb = QRadioButton(str(r))
+            rb.setFont(QFont('Arial', 8))
+            self.rating_button_group.addButton(rb)
+            rating_layout.addWidget(rb)
+            if r == contact_data.get('rating'):
+                rb.setChecked(True)
+        # Track rating changes
+        self.rating_button_group.buttonClicked.connect(lambda: setattr(self, 'rating_manually_edited', True))
+        col2.addWidget(rating_group)
+        
+        # Timecode adjustment (compact, shorter, under Rating)
+        timecode_group = QGroupBox("Timecode")
+        timecode_group.setFont(QFont('Arial', 8))
+        timecode_layout = QVBoxLayout(timecode_group)
+        timecode_layout.setContentsMargins(5, 5, 5, 5)
+        timecode_layout.setSpacing(2)
+        self.timecode_button_group = QButtonGroup()
+        self.timecode_button_group.setExclusive(True)
+        timecode_offsets = [-3, -2, -1, 1, 2, 3]
+        timecode_grid = QHBoxLayout()
+        for i, offset in enumerate(timecode_offsets):
+            rb = QRadioButton(f"{offset:+d}")
+            rb.setFont(QFont('Arial', 8))
+            self.timecode_button_group.addButton(rb)
+            timecode_grid.addWidget(rb)
+            if (i + 1) % 3 == 0:
+                timecode_layout.addLayout(timecode_grid)
+                timecode_grid = QHBoxLayout()
+        if timecode_offsets:
+            timecode_layout.addLayout(timecode_grid)
+        self.timecode_label = QLabel(f"Current: {self.format_time(self.current_timecode)}")
+        self.timecode_label.setFont(QFont('Arial', 8))
+        timecode_layout.addWidget(self.timecode_label)
+        self.timecode_button_group.buttonClicked.connect(self.update_timecode)
+        col2.addWidget(timecode_group)
+        columns_layout.addLayout(col2)
+        
+        # Column 3: Outcome (smaller)
+        col3 = QVBoxLayout()
+        col3.setSpacing(3)
+        
+        # Outcome (compact, smaller, 2 columns)
+        outcome_group = QGroupBox("Outcome")
+        outcome_group.setFont(QFont('Arial', 8))
+        outcome_layout = QVBoxLayout(outcome_group)
+        outcome_layout.setContentsMargins(5, 5, 5, 5)
+        outcome_layout.setSpacing(2)
+        self.outcome_button_group = QButtonGroup()
+        self.outcome_button_group.setExclusive(True)
+        outcomes = ['continue', 'ace', 'kill', 'error', 'down', 'stuff', 'assist']
+        outcome_grid = QHBoxLayout()
+        for i, oc in enumerate(outcomes):
+            rb = QRadioButton(oc)
+            rb.setFont(QFont('Arial', 8))
+            self.outcome_button_group.addButton(rb)
+            outcome_grid.addWidget(rb)
+            if oc == contact_data.get('outcome', ''):
+                rb.setChecked(True)
+            if (i + 1) % 2 == 0:  # 2 columns instead of 3
+                outcome_layout.addLayout(outcome_grid)
+                outcome_grid = QHBoxLayout()
+        if outcomes:
+            outcome_layout.addLayout(outcome_grid)
+        # Track outcome changes
+        self.outcome_button_group.buttonClicked.connect(lambda: setattr(self, 'outcome_manually_edited', True))
+        col3.addWidget(outcome_group)
+        col3.addStretch()  # Push outcome to top
+        columns_layout.addLayout(col3)
+        
+        edit_layout.addLayout(columns_layout)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        self.save_button = QPushButton("Save")
+        self.save_button.clicked.connect(self.save_contact)
+        self.cancel_button = QPushButton("Cancel")
+        self.cancel_button.clicked.connect(self.reject)
+        button_layout.addWidget(self.save_button)
+        button_layout.addWidget(self.cancel_button)
+        edit_layout.addLayout(button_layout)
+        
+        edit_layout.addStretch()
+        main_layout.addWidget(edit_panel, 1)  # 1/3 of space
+        
+        # Initialize video player
+        self.media_player = QMediaPlayer()
+        self.audio_output = QAudioOutput()
+        self.media_player.setAudioOutput(self.audio_output)
+        self.video_item = QGraphicsVideoItem()
+        self.video_item.setSize(QRectF(0, 0, 1000, 750).size())
+        self.video_scene.addItem(self.video_item)
+        self.media_player.setVideoOutput(self.video_item)
+        self.media_player.positionChanged.connect(self.update_position)
+        self.media_player.durationChanged.connect(self.update_duration)
+        
+        # Load video
+        self.load_video()
+        
+        # Draw coordinate dots after video is loaded
+        self.media_player.mediaStatusChanged.connect(self.on_video_loaded_for_coords)
+    
+    def load_destination_coordinates(self):
+        """Load destination coordinates from next contact."""
+        if not self.db.conn:
+            self.db.connect()
+        
+        cursor = self.db.conn.cursor()
+        # Get rally_id and sequence_number for this contact
+        cursor.execute("SELECT rally_id, sequence_number FROM contacts WHERE contact_id = ?", (self.contact_id,))
+        result = cursor.fetchone()
+        if result:
+            rally_id, seq_num = result
+            # Get next contact
+            cursor.execute("SELECT x, y FROM contacts WHERE rally_id = ? AND sequence_number = ?", 
+                          (rally_id, seq_num + 1))
+            next_result = cursor.fetchone()
+            if next_result and next_result[0] is not None and next_result[1] is not None:
+                self.dest_x, self.dest_y = next_result
+    
+    def init_coordinate_mapper(self):
+        """Initialize coordinate mapper with court boundaries from database."""
+        if not self.db.conn:
+            self.db.connect()
+        
+        # Get court boundaries from database
+        court_boundaries = self.db.get_game_court_boundaries(self.game_id)
+        if not court_boundaries:
+            return
+        
+        # Check if we have all required points (including Y200 and Y400)
+        required_keys = ['corner_bl', 'corner_br', 'corner_tr', 'corner_tl', 
+                        'centerline_bottom', 'centerline_top', 
+                        'y200_left', 'y200_right', 'y400_left', 'y400_right']
+        
+        # Check if all points exist and are not None
+        if not all(court_boundaries.get(key) is not None for key in required_keys):
+            # If Y200 or Y400 points are missing, we can't use coordinate mapping
+            return
+        
+        # Create a minimal coordinate mapper instance
+        from coordinate_mapper import CoordinateMapper
+        temp_mapper = CoordinateMapper(db=self.db, game_id=self.game_id)
+        
+        # Set corner points from database (using correct key names)
+        corner_points = [
+            list(court_boundaries['corner_bl']),
+            list(court_boundaries['corner_br']),
+            list(court_boundaries['corner_tr']),
+            list(court_boundaries['corner_tl']),
+            list(court_boundaries['centerline_bottom']),
+            list(court_boundaries['centerline_top']),
+            list(court_boundaries['y200_left']),
+            list(court_boundaries['y200_right']),
+            list(court_boundaries['y400_left']),
+            list(court_boundaries['y400_right'])
+        ]
+        temp_mapper.set_corner_points(corner_points)
+        self.coordinate_mapper = temp_mapper
+    
+    def on_video_loaded_for_coords(self, status):
+        """Handle video loaded event to draw coordinate dots."""
+        if status == QMediaPlayer.MediaStatus.LoadedMedia:
+            self.draw_coordinate_dots()
+            self.media_player.mediaStatusChanged.disconnect(self.on_video_loaded_for_coords)
+    
+    def draw_coordinate_dots(self):
+        """Draw source and destination dots on the video."""
+        if not self.coordinate_mapper or not self.coordinate_mapper.homography_matrix:
+            return
+        
+        # Map logical coordinates to video pixel coordinates
+        # We need the inverse of the homography to map from logical to pixel
+        import cv2
+        import numpy as np
+        
+        # Get inverse homography
+        inv_homography = np.linalg.inv(self.coordinate_mapper.homography_matrix)
+        
+        # Map source coordinates (logical to pixel)
+        if self.source_x is not None and self.source_y is not None:
+            logical_point = np.array([self.source_x, self.source_y, 1.0], dtype=np.float32).reshape(3, 1)
+            pixel_point = inv_homography @ logical_point
+            pixel_point /= pixel_point[2]
+            source_px = int(pixel_point[0][0])
+            source_py = int(pixel_point[1][0])
+            
+            # Draw source dot (red)
+            dot_radius = 8
+            self.source_dot = self.video_scene.addEllipse(
+                source_px - dot_radius, source_py - dot_radius,
+                dot_radius * 2, dot_radius * 2,
+                QPen(QColor(255, 0, 0), 2),
+                QBrush(QColor(255, 0, 0))
+            )
+            self.source_dot.setFlag(QGraphicsEllipseItem.GraphicsItemFlag.ItemIsMovable, True)
+            self.source_dot.setFlag(QGraphicsEllipseItem.GraphicsItemFlag.ItemIsSelectable, True)
+            self.source_dot.setData(Qt.ItemDataRole.UserRole, 'source')
+        
+        # Map destination coordinates (logical to pixel)
+        if self.dest_x is not None and self.dest_y is not None:
+            logical_point = np.array([self.dest_x, self.dest_y, 1.0], dtype=np.float32).reshape(3, 1)
+            pixel_point = inv_homography @ logical_point
+            pixel_point /= pixel_point[2]
+            dest_px = int(pixel_point[0][0])
+            dest_py = int(pixel_point[1][0])
+            
+            # Draw destination dot (blue)
+            dot_radius = 8
+            self.dest_dot = self.video_scene.addEllipse(
+                dest_px - dot_radius, dest_py - dot_radius,
+                dot_radius * 2, dot_radius * 2,
+                QPen(QColor(0, 0, 255), 2),
+                QBrush(QColor(0, 0, 255))
+            )
+            self.dest_dot.setFlag(QGraphicsEllipseItem.GraphicsItemFlag.ItemIsMovable, True)
+            self.dest_dot.setFlag(QGraphicsEllipseItem.GraphicsItemFlag.ItemIsSelectable, True)
+            self.dest_dot.setData(Qt.ItemDataRole.UserRole, 'dest')
+            
+            # Draw arrow from source to destination
+            self.update_arrow()
+    
+    def update_arrow(self):
+        """Update arrow line between source and destination dots."""
+        # Remove old arrow and arrowhead
+        if self.arrow_line:
+            self.video_scene.removeItem(self.arrow_line)
+            self.arrow_line = None
+        if self.arrowhead_item:
+            self.video_scene.removeItem(self.arrowhead_item)
+            self.arrowhead_item = None
+        
+        if self.source_dot and self.dest_dot:
+            source_pos = self.source_dot.pos() + QPointF(self.source_dot.rect().center())
+            dest_pos = self.dest_dot.pos() + QPointF(self.dest_dot.rect().center())
+            
+            # Draw line
+            self.arrow_line = self.video_scene.addLine(
+                source_pos.x(), source_pos.y(),
+                dest_pos.x(), dest_pos.y(),
+                QPen(QColor(0, 255, 0), 2)
+            )
+            
+            # Draw arrowhead
+            self.arrowhead_item = self.draw_arrowhead(source_pos, dest_pos, QColor(0, 255, 0))
+    
+    def draw_arrowhead(self, start_point: QPointF, end_point: QPointF, color: QColor):
+        """Draw an arrowhead at the end point."""
+        dx = end_point.x() - start_point.x()
+        dy = end_point.y() - start_point.y()
+        distance = math.sqrt(dx * dx + dy * dy)
+        if distance < 5:
+            return None
+        
+        angle = math.atan2(dy, dx)
+        arrow_length = 15
+        arrow_width = 8
+        
+        arrowhead = QPolygonF([
+            QPointF(0, 0),
+            QPointF(-arrow_length, -arrow_width / 2),
+            QPointF(-arrow_length, arrow_width / 2)
+        ])
+        
+        from PySide6.QtGui import QTransform
+        transform = QTransform()
+        transform.translate(end_point.x(), end_point.y())
+        transform.rotate(math.degrees(angle))
+        arrowhead = transform.map(arrowhead)
+        
+        arrow_path = QPainterPath()
+        arrow_path.addPolygon(arrowhead)
+        arrow_item = self.video_scene.addPath(arrow_path, QPen(color, 1), QBrush(color))
+        return arrow_item
+    
+    def load_players(self, layout):
+        """Load players for this game and create buttons."""
+        if not self.db.conn:
+            self.db.connect()
+        
+        cursor = self.db.conn.cursor()
+        # Get team IDs
+        cursor.execute("SELECT team_us_id, team_them_id FROM games WHERE game_id = ?", (self.game_id,))
+        result = cursor.fetchone()
+        if not result:
+            return
+        team_us_id, team_them_id = result
+        
+        # Get only team_us players
+        cursor.execute("""
+            SELECT p.player_id, p.player_number, p.name
+            FROM players p
+            WHERE p.team_id = ?
+            ORDER BY p.player_number
+        """, (team_us_id,))
+        
+        players = cursor.fetchall()
+        
+        # Add "Floor" option (no player)
+        floor_rb = QRadioButton("Floor")
+        floor_rb.setFont(QFont('Arial', 8))
+        self.player_button_group.addButton(floor_rb)
+        layout.addWidget(floor_rb)
+        if not self.contact_data.get('player_id'):
+            floor_rb.setChecked(True)
+        
+        # Add team_us players
+        for player_id, player_number, player_name in players:
+            rb = QRadioButton(f"#{player_number} {player_name}")
+            rb.setFont(QFont('Arial', 8))
+            rb.setProperty('player_id', player_id)
+            self.player_button_group.addButton(rb)
+            layout.addWidget(rb)
+            if player_id == self.contact_data.get('player_id'):
+                rb.setChecked(True)
+        
+        # Add "Opponent" option (player_id = 0 for team_them)
+        opponent_rb = QRadioButton("Opponent")
+        opponent_rb.setFont(QFont('Arial', 8))
+        opponent_rb.setProperty('player_id', 0)
+        self.player_button_group.addButton(opponent_rb)
+        layout.addWidget(opponent_rb)
+        # Check if current player_id is 0 or if player is from team_them
+        current_player_id = self.contact_data.get('player_id')
+        if current_player_id == 0:
+            opponent_rb.setChecked(True)
+        elif current_player_id:
+            # Check if player is from team_them
+            cursor.execute("SELECT team_id FROM players WHERE player_id = ?", (current_player_id,))
+            player_team_result = cursor.fetchone()
+            if player_team_result and player_team_result[0] == team_them_id:
+                opponent_rb.setChecked(True)
+    
+    def load_video(self):
+        """Load video file for this game."""
+        if not self.db.conn:
+            self.db.connect()
+        
+        cursor = self.db.conn.cursor()
+        cursor.execute("SELECT video_file_path FROM games WHERE game_id = ?", (self.game_id,))
+        result = cursor.fetchone()
+        
+        if not result or not result[0]:
+            QMessageBox.warning(self, "No Video", "No video file associated with this game.")
+            return
+        
+        video_path = result[0]
+        if not Path(video_path).exists():
+            QMessageBox.warning(self, "Video Not Found", f"Video file not found:\n{video_path}")
+            return
+        
+        self.media_player.setSource(QUrl.fromLocalFile(video_path))
+        self.media_player.mediaStatusChanged.connect(self.on_media_status_changed)
+    
+    def on_media_status_changed(self, status):
+        """Handle media status changes to seek to initial timecode and auto-play."""
+        if status == QMediaPlayer.MediaStatus.LoadedMedia:
+            start_time = max(0, self.current_timecode - 3000)
+            self.media_player.setPosition(start_time)
+            self.media_player.play()
+            self.play_pause_btn.setText("Pause")
+            self.media_player.mediaStatusChanged.disconnect(self.on_media_status_changed)
+    
+    def replay_clip(self):
+        """Replay the clip from start time."""
+        start_time = max(0, self.current_timecode - 3000)
+        self.media_player.setPosition(start_time)
+        self.media_player.play()
+        self.play_pause_btn.setText("Pause")
+    
+    def toggle_play_pause(self):
+        """Toggle between play and pause."""
+        if self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+            self.media_player.pause()
+            self.play_pause_btn.setText("Play")
+        else:
+            self.media_player.play()
+            self.play_pause_btn.setText("Pause")
+    
+    def seek_video(self, position):
+        """Seek to a specific position in the video."""
+        self.media_player.setPosition(position)
+    
+    def update_position(self, position):
+        """Update the slider position as the video plays."""
+        if not self.video_slider.isSliderDown():
+            self.video_slider.setValue(position)
+        current_time = self.format_time(position)
+        duration = self.media_player.duration()
+        total_time = self.format_time(duration)
+        self.time_label.setText(f"{current_time} / {total_time}")
+        
+        # Auto-pause at end time (3 seconds after contact)
+        end_time = self.current_timecode + 3000
+        if position >= end_time and self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+            self.media_player.pause()
+            self.play_pause_btn.setText("Play")
+    
+    def update_duration(self, duration):
+        """Update the slider range when video duration is known."""
+        self.video_slider.setRange(0, duration)
+    
+    def format_time(self, ms):
+        """Format milliseconds to HH:MM:SS."""
+        total_seconds = ms // 1000
+        hours = total_seconds // 3600
+        minutes = (total_seconds % 3600) // 60
+        seconds = total_seconds % 60
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+    
+    def update_timecode(self, button):
+        """Update timecode based on selected offset."""
+        offset_text = button.text()
+        offset_seconds = int(offset_text) * 1000  # Convert to milliseconds
+        self.current_timecode = max(0, self.original_timecode + offset_seconds)
+        self.timecode_label.setText(f"Current: {self.format_time(self.current_timecode)}")
+        # Seek video to new timecode
+        start_time = max(0, self.current_timecode - 3000)
+        self.media_player.setPosition(start_time)
+    
+    def save_contact(self):
+        """Save contact changes to database."""
+        if not self.db.conn:
+            self.db.connect()
+        
+        cursor = self.db.conn.cursor()
+        
+        # Get selected values
+        selected_player_button = self.player_button_group.checkedButton()
+        if not selected_player_button or selected_player_button.text() == "Floor":
+            player_id = None
+        else:
+            player_id = selected_player_button.property('player_id')
+            # If player_id is 0, it means "Opponent" - store as 0 (player o0)
+            # Note: This requires player_id 0 to exist in the database or foreign key constraints to be disabled
+        
+        selected_type_button = self.type_button_group.checkedButton()
+        contact_type = selected_type_button.text() if selected_type_button else None
+        
+        selected_outcome_button = self.outcome_button_group.checkedButton()
+        outcome = selected_outcome_button.text() if selected_outcome_button else None
+        
+        selected_rating_button = self.rating_button_group.checkedButton()
+        rating = int(selected_rating_button.text()) if selected_rating_button else None
+        
+        # Check if we need to add manual edit flags to database
+        # First, check if columns exist
+        cursor.execute("PRAGMA table_info(contacts)")
+        columns = [row[1] for row in cursor.fetchall()]
+        
+        # Add columns if they don't exist
+        if 'outcome_manual' not in columns:
+            cursor.execute("ALTER TABLE contacts ADD COLUMN outcome_manual INTEGER DEFAULT 0")
+        if 'rating_manual' not in columns:
+            cursor.execute("ALTER TABLE contacts ADD COLUMN rating_manual INTEGER DEFAULT 0")
+        
+        # Update contact
+        update_query = """
+            UPDATE contacts 
+            SET player_id = ?, contact_type = ?, outcome = ?, rating = ?, timecode = ?,
+                outcome_manual = ?, rating_manual = ?, x = ?, y = ?
+            WHERE contact_id = ?
+        """
+        outcome_manual = 1 if self.outcome_manually_edited else 0
+        rating_manual = 1 if self.rating_manually_edited else 0
+        
+        cursor.execute(update_query, (
+            player_id, contact_type, outcome, rating, self.current_timecode,
+            outcome_manual, rating_manual, 
+            int(self.source_x) if self.source_x is not None else None,
+            int(self.source_y) if self.source_y is not None else None,
+            self.contact_id
+        ))
+        
+        # Update destination coordinates in next contact if it exists
+        if self.dest_x is not None and self.dest_y is not None:
+            cursor.execute("SELECT rally_id, sequence_number FROM contacts WHERE contact_id = ?", (self.contact_id,))
+            result = cursor.fetchone()
+            if result:
+                rally_id, seq_num = result
+                # Update next contact coordinates
+                cursor.execute("""
+                    UPDATE contacts 
+                    SET x = ?, y = ?
+                    WHERE rally_id = ? AND sequence_number = ?
+                """, (int(self.dest_x), int(self.dest_y), rally_id, seq_num + 1))
+        
+        self.db.conn.commit()
+        QMessageBox.information(self, "Saved", "Contact updated successfully!")
+        self.accept()
+
+
+class ClickableGraphicsScene(QGraphicsScene):
+    """Custom graphics scene that handles mouse clicks on contact dots."""
+    
+    def __init__(self, parent_viewer, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.parent_viewer = parent_viewer
+    
+    def mousePressEvent(self, event):
+        """Handle mouse press events on the graphics scene."""
+        if event.button() == Qt.MouseButton.LeftButton:
+            scene_pos = event.scenePos()
+            
+            # Find items at this position
+            items = self.items(scene_pos)
+            
+            # Look for a contact dot (ellipse or rect with contact data)
+            contact_found = False
+            for item in items:
+                contact_data = item.data(Qt.ItemDataRole.UserRole)
+                if contact_data and isinstance(contact_data, dict):
+                    # Found a contact dot - show popup
+                    self.parent_viewer.show_contact_popup(item, scene_pos, contact_data)
+                    contact_found = True
+                    event.accept()
+                    return
+            
+            # Clicked outside a dot - hide popup if visible
+            if not contact_found:
+                self.parent_viewer.hide_contact_popup()
+        
+        # Call the default scene mouse press handler
+        super().mousePressEvent(event)
+
+
 class ContactPathViewer(QMainWindow):
     """Main window for viewing contact paths."""
     
@@ -273,6 +1108,9 @@ class ContactPathViewer(QMainWindow):
         # Video container for table + button
         self.video_container = None
         
+        # Popup widget for displaying contact information
+        self.contact_popup = None
+        
         # Setup UI
         self.setup_graphics_view()
         self.setup_filter_widgets()
@@ -293,7 +1131,7 @@ class ContactPathViewer(QMainWindow):
         total_height = self.court_height + (self.apron_size * 2)  # 900
         
         # Create graphics scene with total dimensions including apron
-        self.scene = QGraphicsScene(0, 0, total_width, total_height, self)
+        self.scene = ClickableGraphicsScene(self, 0, 0, total_width, total_height)
         
         # Try to embed in outerCourt if it exists
         if hasattr(self.ui, 'outerCourt'):
@@ -337,6 +1175,18 @@ class ContactPathViewer(QMainWindow):
         self.graphics_view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.graphics_view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.graphics_view.show()
+        
+        # Enable mouse tracking for click detection
+        self.graphics_view.setMouseTracking(True)
+        
+        # Install event filter on graphics view to handle clicks
+        self.graphics_view.viewport().installEventFilter(self)
+        
+        # Also install event filter on the main window to handle Escape key globally
+        self.installEventFilter(self)
+        
+        # Override scene's mouse press event for better click detection
+        # We'll create a custom scene class or handle it in the view
         
         # Draw court background
         self.draw_court_background()
@@ -920,7 +1770,10 @@ class ContactPathViewer(QMainWindow):
                 p.name as player_name,
                 t.team_id,
                 t.name as team_name,
-                c.outcome
+                c.outcome,
+                c.rating,
+                c.timecode,
+                c.player_id
             FROM contacts c
             INNER JOIN rallies r ON c.rally_id = r.rally_id
             LEFT JOIN players p ON c.player_id = p.player_id
@@ -974,7 +1827,10 @@ class ContactPathViewer(QMainWindow):
                 p.name as player_name,
                 t.team_id,
                 t.name as team_name,
-                c.outcome
+                c.outcome,
+                c.rating,
+                c.timecode,
+                c.player_id
             FROM contacts c
             INNER JOIN rallies r ON c.rally_id = r.rally_id
             LEFT JOIN players p ON c.player_id = p.player_id
@@ -1634,7 +2490,7 @@ class ContactPathViewer(QMainWindow):
         
         for contact in filtered_contacts:
             (contact_id, rally_id, seq_num, contact_type, x, y, 
-             rally_number, player_number, player_name, team_id, team_name, outcome) = contact
+             rally_number, player_number, player_name, team_id, team_name, outcome, rating, timecode, player_id) = contact
             
             # Check if this is a floor contact (ball hit the floor - has coordinates but no player)
             is_floor_contact = (player_number is None and player_name is None)
@@ -1691,6 +2547,29 @@ class ContactPathViewer(QMainWindow):
                     QBrush(dot_color)
                 )
             
+            # Store contact information with the dot for click handling
+            # Store as a dictionary in UserRole
+            contact_data = {
+                'contact_id': contact_id,
+                'player_id': player_id,
+                'player_name': player_name if player_name else "Floor",
+                'player_number': player_number,
+                'contact_type': contact_type,
+                'outcome': outcome,
+                'rating': rating,
+                'timecode': timecode,
+                'team_id': team_id,
+                'x': draw_x,
+                'y': draw_y
+            }
+            dot.setData(Qt.ItemDataRole.UserRole, contact_data)
+            # Enable mouse events on the dot
+            dot.setAcceptHoverEvents(True)
+            dot.setAcceptTouchEvents(False)
+            # Make the dot selectable and movable (but we'll handle clicks ourselves)
+            dot.setFlag(QGraphicsEllipseItem.GraphicsItemFlag.ItemIsSelectable, False)
+            dot.setFlag(QGraphicsEllipseItem.GraphicsItemFlag.ItemIsMovable, False)
+            
             # Always draw a vector from this contact to the next sequential contact
             # The next contact may or may not match the filter
             next_seq = seq_num + 1
@@ -1700,7 +2579,7 @@ class ContactPathViewer(QMainWindow):
                 # Get next contact coordinates (even if it doesn't match the filter)
                 (next_contact_id, next_rally_id, next_seq_num, next_contact_type, 
                  next_x, next_y, next_rally_number, next_player_number, 
-                 next_player_name, next_team_id, next_team_name, next_outcome) = next_contact
+                 next_player_name, next_team_id, next_team_name, next_outcome, next_rating, next_timecode, next_player_id) = next_contact
                 
                 # Scale and convert coordinates (same as above)
                 next_scaled_x = next_x * scale_x
@@ -1773,6 +2652,110 @@ class ContactPathViewer(QMainWindow):
         arrow_path = QPainterPath()
         arrow_path.addPolygon(arrowhead)
         arrow_item = self.scene.addPath(arrow_path, QPen(color, 1), QBrush(color))
+    
+    def eventFilter(self, obj, event):
+        """Handle events for click detection on contact dots."""
+        if obj == self.graphics_view.viewport() and event.type() == event.Type.MouseButtonPress:
+            if event.button() == Qt.MouseButton.LeftButton:
+                # Convert viewport coordinates to scene coordinates
+                scene_pos = self.graphics_view.mapToScene(event.position().toPoint())
+                
+                # Find items at this position
+                items = self.scene.items(scene_pos)
+                
+                # Look for a contact dot (ellipse or rect with contact data)
+                contact_found = False
+                for item in items:
+                    contact_data = item.data(Qt.ItemDataRole.UserRole)
+                    if contact_data and isinstance(contact_data, dict):
+                        # Found a contact dot - show popup
+                        self.show_contact_popup(item, scene_pos, contact_data)
+                        contact_found = True
+                        break
+                
+                # Clicked outside a dot - hide popup if visible
+                if not contact_found:
+                    self.hide_contact_popup()
+        elif obj == self and event.type() == event.Type.MouseButtonPress:
+            # Click anywhere on the main window - hide popup
+            if event.button() == Qt.MouseButton.LeftButton:
+                self.hide_contact_popup()
+        
+        return super().eventFilter(obj, event)
+    
+    def keyPressEvent(self, event):
+        """Handle Escape key to close popup."""
+        if event.key() == Qt.Key.Key_Escape:
+            self.hide_contact_popup()
+        super().keyPressEvent(event)
+    
+    def show_contact_popup(self, item, scene_pos: QPointF, contact_data: dict):
+        """Show popup with contact information at the specified position."""
+        # Create popup if it doesn't exist
+        if self.contact_popup is None:
+            self.contact_popup = ContactInfoPopup(self)
+            # Make popup a separate window so it can be positioned anywhere
+            self.contact_popup.setParent(None)
+            self.contact_popup.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool)
+        
+        # Update popup content
+        player_name = contact_data.get('player_name', 'Floor')
+        contact_type = contact_data.get('contact_type', 'Unknown')
+        outcome = contact_data.get('outcome', 'Unknown')
+        rating = contact_data.get('rating')
+        
+        self.contact_popup.set_contact_info(player_name, contact_type, outcome, rating, contact_data, self)
+        
+        # Connect edit button
+        if self.contact_popup.edit_button:
+            # Disconnect any existing connections (ignore if none exist)
+            try:
+                self.contact_popup.edit_button.clicked.disconnect()
+            except (TypeError, RuntimeError):
+                pass  # No connections to disconnect
+            self.contact_popup.edit_button.clicked.connect(lambda: self.open_contact_edit_dialog(contact_data))
+        
+        # Convert scene coordinates to viewport coordinates
+        view_pos = self.graphics_view.mapFromScene(scene_pos)
+        
+        # Convert viewport coordinates to global coordinates
+        global_pos = self.graphics_view.mapToGlobal(view_pos)
+        
+        # Position popup adjacent to the dot (offset to the right and up)
+        popup_x = global_pos.x() + 15
+        popup_y = global_pos.y() - self.contact_popup.height() - 10
+        
+        # Ensure popup stays on screen
+        screen_geometry = self.graphics_view.screen().availableGeometry()
+        if popup_x + self.contact_popup.width() > screen_geometry.right():
+            popup_x = global_pos.x() - self.contact_popup.width() - 15
+        if popup_y < screen_geometry.top():
+            popup_y = global_pos.y() + 15
+        
+        self.contact_popup.move(popup_x, popup_y)
+        self.contact_popup.show()
+        self.contact_popup.raise_()
+        self.contact_popup.activateWindow()
+    
+    def hide_contact_popup(self):
+        """Hide the contact information popup."""
+        if self.contact_popup:
+            self.contact_popup.hide()
+    
+    def open_contact_edit_dialog(self, contact_data: dict):
+        """Open the edit dialog for a contact."""
+        if not self.game_id:
+            QMessageBox.warning(self, "No Game", "No game selected!")
+            return
+        
+        # Hide the info popup
+        self.hide_contact_popup()
+        
+        # Open edit dialog
+        dialog = ContactEditDialog(contact_data, self.db, self.game_id, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            # Refresh the display if needed
+            QMessageBox.information(self, "Updated", "Contact has been updated. Refresh the display to see changes.")
 
 
 if __name__ == "__main__":

@@ -307,6 +307,199 @@ class StatsCalculator:
             self.calculate_game_stats(db, game_id)
         
         print("\nAll games processed!")
+    
+    def compute_receive_rating(self, receive_team_id: int, next_contact_type: str, 
+                                next_contact_team_id: Optional[int], 
+                                next_contact_x: Optional[int], 
+                                next_contact_y: Optional[int],
+                                team_us_id: int, team_them_id: int) -> Optional[int]:
+        """Compute receive rating based on the next contact.
+        
+        Args:
+            receive_team_id: The team ID that made the receive
+            next_contact_type: The type of the next contact ('down', 'serve', 'pass', etc.)
+            next_contact_team_id: The team ID that made the next contact (None if no next contact)
+            next_contact_x: X coordinate of the next contact (None if not available)
+            next_contact_y: Y coordinate of the next contact (None if not available)
+            team_us_id: The "us" team ID for this game
+            team_them_id: The "them" team ID for this game
+            
+        Returns:
+            Rating (0, 1, 2, or 3) or None if cannot be determined
+        """
+        # If no next contact, cannot determine rating
+        if next_contact_type is None:
+            return None
+        
+        # Case 1: Next contact is DOWN
+        if next_contact_type == 'down':
+            # Rating = 0, EXCEPT when down location is within the other team's boundaries
+            # Other team's boundaries: x between 0-300, and y > 0 and y < 600
+            if next_contact_x is not None and next_contact_y is not None:
+                if (0 <= next_contact_x <= 300 and 0 < next_contact_y < 600):
+                    # Down is in bounds - use lookup table
+                    # Map x and y from 0-600 to 0-60 (10% of original, rounded)
+                    mapped_x = int(round(next_contact_x * 0.1))
+                    mapped_y = int(round(next_contact_y * 0.1))
+                    
+                    # Clamp to valid array indices
+                    if self.receive_rating and len(self.receive_rating) > 0:
+                        max_y = len(self.receive_rating) - 1
+                        max_x = len(self.receive_rating[0]) - 1 if len(self.receive_rating[0]) > 0 else 0
+                        mapped_y = min(max(0, mapped_y), max_y)
+                        mapped_x = min(max(0, mapped_x), max_x)
+                        
+                        rating = self.receive_rating[mapped_y][mapped_x]
+                        return rating
+            # Default: rating = 0 for DOWN
+            return 0
+        
+        # Case 2: Next contact is by the other team
+        if next_contact_team_id is not None:
+            other_team_id = team_them_id if receive_team_id == team_us_id else team_us_id
+            if next_contact_team_id == other_team_id:
+                return 0
+        
+        # Case 3: Next contact is by the same team
+        if next_contact_team_id == receive_team_id:
+            if next_contact_x is not None and next_contact_y is not None:
+                # Map x and y from 0-600 to 0-60 (10% of original, rounded)
+                mapped_x = int(round(next_contact_x * 0.1))
+                mapped_y = int(round(next_contact_y * 0.1))
+                
+                # Clamp to valid array indices
+                if self.receive_rating and len(self.receive_rating) > 0:
+                    max_y = len(self.receive_rating) - 1
+                    max_x = len(self.receive_rating[0]) - 1 if len(self.receive_rating[0]) > 0 else 0
+                    mapped_y = min(max(0, mapped_y), max_y)
+                    mapped_x = min(max(0, mapped_x), max_x)
+                    
+                    rating = self.receive_rating[mapped_y][mapped_x]
+                    return rating
+        
+        # Default: cannot determine rating
+        return None
+    
+    def compute_receive_ratings_for_game(self, db: VideoStatsDB, game_id: int):
+        """Compute and update receive ratings for all receive contacts in a game.
+        
+        Args:
+            db: VideoStatsDB database connection
+            game_id: The game ID to process
+        """
+        if not db.conn:
+            db.connect()
+        
+        cursor = db.conn.cursor()
+        
+        # Get team IDs for this game
+        cursor.execute("""
+            SELECT team_us_id, team_them_id
+            FROM games
+            WHERE game_id = ?
+        """, (game_id,))
+        
+        game_result = cursor.fetchone()
+        if not game_result:
+            print(f"Game {game_id} not found")
+            return
+        
+        team_us_id = game_result['team_us_id']
+        team_them_id = game_result['team_them_id']
+        
+        # Get all receive contacts for this game, ordered by rally and sequence
+        cursor.execute("""
+            SELECT 
+                c.contact_id,
+                c.rally_id,
+                c.sequence_number,
+                c.team_id as receive_team_id
+            FROM contacts c
+            INNER JOIN rallies r ON c.rally_id = r.rally_id
+            WHERE r.game_id = ? AND c.contact_type = 'receive'
+            ORDER BY c.rally_id, c.sequence_number
+        """, (game_id,))
+        
+        receive_contacts = cursor.fetchall()
+        
+        if not receive_contacts:
+            print(f"No receive contacts found for game {game_id}")
+            return
+        
+        updated_count = 0
+        
+        for receive in receive_contacts:
+            contact_id = receive['contact_id']
+            rally_id = receive['rally_id']
+            sequence_number = receive['sequence_number']
+            receive_team_id = receive['receive_team_id']
+            
+            # Find the next contact in the same rally
+            cursor.execute("""
+                SELECT 
+                    contact_type,
+                    team_id,
+                    x,
+                    y
+                FROM contacts
+                WHERE rally_id = ? AND sequence_number > ?
+                ORDER BY sequence_number
+                LIMIT 1
+            """, (rally_id, sequence_number))
+            
+            next_contact = cursor.fetchone()
+            
+            # Extract next contact information
+            next_contact_type = next_contact['contact_type'] if next_contact else None
+            next_contact_team_id = next_contact['team_id'] if next_contact else None
+            next_contact_x = next_contact['x'] if next_contact else None
+            next_contact_y = next_contact['y'] if next_contact else None
+            
+            # Compute rating
+            rating = self.compute_receive_rating(
+                receive_team_id=receive_team_id,
+                next_contact_type=next_contact_type,
+                next_contact_team_id=next_contact_team_id,
+                next_contact_x=next_contact_x,
+                next_contact_y=next_contact_y,
+                team_us_id=team_us_id,
+                team_them_id=team_them_id
+            )
+            
+            # Update the contact with the rating
+            if rating is not None:
+                cursor.execute("""
+                    UPDATE contacts
+                    SET rating = ?
+                    WHERE contact_id = ?
+                """, (rating, contact_id))
+                updated_count += 1
+            else:
+                print(f"Warning: Could not compute rating for contact_id={contact_id}, rally_id={rally_id}, sequence={sequence_number}")
+        
+        db.conn.commit()
+        print(f"Updated {updated_count} receive ratings for game {game_id}")
+    
+    def compute_receive_ratings_for_all_games(self, db: VideoStatsDB):
+        """Compute receive ratings for all games in the database.
+        
+        Args:
+            db: VideoStatsDB database connection
+        """
+        if not db.conn:
+            db.connect()
+        
+        cursor = db.conn.cursor()
+        cursor.execute("SELECT DISTINCT game_id FROM rallies ORDER BY game_id")
+        games = cursor.fetchall()
+        
+        print(f"Computing receive ratings for {len(games)} games...")
+        for game_row in games:
+            game_id = game_row['game_id']
+            print(f"\nProcessing game {game_id}...")
+            self.compute_receive_ratings_for_game(db, game_id)
+        
+        print("\nAll games processed!")
 
 
 # For testing/debugging
@@ -314,20 +507,55 @@ if __name__ == "__main__":
     import sys
     calculator = StatsCalculator()
     
-    if len(sys.argv) > 1:
-        # Calculate stats for a specific game
-        from database import VideoStatsDB
-        db = VideoStatsDB()
-        game_id = int(sys.argv[1])
-        print(f"Calculating stats for game {game_id}...")
-        calculator.calculate_game_stats(db, game_id)
-        db.close()
-    elif len(sys.argv) > 1 and sys.argv[1] == "--all":
-        # Calculate stats for all games
-        from database import VideoStatsDB
-        db = VideoStatsDB()
-        calculator.calculate_all_games_stats(db)
-        db.close()
+    if len(sys.argv) > 2:
+        command = sys.argv[1]
+        if command == "compute-ratings":
+            # Compute receive ratings for a specific game
+            from database import VideoStatsDB
+            db = VideoStatsDB()
+            game_id = int(sys.argv[2])
+            print(f"Computing receive ratings for game {game_id}...")
+            calculator.compute_receive_ratings_for_game(db, game_id)
+            db.close()
+        elif command == "stats":
+            # Calculate stats for a specific game
+            from database import VideoStatsDB
+            db = VideoStatsDB()
+            game_id = int(sys.argv[2])
+            print(f"Calculating stats for game {game_id}...")
+            calculator.calculate_game_stats(db, game_id)
+            db.close()
+    elif len(sys.argv) > 1:
+        command = sys.argv[1]
+        if command == "--all-ratings":
+            # Compute receive ratings for all games
+            from database import VideoStatsDB
+            db = VideoStatsDB()
+            calculator.compute_receive_ratings_for_all_games(db)
+            db.close()
+        elif command == "--all":
+            # Calculate stats for all games
+            from database import VideoStatsDB
+            db = VideoStatsDB()
+            calculator.calculate_all_games_stats(db)
+            db.close()
+        else:
+            # Try to parse as game_id for backward compatibility
+            try:
+                from database import VideoStatsDB
+                db = VideoStatsDB()
+                game_id = int(sys.argv[1])
+                print(f"Calculating stats for game {game_id}...")
+                calculator.calculate_game_stats(db, game_id)
+                db.close()
+            except ValueError:
+                print(f"Unknown command: {sys.argv[1]}")
+                print("Usage:")
+                print("  python stats_calc.py [game_id]              - Calculate stats for a game")
+                print("  python stats_calc.py stats [game_id]         - Calculate stats for a game")
+                print("  python stats_calc.py compute-ratings [game_id] - Compute receive ratings for a game")
+                print("  python stats_calc.py --all                   - Calculate stats for all games")
+                print("  python stats_calc.py --all-ratings           - Compute receive ratings for all games")
     else:
         # Just print receive rating configs
         calculator.print_receive_rating_configs()

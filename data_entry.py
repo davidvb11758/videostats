@@ -773,20 +773,31 @@ class DataEntryWindow(QMainWindow):
         if court_boundaries:
             print(f"DEBUG: Loading court boundaries for game {self.game_id}")
             # Convert to the format expected by coordinate mapper
-            # Database returns: corner_tl, corner_tr, corner_bl, corner_br, centerline_top, centerline_bottom
-            # Coordinate mapper expects: [BL, BR, TR, TL, ML, MR]
+            # Database returns: corner_tl, corner_tr, corner_bl, corner_br, centerline_top, centerline_bottom,
+            #                  y200_left, y200_right, y400_left, y400_right
+            # Coordinate mapper expects: [BL, BR, TR, TL, ML, MR, Y200L, Y200R, Y400L, Y400R]
             corner_points = [
                 list(court_boundaries['corner_bl']),      # 0: BL (0,0)
                 list(court_boundaries['corner_br']),      # 1: BR (300,0)
                 list(court_boundaries['corner_tr']),      # 2: TR (300,600)
                 list(court_boundaries['corner_tl']),      # 3: TL (0,600)
                 list(court_boundaries['centerline_bottom']),  # 4: ML (0,300) - left end of centerline
-                list(court_boundaries['centerline_top'])      # 5: MR (300,300) - right end of centerline
+                list(court_boundaries['centerline_top']),     # 5: MR (300,300) - right end of centerline
             ]
+            
+            # Add Y200 and Y400 points if available
+            if court_boundaries.get('y200_left') is not None:
+                corner_points.append(list(court_boundaries['y200_left']))  # 6: Y200L (0,200)
+            if court_boundaries.get('y200_right') is not None:
+                corner_points.append(list(court_boundaries['y200_right']))  # 7: Y200R (300,200)
+            if court_boundaries.get('y400_left') is not None:
+                corner_points.append(list(court_boundaries['y400_left']))  # 8: Y400L (0,400)
+            if court_boundaries.get('y400_right') is not None:
+                corner_points.append(list(court_boundaries['y400_right']))  # 9: Y400R (300,400)
             
             if self.coordinate_mapper:
                 self.coordinate_mapper.set_corner_points(corner_points)
-                print(f"DEBUG: Court boundaries loaded successfully")
+                print(f"DEBUG: Court boundaries loaded successfully ({len(corner_points)} points)")
         else:
             print(f"DEBUG: No court boundaries stored for game {self.game_id}")
     
