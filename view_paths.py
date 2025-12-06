@@ -352,7 +352,7 @@ class ContactEditDialog(QDialog):
         
         self.setWindowTitle("Edit Contact")
         self.setModal(True)
-        self.resize(1600, 900)
+        self.resize(1800, 1000)  # Larger window
         
         # Main layout
         main_layout = QHBoxLayout(self)
@@ -380,7 +380,11 @@ class ContactEditDialog(QDialog):
                             dot_type = item.data(Qt.ItemDataRole.UserRole)
                             if dot_type in ['source', 'dest']:
                                 self.parent_dialog.dragging_dot = item
-                                self.parent_dialog.drag_start_pos = scene_pos
+                                # Store the offset from click position to item's current position
+                                item_pos = item.pos()
+                                item_rect = item.rect()
+                                item_center = item_pos + QPointF(item_rect.center())
+                                self.parent_dialog.drag_offset = scene_pos - item_center
                                 event.accept()
                                 return
                 super().mousePressEvent(event)
@@ -389,19 +393,34 @@ class ContactEditDialog(QDialog):
                 """Handle mouse move for dragging dots."""
                 if self.parent_dialog.dragging_dot:
                     scene_pos = event.scenePos()
-                    # Update dot position
+                    # Update dot position - account for the offset from when we started dragging
                     dot_rect = self.parent_dialog.dragging_dot.rect()
-                    new_x = scene_pos.x() - dot_rect.width() / 2
-                    new_y = scene_pos.y() - dot_rect.height() / 2
+                    # Calculate new center position accounting for drag offset
+                    new_center = scene_pos - self.parent_dialog.drag_offset
+                    # Set position so the center of the dot is at new_center
+                    new_x = new_center.x() - dot_rect.width() / 2
+                    new_y = new_center.y() - dot_rect.height() / 2
+                    # Clamp to scene bounds
+                    scene_rect = self.sceneRect()
+                    new_x = max(0, min(new_x, scene_rect.width() - dot_rect.width()))
+                    new_y = max(0, min(new_y, scene_rect.height() - dot_rect.height()))
                     self.parent_dialog.dragging_dot.setPos(new_x, new_y)
                     
                     # Update arrow
                     self.parent_dialog.update_arrow()
                     
-                    # Update logical coordinates
+                    # Update logical coordinates using the center of the dot
+                    # Need to scale from our canvas (1200x666) back to coordinate_mapper canvas (1800x1000)
+                    dot_center_x = new_x + dot_rect.width() / 2
+                    dot_center_y = new_y + dot_rect.height() / 2
+                    # Scale back to coordinate_mapper canvas coordinates
+                    scale_x = 1800.0 / 1200.0  # 1.5
+                    scale_y = 1000.0 / 666.0   # ~1.5
+                    scaled_x = dot_center_x * scale_x
+                    scaled_y = dot_center_y * scale_y
                     dot_type = self.parent_dialog.dragging_dot.data(Qt.ItemDataRole.UserRole)
                     if self.parent_dialog.coordinate_mapper:
-                        logical_coords = self.parent_dialog.coordinate_mapper.map_point_to_logical(scene_pos.x(), scene_pos.y())
+                        logical_coords = self.parent_dialog.coordinate_mapper.map_point_to_logical(scaled_x, scaled_y)
                         if logical_coords:
                             if dot_type == 'source':
                                 self.parent_dialog.source_x, self.parent_dialog.source_y = logical_coords
@@ -416,12 +435,13 @@ class ContactEditDialog(QDialog):
                 if self.parent_dialog.dragging_dot:
                     self.parent_dialog.dragging_dot = None
                     self.parent_dialog.drag_start_pos = None
+                    self.parent_dialog.drag_offset = QPointF(0, 0)
                     event.accept()
                 else:
                     super().mouseReleaseEvent(event)
         
         self.video_scene = DraggableVideoScene(self)
-        self.video_scene.setSceneRect(0, 0, 1000, 750)
+        self.video_scene.setSceneRect(0, 0, 1200, 666)  # Match coordinate_mapper ratio (1800/1000 = 1.8, 1200/1.8 = 666.67)
         self.video_view = QGraphicsView(self.video_scene)
         self.video_view.setRenderHint(QPainter.RenderHint.Antialiasing)
         self.video_view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
@@ -436,10 +456,18 @@ class ContactEditDialog(QDialog):
         self.arrowhead_item = None
         self.dragging_dot = None  # Track which dot is being dragged
         self.drag_start_pos = None
+        self.drag_offset = QPointF(0, 0)  # Offset from click position to dot center
         
         # Store current coordinates (in logical court space 0-300 x 0-600)
         self.source_x = contact_data.get('x')
         self.source_y = contact_data.get('y')
+        print(f"Contact {self.contact_id}: Source coordinates loaded from contact_data: ({self.source_x}, {self.source_y})")
+        
+        # Verify coordinates are logical (0-300 x 0-600), not scaled drawing coordinates
+        if self.source_x is not None and (self.source_x > 300 or self.source_x < 0):
+            print(f"WARNING: Source X coordinate {self.source_x} is outside logical range (0-300)")
+        if self.source_y is not None and (self.source_y > 600 or self.source_y < 0):
+            print(f"WARNING: Source Y coordinate {self.source_y} is outside logical range (0-600)")
         # Get destination coordinates from next contact
         self.dest_x = None
         self.dest_y = None
@@ -469,7 +497,7 @@ class ContactEditDialog(QDialog):
         controls_layout.addWidget(self.time_label)
         
         video_layout.addLayout(controls_layout)
-        main_layout.addWidget(video_widget, 2)  # 2/3 of space
+        main_layout.addWidget(video_widget, 4)  # Even more space for video
         
         # Right side: Edit panel (compact, 3 columns)
         edit_panel = QWidget()
@@ -477,7 +505,7 @@ class ContactEditDialog(QDialog):
         edit_layout.setContentsMargins(5, 5, 5, 5)
         edit_layout.setSpacing(5)
         
-        # Create 3-column layout for radio button groups
+        # Create 2-column layout: Player/Type on left, Outcome/Rating/Timecode stacked on right
         columns_layout = QHBoxLayout()
         columns_layout.setSpacing(5)
         
@@ -496,7 +524,7 @@ class ContactEditDialog(QDialog):
         self.load_players(player_layout)
         col1.addWidget(player_group)
         
-        # Contact type (compact, 3 columns within)
+        # Contact type (compact, 2 columns within)
         type_group = QGroupBox("Type")
         type_group.setFont(QFont('Arial', 8))
         type_layout = QVBoxLayout(type_group)
@@ -505,7 +533,7 @@ class ContactEditDialog(QDialog):
         self.type_button_group = QButtonGroup()
         self.type_button_group.setExclusive(True)
         contact_types = ['serve', 'receive', 'pass', 'set', 'attack', 'block', 'freeball', 'down', 'net', 'fault']
-        # Arrange in 3 columns
+        # Arrange in 2 columns
         type_grid = QHBoxLayout()
         for i, ct in enumerate(contact_types):
             rb = QRadioButton(ct)
@@ -514,7 +542,7 @@ class ContactEditDialog(QDialog):
             type_grid.addWidget(rb)
             if ct == contact_data.get('contact_type', ''):
                 rb.setChecked(True)
-            if (i + 1) % 3 == 0:
+            if (i + 1) % 2 == 0:  # 2 columns instead of 3
                 type_layout.addLayout(type_grid)
                 type_grid = QHBoxLayout()
         if contact_types:
@@ -522,11 +550,37 @@ class ContactEditDialog(QDialog):
         col1.addWidget(type_group)
         columns_layout.addLayout(col1)
         
-        # Column 2: Rating and Timecode (stacked vertically, shorter)
+        # Column 2: Outcome, Rating, Timecode (stacked vertically)
         col2 = QVBoxLayout()
         col2.setSpacing(3)
         
-        # Rating (compact, horizontal, shorter)
+        # Outcome (compact, 2 columns)
+        outcome_group = QGroupBox("Outcome")
+        outcome_group.setFont(QFont('Arial', 8))
+        outcome_layout = QVBoxLayout(outcome_group)
+        outcome_layout.setContentsMargins(5, 5, 5, 5)
+        outcome_layout.setSpacing(2)
+        self.outcome_button_group = QButtonGroup()
+        self.outcome_button_group.setExclusive(True)
+        outcomes = ['continue', 'ace', 'kill', 'error', 'down', 'stuff', 'assist']
+        outcome_grid = QHBoxLayout()
+        for i, oc in enumerate(outcomes):
+            rb = QRadioButton(oc)
+            rb.setFont(QFont('Arial', 8))
+            self.outcome_button_group.addButton(rb)
+            outcome_grid.addWidget(rb)
+            if oc == contact_data.get('outcome', ''):
+                rb.setChecked(True)
+            if (i + 1) % 2 == 0:  # 2 columns
+                outcome_layout.addLayout(outcome_grid)
+                outcome_grid = QHBoxLayout()
+        if outcomes:
+            outcome_layout.addLayout(outcome_grid)
+        # Track outcome changes
+        self.outcome_button_group.buttonClicked.connect(lambda: setattr(self, 'outcome_manually_edited', True))
+        col2.addWidget(outcome_group)
+        
+        # Rating (compact, horizontal)
         rating_group = QGroupBox("Rating")
         rating_group.setFont(QFont('Arial', 8))
         rating_layout = QHBoxLayout(rating_group)
@@ -545,7 +599,7 @@ class ContactEditDialog(QDialog):
         self.rating_button_group.buttonClicked.connect(lambda: setattr(self, 'rating_manually_edited', True))
         col2.addWidget(rating_group)
         
-        # Timecode adjustment (compact, shorter, under Rating)
+        # Timecode adjustment (compact, under Rating)
         timecode_group = QGroupBox("Timecode")
         timecode_group.setFont(QFont('Arial', 8))
         timecode_layout = QVBoxLayout(timecode_group)
@@ -570,61 +624,44 @@ class ContactEditDialog(QDialog):
         timecode_layout.addWidget(self.timecode_label)
         self.timecode_button_group.buttonClicked.connect(self.update_timecode)
         col2.addWidget(timecode_group)
+        
         columns_layout.addLayout(col2)
-        
-        # Column 3: Outcome (smaller)
-        col3 = QVBoxLayout()
-        col3.setSpacing(3)
-        
-        # Outcome (compact, smaller, 2 columns)
-        outcome_group = QGroupBox("Outcome")
-        outcome_group.setFont(QFont('Arial', 8))
-        outcome_layout = QVBoxLayout(outcome_group)
-        outcome_layout.setContentsMargins(5, 5, 5, 5)
-        outcome_layout.setSpacing(2)
-        self.outcome_button_group = QButtonGroup()
-        self.outcome_button_group.setExclusive(True)
-        outcomes = ['continue', 'ace', 'kill', 'error', 'down', 'stuff', 'assist']
-        outcome_grid = QHBoxLayout()
-        for i, oc in enumerate(outcomes):
-            rb = QRadioButton(oc)
-            rb.setFont(QFont('Arial', 8))
-            self.outcome_button_group.addButton(rb)
-            outcome_grid.addWidget(rb)
-            if oc == contact_data.get('outcome', ''):
-                rb.setChecked(True)
-            if (i + 1) % 2 == 0:  # 2 columns instead of 3
-                outcome_layout.addLayout(outcome_grid)
-                outcome_grid = QHBoxLayout()
-        if outcomes:
-            outcome_layout.addLayout(outcome_grid)
-        # Track outcome changes
-        self.outcome_button_group.buttonClicked.connect(lambda: setattr(self, 'outcome_manually_edited', True))
-        col3.addWidget(outcome_group)
-        col3.addStretch()  # Push outcome to top
-        columns_layout.addLayout(col3)
         
         edit_layout.addLayout(columns_layout)
         
         # Buttons
         button_layout = QHBoxLayout()
         self.save_button = QPushButton("Save")
+        self.save_button.setStyleSheet("""
+            QPushButton {
+                background-color: #ADD8E6;
+                border: 1px solid #808080;
+                padding: 5px;
+            }
+        """)
         self.save_button.clicked.connect(self.save_contact)
         self.cancel_button = QPushButton("Cancel")
-        self.cancel_button.clicked.connect(self.reject)
+        self.cancel_button.setStyleSheet("""
+            QPushButton {
+                background-color: white;
+                border: 1px solid #808080;
+                padding: 5px;
+            }
+        """)
+        self.cancel_button.clicked.connect(lambda: self.done(QDialog.DialogCode.Rejected))
         button_layout.addWidget(self.save_button)
         button_layout.addWidget(self.cancel_button)
         edit_layout.addLayout(button_layout)
         
         edit_layout.addStretch()
-        main_layout.addWidget(edit_panel, 1)  # 1/3 of space
+        main_layout.addWidget(edit_panel, 1)  # Smaller proportion to give more space to video
         
         # Initialize video player
         self.media_player = QMediaPlayer()
         self.audio_output = QAudioOutput()
         self.media_player.setAudioOutput(self.audio_output)
         self.video_item = QGraphicsVideoItem()
-        self.video_item.setSize(QRectF(0, 0, 1000, 750).size())
+        self.video_item.setSize(QRectF(0, 0, 1200, 666).size())  # Match coordinate_mapper ratio
         self.video_scene.addItem(self.video_item)
         self.media_player.setVideoOutput(self.video_item)
         self.media_player.positionChanged.connect(self.update_position)
@@ -653,6 +690,10 @@ class ContactEditDialog(QDialog):
             next_result = cursor.fetchone()
             if next_result and next_result[0] is not None and next_result[1] is not None:
                 self.dest_x, self.dest_y = next_result
+                print(f"Loaded destination coordinates: ({self.dest_x}, {self.dest_y}) for contact {self.contact_id}")
+            else:
+                print(f"No destination coordinates found for contact {self.contact_id}")
+                self.dest_x, self.dest_y = None, None
     
     def init_coordinate_mapper(self):
         """Initialize coordinate mapper with court boundaries from database."""
@@ -697,64 +738,118 @@ class ContactEditDialog(QDialog):
     def on_video_loaded_for_coords(self, status):
         """Handle video loaded event to draw coordinate dots."""
         if status == QMediaPlayer.MediaStatus.LoadedMedia:
-            self.draw_coordinate_dots()
-            self.media_player.mediaStatusChanged.disconnect(self.on_video_loaded_for_coords)
+            # Use QTimer to ensure video is fully rendered before drawing
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(100, self.draw_coordinate_dots)
+            try:
+                self.media_player.mediaStatusChanged.disconnect(self.on_video_loaded_for_coords)
+            except (TypeError, RuntimeError):
+                pass
     
     def draw_coordinate_dots(self):
         """Draw source and destination dots on the video."""
-        if not self.coordinate_mapper or not self.coordinate_mapper.homography_matrix:
+        # Remove old dots and arrow if they exist
+        if self.source_dot:
+            self.video_scene.removeItem(self.source_dot)
+            self.source_dot = None
+        if self.dest_dot:
+            self.video_scene.removeItem(self.dest_dot)
+            self.dest_dot = None
+        if self.arrow_line:
+            self.video_scene.removeItem(self.arrow_line)
+            self.arrow_line = None
+        if self.arrowhead_item:
+            self.video_scene.removeItem(self.arrowhead_item)
+            self.arrowhead_item = None
+        
+        if not self.coordinate_mapper:
+            print("Warning: Coordinate mapper not initialized")
+            return
+        
+        if not hasattr(self.coordinate_mapper, 'homography_matrix') or self.coordinate_mapper.homography_matrix is None:
+            print("Warning: Homography matrix not computed")
             return
         
         # Map logical coordinates to video pixel coordinates
         # We need the inverse of the homography to map from logical to pixel
+        # The homography matrix was computed for coordinate_mapper canvas (1800x1000)
+        # We need to scale it for our canvas (1200x666)
+        # Scale factor: 1200/1800 = 0.6667 for width, 666/1000 = 0.666 for height
         import cv2
         import numpy as np
         
-        # Get inverse homography
-        inv_homography = np.linalg.inv(self.coordinate_mapper.homography_matrix)
+        try:
+            # Get inverse homography
+            inv_homography = np.linalg.inv(self.coordinate_mapper.homography_matrix)
+        except np.linalg.LinAlgError:
+            print("Warning: Could not invert homography matrix")
+            return
+        
+        # Scale factor: coordinate_mapper uses 1800x1000, we use 1200x666
+        scale_x = 1200.0 / 1800.0  # 0.6667
+        scale_y = 666.0 / 1000.0   # 0.666
         
         # Map source coordinates (logical to pixel)
         if self.source_x is not None and self.source_y is not None:
-            logical_point = np.array([self.source_x, self.source_y, 1.0], dtype=np.float32).reshape(3, 1)
-            pixel_point = inv_homography @ logical_point
-            pixel_point /= pixel_point[2]
-            source_px = int(pixel_point[0][0])
-            source_py = int(pixel_point[1][0])
-            
-            # Draw source dot (red)
-            dot_radius = 8
-            self.source_dot = self.video_scene.addEllipse(
-                source_px - dot_radius, source_py - dot_radius,
-                dot_radius * 2, dot_radius * 2,
-                QPen(QColor(255, 0, 0), 2),
-                QBrush(QColor(255, 0, 0))
-            )
-            self.source_dot.setFlag(QGraphicsEllipseItem.GraphicsItemFlag.ItemIsMovable, True)
-            self.source_dot.setFlag(QGraphicsEllipseItem.GraphicsItemFlag.ItemIsSelectable, True)
-            self.source_dot.setData(Qt.ItemDataRole.UserRole, 'source')
+            try:
+                logical_point = np.array([self.source_x, self.source_y, 1.0], dtype=np.float32).reshape(3, 1)
+                pixel_point = inv_homography @ logical_point
+                pixel_point /= pixel_point[2]
+                # Apply scaling factor to convert from coordinate_mapper canvas to our canvas
+                source_px = int(pixel_point[0][0] * scale_x)
+                source_py = int(pixel_point[1][0] * scale_y)
+                
+                # Draw source dot (green)
+                # Create ellipse at (0,0) and use setPos to position it
+                dot_radius = 4  # Half the original size
+                self.source_dot = self.video_scene.addEllipse(
+                    0, 0,
+                    dot_radius * 2, dot_radius * 2,
+                    QPen(QColor(0, 255, 0), 2),
+                    QBrush(QColor(0, 255, 0))
+                )
+                # Position the dot at the calculated coordinates
+                self.source_dot.setPos(source_px - dot_radius, source_py - dot_radius)
+                self.source_dot.setFlag(QGraphicsEllipseItem.GraphicsItemFlag.ItemIsMovable, True)
+                self.source_dot.setFlag(QGraphicsEllipseItem.GraphicsItemFlag.ItemIsSelectable, True)
+                self.source_dot.setData(Qt.ItemDataRole.UserRole, 'source')
+                self.source_dot.setZValue(1000)  # Ensure dot is on top
+                print(f"Source dot drawn at pixel coordinates: ({source_px}, {source_py}) from logical ({self.source_x}, {self.source_y})")
+            except Exception as e:
+                print(f"Error drawing source dot: {e}")
         
         # Map destination coordinates (logical to pixel)
         if self.dest_x is not None and self.dest_y is not None:
-            logical_point = np.array([self.dest_x, self.dest_y, 1.0], dtype=np.float32).reshape(3, 1)
-            pixel_point = inv_homography @ logical_point
-            pixel_point /= pixel_point[2]
-            dest_px = int(pixel_point[0][0])
-            dest_py = int(pixel_point[1][0])
-            
-            # Draw destination dot (blue)
-            dot_radius = 8
-            self.dest_dot = self.video_scene.addEllipse(
-                dest_px - dot_radius, dest_py - dot_radius,
-                dot_radius * 2, dot_radius * 2,
-                QPen(QColor(0, 0, 255), 2),
-                QBrush(QColor(0, 0, 255))
-            )
-            self.dest_dot.setFlag(QGraphicsEllipseItem.GraphicsItemFlag.ItemIsMovable, True)
-            self.dest_dot.setFlag(QGraphicsEllipseItem.GraphicsItemFlag.ItemIsSelectable, True)
-            self.dest_dot.setData(Qt.ItemDataRole.UserRole, 'dest')
-            
-            # Draw arrow from source to destination
-            self.update_arrow()
+            try:
+                logical_point = np.array([self.dest_x, self.dest_y, 1.0], dtype=np.float32).reshape(3, 1)
+                pixel_point = inv_homography @ logical_point
+                pixel_point /= pixel_point[2]
+                # Apply scaling factor to convert from coordinate_mapper canvas to our canvas
+                dest_px = int(pixel_point[0][0] * scale_x)
+                dest_py = int(pixel_point[1][0] * scale_y)
+                
+                # Draw destination dot (blue)
+                # Create ellipse at (0,0) and use setPos to position it
+                dot_radius = 4  # Half the original size
+                self.dest_dot = self.video_scene.addEllipse(
+                    0, 0,
+                    dot_radius * 2, dot_radius * 2,
+                    QPen(QColor(0, 0, 255), 2),
+                    QBrush(QColor(0, 0, 255))
+                )
+                # Position the dot at the calculated coordinates
+                self.dest_dot.setPos(dest_px - dot_radius, dest_py - dot_radius)
+                self.dest_dot.setFlag(QGraphicsEllipseItem.GraphicsItemFlag.ItemIsMovable, True)
+                self.dest_dot.setFlag(QGraphicsEllipseItem.GraphicsItemFlag.ItemIsSelectable, True)
+                self.dest_dot.setData(Qt.ItemDataRole.UserRole, 'dest')
+                self.dest_dot.setZValue(1000)  # Ensure dot is on top
+                print(f"Destination dot drawn at pixel coordinates: ({dest_px}, {dest_py}) from logical ({self.dest_x}, {self.dest_y})")
+                
+                # Draw arrow from source to destination
+                if self.source_dot:
+                    self.update_arrow()
+            except Exception as e:
+                print(f"Error drawing destination dot: {e}")
     
     def update_arrow(self):
         """Update arrow line between source and destination dots."""
@@ -956,74 +1051,89 @@ class ContactEditDialog(QDialog):
     
     def save_contact(self):
         """Save contact changes to database."""
-        if not self.db.conn:
-            self.db.connect()
-        
-        cursor = self.db.conn.cursor()
-        
-        # Get selected values
-        selected_player_button = self.player_button_group.checkedButton()
-        if not selected_player_button or selected_player_button.text() == "Floor":
-            player_id = None
-        else:
-            player_id = selected_player_button.property('player_id')
-            # If player_id is 0, it means "Opponent" - store as 0 (player o0)
-            # Note: This requires player_id 0 to exist in the database or foreign key constraints to be disabled
-        
-        selected_type_button = self.type_button_group.checkedButton()
-        contact_type = selected_type_button.text() if selected_type_button else None
-        
-        selected_outcome_button = self.outcome_button_group.checkedButton()
-        outcome = selected_outcome_button.text() if selected_outcome_button else None
-        
-        selected_rating_button = self.rating_button_group.checkedButton()
-        rating = int(selected_rating_button.text()) if selected_rating_button else None
-        
-        # Check if we need to add manual edit flags to database
-        # First, check if columns exist
-        cursor.execute("PRAGMA table_info(contacts)")
-        columns = [row[1] for row in cursor.fetchall()]
-        
-        # Add columns if they don't exist
-        if 'outcome_manual' not in columns:
-            cursor.execute("ALTER TABLE contacts ADD COLUMN outcome_manual INTEGER DEFAULT 0")
-        if 'rating_manual' not in columns:
-            cursor.execute("ALTER TABLE contacts ADD COLUMN rating_manual INTEGER DEFAULT 0")
-        
-        # Update contact
-        update_query = """
-            UPDATE contacts 
-            SET player_id = ?, contact_type = ?, outcome = ?, rating = ?, timecode = ?,
-                outcome_manual = ?, rating_manual = ?, x = ?, y = ?
-            WHERE contact_id = ?
-        """
-        outcome_manual = 1 if self.outcome_manually_edited else 0
-        rating_manual = 1 if self.rating_manually_edited else 0
-        
-        cursor.execute(update_query, (
-            player_id, contact_type, outcome, rating, self.current_timecode,
-            outcome_manual, rating_manual, 
-            int(self.source_x) if self.source_x is not None else None,
-            int(self.source_y) if self.source_y is not None else None,
-            self.contact_id
-        ))
-        
-        # Update destination coordinates in next contact if it exists
-        if self.dest_x is not None and self.dest_y is not None:
-            cursor.execute("SELECT rally_id, sequence_number FROM contacts WHERE contact_id = ?", (self.contact_id,))
-            result = cursor.fetchone()
-            if result:
-                rally_id, seq_num = result
-                # Update next contact coordinates
-                cursor.execute("""
-                    UPDATE contacts 
-                    SET x = ?, y = ?
-                    WHERE rally_id = ? AND sequence_number = ?
-                """, (int(self.dest_x), int(self.dest_y), rally_id, seq_num + 1))
-        
-        self.db.conn.commit()
-        QMessageBox.information(self, "Saved", "Contact updated successfully!")
-        self.accept()
+        try:
+            if not self.db.conn:
+                self.db.connect()
+            
+            cursor = self.db.conn.cursor()
+            
+            # Get selected values
+            selected_player_button = self.player_button_group.checkedButton()
+            if not selected_player_button or selected_player_button.text() == "Floor":
+                player_id = None
+            else:
+                player_id = selected_player_button.property('player_id')
+                # If player_id is 0, it means "Opponent" - store as 0 (player o0)
+                # Note: This requires player_id 0 to exist in the database or foreign key constraints to be disabled
+            
+            selected_type_button = self.type_button_group.checkedButton()
+            contact_type = selected_type_button.text() if selected_type_button else None
+            
+            selected_outcome_button = self.outcome_button_group.checkedButton()
+            outcome = selected_outcome_button.text() if selected_outcome_button else None
+            
+            selected_rating_button = self.rating_button_group.checkedButton()
+            rating = int(selected_rating_button.text()) if selected_rating_button else None
+            
+            # Check if we need to add manual edit flags to database
+            # First, check if columns exist
+            cursor.execute("PRAGMA table_info(contacts)")
+            columns = [row[1] for row in cursor.fetchall()]
+            
+            # Add columns if they don't exist
+            if 'outcome_manual' not in columns:
+                cursor.execute("ALTER TABLE contacts ADD COLUMN outcome_manual INTEGER DEFAULT 0")
+            if 'rating_manual' not in columns:
+                cursor.execute("ALTER TABLE contacts ADD COLUMN rating_manual INTEGER DEFAULT 0")
+            
+            # Update contact
+            update_query = """
+                UPDATE contacts 
+                SET player_id = ?, contact_type = ?, outcome = ?, rating = ?, timecode = ?,
+                    outcome_manual = ?, rating_manual = ?, x = ?, y = ?
+                WHERE contact_id = ?
+            """
+            outcome_manual = 1 if self.outcome_manually_edited else 0
+            rating_manual = 1 if self.rating_manually_edited else 0
+            
+            print(f"DEBUG: Saving contact {self.contact_id} with values: player_id={player_id}, contact_type={contact_type}, outcome={outcome}, rating={rating}, timecode={self.current_timecode}, x={self.source_x}, y={self.source_y}")
+            
+            cursor.execute(update_query, (
+                player_id, contact_type, outcome, rating, self.current_timecode,
+                outcome_manual, rating_manual, 
+                int(self.source_x) if self.source_x is not None else None,
+                int(self.source_y) if self.source_y is not None else None,
+                self.contact_id
+            ))
+            
+            rows_affected = cursor.rowcount
+            print(f"DEBUG: Update query affected {rows_affected} rows")
+            
+            # Update destination coordinates in next contact if it exists
+            if self.dest_x is not None and self.dest_y is not None:
+                cursor.execute("SELECT rally_id, sequence_number FROM contacts WHERE contact_id = ?", (self.contact_id,))
+                result = cursor.fetchone()
+                if result:
+                    rally_id, seq_num = result
+                    # Update next contact coordinates
+                    cursor.execute("""
+                        UPDATE contacts 
+                        SET x = ?, y = ?
+                        WHERE rally_id = ? AND sequence_number = ?
+                    """, (int(self.dest_x), int(self.dest_y), rally_id, seq_num + 1))
+                    print(f"DEBUG: Updated next contact coordinates to ({int(self.dest_x)}, {int(self.dest_y)})")
+            
+            self.db.conn.commit()
+            print(f"DEBUG: Changes committed to database")
+            
+            # Don't show message box here - let the parent handle it via finished signal
+            # QMessageBox.information(self, "Saved", "Contact updated successfully!")
+            self.done(QDialog.DialogCode.Accepted)
+        except Exception as e:
+            print(f"ERROR: Failed to save contact: {e}")
+            import traceback
+            traceback.print_exc()
+            QMessageBox.critical(self, "Save Error", f"Failed to save contact changes:\n{str(e)}")
 
 
 class ClickableGraphicsScene(QGraphicsScene):
@@ -1110,6 +1220,8 @@ class ContactPathViewer(QMainWindow):
         
         # Popup widget for displaying contact information
         self.contact_popup = None
+        # Track if edit dialog is open to prevent multiple instances
+        self.edit_dialog_open = False
         
         # Setup UI
         self.setup_graphics_view()
@@ -2549,6 +2661,7 @@ class ContactPathViewer(QMainWindow):
             
             # Store contact information with the dot for click handling
             # Store as a dictionary in UserRole
+            # IMPORTANT: Store the original database logical coordinates (x, y), not the scaled drawing coordinates
             contact_data = {
                 'contact_id': contact_id,
                 'player_id': player_id,
@@ -2559,8 +2672,8 @@ class ContactPathViewer(QMainWindow):
                 'rating': rating,
                 'timecode': timecode,
                 'team_id': team_id,
-                'x': draw_x,
-                'y': draw_y
+                'x': x,  # Original database logical coordinate (0-300)
+                'y': y   # Original database logical coordinate (0-600)
             }
             dot.setData(Qt.ItemDataRole.UserRole, contact_data)
             # Enable mouse events on the dot
@@ -2706,14 +2819,26 @@ class ContactPathViewer(QMainWindow):
         
         self.contact_popup.set_contact_info(player_name, contact_type, outcome, rating, contact_data, self)
         
-        # Connect edit button
+        # Connect edit button - use the contact_data stored in the popup to avoid closure issues
         if self.contact_popup.edit_button:
             # Disconnect any existing connections (ignore if none exist)
+            # Check if signal is connected before trying to disconnect
             try:
-                self.contact_popup.edit_button.clicked.disconnect()
+                # Get all connected slots
+                receivers = self.contact_popup.edit_button.receivers(self.contact_popup.edit_button.clicked)
+                if receivers > 0:
+                    self.contact_popup.edit_button.clicked.disconnect()
             except (TypeError, RuntimeError):
-                pass  # No connections to disconnect
-            self.contact_popup.edit_button.clicked.connect(lambda: self.open_contact_edit_dialog(contact_data))
+                pass  # No connections to disconnect or error occurred
+            # Use a method that gets the contact_data from the popup to avoid stale closure
+            def open_edit_dialog():
+                # Prevent opening if dialog is already open or was just closed
+                if hasattr(self, 'edit_dialog_open') and self.edit_dialog_open:
+                    return
+                if self.contact_popup and self.contact_popup.contact_data:
+                    self.open_contact_edit_dialog(self.contact_popup.contact_data)
+            
+            self.contact_popup.edit_button.clicked.connect(open_edit_dialog)
         
         # Convert scene coordinates to viewport coordinates
         view_pos = self.graphics_view.mapFromScene(scene_pos)
@@ -2748,14 +2873,92 @@ class ContactPathViewer(QMainWindow):
             QMessageBox.warning(self, "No Game", "No game selected!")
             return
         
+        # Prevent multiple dialog instances
+        if hasattr(self, 'edit_dialog_open') and self.edit_dialog_open:
+            return
+        
         # Hide the info popup
         self.hide_contact_popup()
         
+        # Mark dialog as open
+        self.edit_dialog_open = True
+        
         # Open edit dialog
         dialog = ContactEditDialog(contact_data, self.db, self.game_id, self)
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            # Refresh the display if needed
+        
+        # Connect to finished signal to ensure flag is reset even if dialog is closed via X button
+        # Use a flag to prevent multiple message boxes and re-opening
+        message_shown = [False]  # Use list to allow modification in nested function
+        
+        def on_dialog_finished(result):
+            # Only process if we haven't already handled this
+            if not message_shown[0]:
+                # Reset flag immediately to prevent re-opening
+                self.edit_dialog_open = False
+                # Ensure contact popup is hidden and disconnect edit button
+                if self.contact_popup:
+                    self.contact_popup.hide()
+                    # Disconnect edit button to prevent accidental clicks
+                    if self.contact_popup.edit_button:
+                        try:
+                            self.contact_popup.edit_button.clicked.disconnect()
+                        except (TypeError, RuntimeError):
+                            pass
+                
+                if result == QDialog.DialogCode.Accepted:
+                    message_shown[0] = True
+                    # Use QTimer to delay showing message box, ensuring dialog is fully closed
+                    from PySide6.QtCore import QTimer
+                    def show_message():
+                        # Double-check popup is hidden and edit button disconnected
+                        if self.contact_popup:
+                            self.contact_popup.hide()
+                            if self.contact_popup.edit_button:
+                                try:
+                                    self.contact_popup.edit_button.clicked.disconnect()
+                                except (TypeError, RuntimeError):
+                                    pass
+                        QMessageBox.information(self, "Updated", "Contact has been updated. Refresh the display to see changes.")
+                        # Ensure popup stays hidden after message box closes
+                        if self.contact_popup:
+                            self.contact_popup.hide()
+                    
+                    # Delay by 100ms to ensure dialog is fully closed
+                    QTimer.singleShot(100, show_message)
+        
+        dialog.finished.connect(on_dialog_finished)
+        result = dialog.exec()
+        
+        # Disconnect the signal immediately after exec returns
+        try:
+            dialog.finished.disconnect(on_dialog_finished)
+        except (TypeError, RuntimeError):
+            pass
+        
+        # Ensure flag is reset (backup in case signal doesn't fire)
+        self.edit_dialog_open = False
+        # Ensure contact popup is hidden and edit button disconnected
+        if self.contact_popup:
+            self.contact_popup.hide()
+            if self.contact_popup.edit_button:
+                try:
+                    self.contact_popup.edit_button.clicked.disconnect()
+                except (TypeError, RuntimeError):
+                    pass
+        
+        # Handle result if message wasn't shown via signal (shouldn't happen, but safety)
+        if result == QDialog.DialogCode.Accepted and not message_shown[0]:
+            if self.contact_popup:
+                self.contact_popup.hide()
+                if self.contact_popup.edit_button:
+                    try:
+                        self.contact_popup.edit_button.clicked.disconnect()
+                    except (TypeError, RuntimeError):
+                        pass
             QMessageBox.information(self, "Updated", "Contact has been updated. Refresh the display to see changes.")
+            # Ensure popup stays hidden after message box closes
+            if self.contact_popup:
+                self.contact_popup.hide()
 
 
 if __name__ == "__main__":

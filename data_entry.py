@@ -642,6 +642,12 @@ class DataEntryWindow(QMainWindow):
             self.game_id = None
             self.team_us_id = None
             self.team_them_id = None
+            
+            # Clear coordinate mapper's game_id as well
+            if self.coordinate_mapper:
+                self.coordinate_mapper.game_id = None
+                print(f"DEBUG: Cleared coordinate_mapper.game_id")
+            
             return
         
         # Get game data from selected item
@@ -653,6 +659,11 @@ class DataEntryWindow(QMainWindow):
         self.game_id = item_data['game_id']
         self.team_us_id = item_data['team_us_id']
         self.team_them_id = item_data['team_them_id']
+        
+        # Update coordinate mapper's game_id so it saves to the correct game
+        if self.coordinate_mapper:
+            self.coordinate_mapper.game_id = self.game_id
+            print(f"DEBUG: Updated coordinate_mapper.game_id to {self.game_id}")
         
         # Update team name labels
         if hasattr(self.ui, 'team_1_name'):

@@ -514,10 +514,6 @@ class VideoStatsDB:
             'court_y200_left_x', 'court_y200_left_y',
             'court_y200_right_x', 'court_y200_right_y',
             'court_y400_left_x', 'court_y400_left_y',
-            'court_y400_right_x', 'court_y400_right_y',
-            'court_y200_left_x', 'court_y200_left_y',
-            'court_y200_right_x', 'court_y200_right_y',
-            'court_y400_left_x', 'court_y400_left_y',
             'court_y400_right_x', 'court_y400_right_y'
         ]
         for col in court_columns:
@@ -529,6 +525,16 @@ class VideoStatsDB:
                     print(f"{col} column added successfully!")
                 except Exception as e:
                     print(f"Failed to add {col} column: {e}")
+        
+        # Add homography_matrix column to games table if it doesn't exist
+        if 'homography_matrix' not in columns:
+            print("Adding homography_matrix column to games table...")
+            try:
+                cursor.execute("ALTER TABLE games ADD COLUMN homography_matrix TEXT")
+                self.conn.commit()
+                print("homography_matrix column added successfully!")
+            except Exception as e:
+                print(f"Failed to add homography_matrix column: {e}")
         
         # The game_players table will be created automatically if it doesn't exist
         # No migration needed as it's a new table
@@ -948,13 +954,14 @@ class VideoStatsDB:
         result = cursor.fetchone()
         return result[0] if result and result[0] else None
     
-    def save_game_court_boundaries(self, game_id: int, court_points: dict):
+    def save_game_court_boundaries(self, game_id: int, court_points: dict, homography_matrix=None):
         """Save court boundary coordinates for a game.
         
         Args:
             game_id: The game ID
             court_points: Dictionary with keys like 'corner_tl', 'corner_tr', etc.
                          Each value should be a QPointF (from PySide6) or tuple (x, y)
+            homography_matrix: Optional numpy array (3x3) representing the homography matrix
         """
         if not self.conn:
             self.connect()
@@ -979,6 +986,15 @@ class VideoStatsDB:
         y400l_x, y400l_y = get_xy(court_points.get('y400_left', (0, 0)))
         y400r_x, y400r_y = get_xy(court_points.get('y400_right', (0, 0)))
         
+        # Serialize homography matrix to JSON if provided
+        homography_json = None
+        if homography_matrix is not None:
+            import json
+            import numpy as np
+            # Convert numpy array to list for JSON serialization
+            homography_list = homography_matrix.tolist()
+            homography_json = json.dumps(homography_list)
+        
         cursor.execute("""
             UPDATE games SET
                 court_corner_tl_x = ?, court_corner_tl_y = ?,
@@ -990,10 +1006,12 @@ class VideoStatsDB:
                 court_y200_left_x = ?, court_y200_left_y = ?,
                 court_y200_right_x = ?, court_y200_right_y = ?,
                 court_y400_left_x = ?, court_y400_left_y = ?,
-                court_y400_right_x = ?, court_y400_right_y = ?
+                court_y400_right_x = ?, court_y400_right_y = ?,
+                homography_matrix = ?
             WHERE game_id = ?
         """, (tl_x, tl_y, tr_x, tr_y, bl_x, bl_y, br_x, br_y, ct_x, ct_y, cb_x, cb_y,
-              y200l_x, y200l_y, y200r_x, y200r_y, y400l_x, y400l_y, y400r_x, y400r_y, game_id))
+              y200l_x, y200l_y, y200r_x, y200r_y, y400l_x, y400l_y, y400r_x, y400r_y,
+              homography_json, game_id))
         self.conn.commit()
     
     def get_game_court_boundaries(self, game_id: int) -> Optional[dict]:
@@ -1018,13 +1036,25 @@ class VideoStatsDB:
                    court_y200_left_x, court_y200_left_y,
                    court_y200_right_x, court_y200_right_y,
                    court_y400_left_x, court_y400_left_y,
-                   court_y400_right_x, court_y400_right_y
+                   court_y400_right_x, court_y400_right_y,
+                   homography_matrix
             FROM games WHERE game_id = ?
         """, (game_id,))
         result = cursor.fetchone()
         
         if not result or result[0] is None:
             return None
+        
+        # Deserialize homography matrix from JSON if present
+        homography_matrix = None
+        if len(result) > 20 and result[20] is not None:
+            try:
+                import json
+                import numpy as np
+                homography_list = json.loads(result[20])
+                homography_matrix = np.array(homography_list, dtype=np.float32)
+            except Exception as e:
+                print(f"Warning: Failed to deserialize homography matrix: {e}")
         
         # Return as tuples - the calling code will convert to QPointF
         return {
@@ -1037,7 +1067,8 @@ class VideoStatsDB:
             'y200_left': (result[12], result[13]) if result[12] is not None else None,
             'y200_right': (result[14], result[15]) if result[14] is not None else None,
             'y400_left': (result[16], result[17]) if result[16] is not None else None,
-            'y400_right': (result[18], result[19]) if result[18] is not None else None
+            'y400_right': (result[18], result[19]) if result[18] is not None else None,
+            'homography_matrix': homography_matrix
         }
 
 

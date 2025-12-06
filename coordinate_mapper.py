@@ -363,14 +363,20 @@ class CoordinateMapper(QMainWindow):
         # Save to database if db and game_id are available
         if self.db and self.game_id:
             try:
-                self.db.save_game_court_boundaries(self.game_id, court_points_dict)
-                status_msg = "Court boundaries stored to database! Click on contact locations to map coordinates."
+                # Debug: Print the game_id being used
+                print(f"DEBUG: Storing court boundaries for game_id = {self.game_id}")
+                # Save homography matrix along with court boundaries
+                self.db.save_game_court_boundaries(self.game_id, court_points_dict, self.homography_matrix)
+                status_msg = f"Court boundaries stored to database for game {self.game_id}! Click on contact locations to map coordinates."
             except Exception as e:
                 status_msg = f"Error saving to database: {str(e)}"
                 print(f"Database error: {e}")
         else:
             status_msg = "Court boundaries set (no database connection). Click on contact locations to map coordinates."
-            print("Warning: No database connection or game_id available")
+            if not self.db:
+                print("Warning: No database connection available")
+            if not self.game_id:
+                print(f"Warning: No game_id available (current value: {self.game_id})")
         
         # Exit modify mode if active
         self.mode = 'normal'
