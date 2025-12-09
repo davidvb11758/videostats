@@ -218,7 +218,7 @@ class VoiceRecognizer(QObject):
 class DataEntryWindow(QMainWindow):
     """Main window for data entry with rally tracking and scoring."""
     
-    def __init__(self, ui_widget, db: VideoStatsDB, team_us_id: Optional[int] = None, team_them_id: Optional[int] = None, game_id: Optional[int] = None):
+    def __init__(self, ui_widget, db: VideoStatsDB, team_us_id: Optional[int] = None, team_them_id: Optional[int] = None, game_id: Optional[int] = None, lock_game_selection: bool = False):
         super().__init__()
         # Copy properties from loaded UI
         self.setWindowTitle(ui_widget.windowTitle())
@@ -237,6 +237,7 @@ class DataEntryWindow(QMainWindow):
         self.team_us_id = team_us_id
         self.team_them_id = team_them_id
         self.game_id = game_id
+        self.lock_game_selection = lock_game_selection
         
         # Rally tracking
         self.current_rally_id = None
@@ -292,8 +293,11 @@ class DataEntryWindow(QMainWindow):
             self.ui.teamNameThem.setText("")
         
         # Load game data if game_id provided, otherwise wait for user selection
+        # Note: on_game_selected() will be called by populate_games_dropdown() if game_id is provided
         if self.game_id:
             self.load_score()
+            # Update MainWindow player buttons based on active lineup
+            self.update_mainwindow_player_buttons()
         
         # Always update UI state to set button states correctly
         self.update_ui_state()
@@ -387,7 +391,7 @@ class DataEntryWindow(QMainWindow):
         self.last_clicked_timecode = self.pending_voice_contact_timecode
         print(f"DEBUG VOICE_HANDLER: Using coords: x={self.last_clicked_x}, y={self.last_clicked_y}, timecode={self.last_clicked_timecode}")
         
-        # Look up the player in the game_players table
+        # Look up the player - for team_us, check active_lineup first
         if not self.db.conn:
             self.db.connect()
         
@@ -396,7 +400,29 @@ class DataEntryWindow(QMainWindow):
         team_id = self.team_us_id
         print(f"DEBUG VOICE_HANDLER: Looking up player #{player_number} in team_id={team_id}, game_id={self.game_id}")
         
-        player = self.db.get_player_by_number_for_game(self.game_id, team_id, player_number)
+        # For team_us, check active_lineup first
+        player = None
+        if team_id == self.team_us_id:
+            cursor = self.db.conn.cursor()
+            cursor.execute("""
+                SELECT p.player_id, p.player_number, p.name, p.jersey
+                FROM active_lineup al
+                INNER JOIN players p ON al.player_id = p.player_id
+                WHERE al.team_id = ? 
+                AND (p.player_number = ? OR CAST(p.jersey AS TEXT) = ?)
+            """, (team_id, str(player_number), str(player_number)))
+            result = cursor.fetchone()
+            if result:
+                player = {
+                    'player_id': result[0],
+                    'player_number': result[1],
+                    'name': result[2],
+                    'jersey': result[3]
+                }
+        
+        # Fall back to game_players if not found in active_lineup
+        if not player:
+            player = self.db.get_player_by_number_for_game(self.game_id, team_id, player_number)
         if not player:
             print(f"DEBUG VOICE_HANDLER: REJECTED - Player #{player_number} not found in game roster!")
             self.status_label.setText(f"Player #{player_number} not found in game roster")
@@ -571,17 +597,28 @@ class DataEntryWindow(QMainWindow):
         self.populate_games_dropdown()
         
         # Create score label in status bar
-        self.score_label = QLabel()
-        self.ui.statusbar.addPermanentWidget(self.score_label)
-        if self.game_id:
-            self.update_score_display()
+        try:
+            self.score_label = QLabel()
+            if hasattr(self.ui, 'statusbar') and self.ui.statusbar:
+                self.ui.statusbar.addPermanentWidget(self.score_label)
+            if self.game_id:
+                self.update_score_display()
+        except Exception as e:
+            print(f"Warning: Failed to create score_label: {e}")
+            self.score_label = None
         
         # Create status label
-        self.status_label = QLabel()
-        self.ui.statusbar.addWidget(self.status_label)
-        if self.game_id:
-            self.update_status()
-        else:
+        try:
+            self.status_label = QLabel()
+            if hasattr(self.ui, 'statusbar') and self.ui.statusbar:
+                self.ui.statusbar.addWidget(self.status_label)
+            if self.game_id:
+                self.update_status()
+        except Exception as e:
+            print(f"Warning: Failed to create status_label: {e}")
+            self.status_label = None
+        
+        if not self.game_id:
             self.status_label.setText("Please select a game from the dropdown")
     
     def populate_games_dropdown(self):
@@ -621,9 +658,28 @@ class DataEntryWindow(QMainWindow):
                 'team_them_name': team_them_name
             }, Qt.UserRole)
         
-        # Always set to blank selection (index 0 is the placeholder)
-        # Don't auto-select even if game_id is provided - user must select manually
-        self.ui.comboBox.setCurrentIndex(0)
+        # Auto-select game if game_id is provided
+        if self.game_id:
+            # Find the game in the dropdown and select it
+            found = False
+            for i in range(self.ui.comboBox.count()):
+                item_data = self.ui.comboBox.itemData(i, Qt.UserRole)
+                if item_data and item_data.get('game_id') == self.game_id:
+                    self.ui.comboBox.setCurrentIndex(i)
+                    # Disable the combo box if selection is locked
+                    if self.lock_game_selection:
+                        self.ui.comboBox.setEnabled(False)
+                    # Trigger the selection handler
+                    self.on_game_selected(i)
+                    found = True
+                    break
+            
+            if not found:
+                # Game not found in dropdown - set to blank selection
+                self.ui.comboBox.setCurrentIndex(0)
+        else:
+            # Always set to blank selection (index 0 is the placeholder)
+            self.ui.comboBox.setCurrentIndex(0)
     
     def on_game_selected(self, index: int):
         """Handle game selection from dropdown."""
@@ -675,6 +731,9 @@ class DataEntryWindow(QMainWindow):
             self.ui.teamNameUs.setText(item_data['team_us_name'])
         if hasattr(self.ui, 'teamNameThem'):
             self.ui.teamNameThem.setText(item_data['team_them_name'])
+        
+        # Update MainWindow player buttons based on active lineup
+        self.update_mainwindow_player_buttons()
         
         # Load score and rally data for selected game
         self.load_score()
@@ -950,6 +1009,110 @@ class DataEntryWindow(QMainWindow):
         result = cursor.fetchone()
         return result[0] if result else 0
     
+    def get_current_possession_contact_count(self, team_id: int) -> int:
+        """Get the number of contacts made by a team in their current possession.
+        This counts only consecutive contacts by the team since the last opponent contact (or since serve).
+        
+        Args:
+            team_id: The team ID to count contacts for
+            
+        Returns:
+            The number of contacts in the current possession (0, 1, 2, etc.)
+        """
+        if not self.current_rally_id:
+            return 0
+        
+        if not self.db.conn:
+            self.db.connect()
+        
+        cursor = self.db.conn.cursor()
+        # Get all contacts in reverse order (most recent first)
+        cursor.execute("""
+            SELECT team_id, contact_type, sequence_number
+            FROM contacts 
+            WHERE rally_id = ? AND contact_type != 'down'
+            ORDER BY sequence_number DESC
+        """, (self.current_rally_id,))
+        
+        contacts = cursor.fetchall()
+        
+        if not contacts:
+            return 0
+        
+        # Count consecutive contacts by the same team, starting from the most recent
+        count = 0
+        for contact_team_id, contact_type, seq_num in contacts:
+            if contact_team_id == team_id:
+                count += 1
+            else:
+                # Found opponent contact - stop counting
+                break
+        
+        return count
+    
+    def get_team_players(self, team_id: int):
+        """Get players for a team, using active_lineup for team_us, game_players for team_them.
+        
+        Args:
+            team_id: The team ID to get players from
+            
+        Returns:
+            List of (player_id, player_number, player_name) tuples
+        """
+        if not self.game_id:
+            return []
+        
+        if not self.db.conn:
+            self.db.connect()
+        
+        cursor = self.db.conn.cursor()
+        
+        # For team_us, use active_lineup to get players currently on court
+        if team_id == self.team_us_id:
+            cursor.execute("""
+                SELECT p.player_id, 
+                       COALESCE(p.jersey, p.player_number) as player_number,
+                       p.name
+                FROM active_lineup al
+                INNER JOIN players p ON al.player_id = p.player_id
+                WHERE al.team_id = ?
+                ORDER BY al.position_number
+            """, (team_id,))
+            players = cursor.fetchall()
+            
+            # If no active lineup found, fall back to game_players
+            if not players:
+                cursor.execute("""
+                    SELECT p.player_id, p.player_number, p.name
+                    FROM players p
+                    INNER JOIN game_players gp ON p.player_id = gp.player_id
+                    WHERE gp.game_id = ? AND gp.team_id = ?
+                    ORDER BY CASE 
+                        WHEN CAST(p.player_number AS INTEGER) IS NOT NULL 
+                        THEN CAST(p.player_number AS INTEGER)
+                        ELSE 999
+                    END,
+                    p.player_number
+                """, (self.game_id, team_id))
+                players = cursor.fetchall()
+        else:
+            # For team_them, use game_players (existing behavior)
+            cursor.execute("""
+                SELECT p.player_id, p.player_number, p.name
+                FROM players p
+                INNER JOIN game_players gp ON p.player_id = gp.player_id
+                WHERE gp.game_id = ? AND gp.team_id = ?
+                ORDER BY CASE 
+                    WHEN CAST(p.player_number AS INTEGER) IS NOT NULL 
+                    THEN CAST(p.player_number AS INTEGER)
+                    ELSE 999
+                END,
+                p.player_number
+            """, (self.game_id, team_id))
+            players = cursor.fetchall()
+        
+        return players
+    
     def show_player_selection_dialog(self, team_id: int, x_coord: float, y_coord: float, pixel_x: float = None, pixel_y: float = None):
         """Show a dialog to select a player from the specified team.
         
@@ -963,24 +1126,21 @@ class DataEntryWindow(QMainWindow):
         if not self.game_id:
             return
         
-        # Get players for this team in this game
-        if not self.db.conn:
-            self.db.connect()
+        # Detect which side of the court the click is on
+        # Y <= 300 is team_us side, Y > 300 is team_them side
+        is_team_us_side = y_coord <= 300 if y_coord is not None else None
         
-        cursor = self.db.conn.cursor()
-        cursor.execute("""
-            SELECT p.player_id, p.player_number, p.name
-            FROM players p
-            INNER JOIN game_players gp ON p.player_id = gp.player_id
-            WHERE gp.game_id = ? AND gp.team_id = ?
-            ORDER BY CASE 
-                WHEN CAST(p.player_number AS INTEGER) IS NOT NULL 
-                THEN CAST(p.player_number AS INTEGER)
-                ELSE 999
-            END,
-            p.player_number
-        """, (self.game_id, team_id))
-        players = cursor.fetchall()
+        # If click is on team_us side, automatically use team_us for the contact
+        if is_team_us_side is True:
+            team_id = self.team_us_id
+            print(f"DEBUG: Click on team_us side (Y={y_coord}) - using team_us")
+        elif is_team_us_side is False:
+            # Click is on team_them side - use team_them
+            team_id = self.team_them_id
+            print(f"DEBUG: Click on team_them side (Y={y_coord}) - using team_them")
+        
+        # Get players using the new method that uses active_lineup for team_us
+        players = self.get_team_players(team_id)
         
         if not players:
             QMessageBox.warning(self, "No Players", "No players found for this team in this game.")
@@ -989,6 +1149,9 @@ class DataEntryWindow(QMainWindow):
         # Check if the prior contact was a serve by the opponent team
         prior_contact_was_opponent_serve = False
         if self.current_rally_id:
+            if not self.db.conn:
+                self.db.connect()
+            cursor = self.db.conn.cursor()
             cursor.execute("""
                 SELECT contact_type, team_id 
                 FROM contacts 
@@ -1003,11 +1166,58 @@ class DataEntryWindow(QMainWindow):
                 if last_contact_type == 'serve' and last_contact_team_id != team_id:
                     prior_contact_was_opponent_serve = True
         
-        # Get the team's contact count to determine which actions are allowed
-        contact_count = self.get_team_contact_count(team_id)
-        contact_number = contact_count + 1  # This will be the contact number for the next contact
+        # Initialize allowed_actions to empty list (will be populated below)
+        allowed_actions = []
+        
+        # Check if the last contact was by the opponent team - if so, this is a new possession
+        last_contact_was_opponent = False
+        if self.current_rally_id:
+            if not self.db.conn:
+                self.db.connect()
+            cursor = self.db.conn.cursor()
+            cursor.execute("""
+                SELECT team_id 
+                FROM contacts 
+                WHERE rally_id = ? AND contact_type != 'down'
+                ORDER BY sequence_number DESC 
+                LIMIT 1
+            """, (self.current_rally_id,))
+            result = cursor.fetchone()
+            if result:
+                last_contact_team_id = result[0]
+                if last_contact_team_id != team_id:
+                    last_contact_was_opponent = True
+        
+        # If the last contact was by the opponent, this is a new possession for the current team
+        # Reset contact count to 0 (so next contact is contact 1)
+        if last_contact_was_opponent:
+            contact_count = 0
+            contact_number = 1
+            print(f"DEBUG: Last contact was by opponent - treating as {team_id}'s first contact (new possession)")
+        else:
+            # Last contact was by the same team - continue their possession
+            # Count only contacts in the current possession (since last opponent contact or since serve)
+            contact_count = self.get_current_possession_contact_count(team_id)
+            contact_number = contact_count + 1
+            print(f"DEBUG: Last contact was by same team - current possession contact count={contact_count}, contact number={contact_number}")
+        
+        # Special case: If click is on team_us side, ensure we're using team_us
+        if is_team_us_side is True:
+            # Already handled above - team_id was set to team_us_id
+            pass
+        
+        # Get opponent's contact count to check if they can block
+        opponent_team_id = self.team_them_id if team_id == self.team_us_id else self.team_us_id
+        opponent_contact_count = self.get_team_contact_count(opponent_team_id)
+        
+        # Prevent 4th+ contacts - max 3 contacts per team
+        if contact_number > 3:
+            QMessageBox.warning(self, "Invalid Contact", 
+                              f"Maximum 3 contacts allowed per team. This would be contact #{contact_number}.")
+            return
         
         # Determine allowed actions based on whether it's after opponent serve or later in rally
+        # Ensure allowed_actions is always assigned (defensive programming)
         if prior_contact_was_opponent_serve:
             # After opponent's serve: receive, then set/attack/free, then attack/free
             if contact_number == 1:
@@ -1020,15 +1230,8 @@ class DataEntryWindow(QMainWindow):
                 # 3rd contact: attack, free
                 allowed_actions = ['attack', 'freeball']
             else:
-                # 4th+ contact: repeat pattern - pass/attack/block, then set/attack/free, then attack/free
-                # For 4th+ contacts, cycle back to the pattern
-                cycle_contact = ((contact_number - 1) % 3) + 1
-                if cycle_contact == 1:
-                    allowed_actions = ['pass', 'attack', 'block']
-                elif cycle_contact == 2:
-                    allowed_actions = ['set', 'attack', 'freeball']
-                else:  # cycle_contact == 3
-                    allowed_actions = ['attack', 'freeball']
+                # Fallback for unexpected contact_number
+                allowed_actions = ['receive', 'pass', 'set', 'attack', 'freeball']
         else:
             # After serving team has their contact(s) or later in rally: pass/attack/block, then set/attack/free, then attack/free
             if contact_number == 1:
@@ -1041,14 +1244,26 @@ class DataEntryWindow(QMainWindow):
                 # 3rd contact: attack, free
                 allowed_actions = ['attack', 'freeball']
             else:
-                # 4th+ contact: repeat pattern - pass/attack/block, then set/attack/free, then attack/free
-                cycle_contact = ((contact_number - 1) % 3) + 1
-                if cycle_contact == 1:
-                    allowed_actions = ['pass', 'attack', 'block']
-                elif cycle_contact == 2:
-                    allowed_actions = ['set', 'attack', 'freeball']
-                else:  # cycle_contact == 3
-                    allowed_actions = ['attack', 'freeball']
+                # Fallback for unexpected contact_number
+                allowed_actions = ['pass', 'set', 'attack', 'freeball']
+        
+        # Add block as allowed action if opponent has 1st or 2nd contact
+        # Block can happen after opponent's 1st or 2nd contact
+        # Ensure allowed_actions exists before checking/adding
+        if allowed_actions and (opponent_contact_count == 1 or opponent_contact_count == 2):
+            if 'block' not in allowed_actions:
+                allowed_actions.append('block')
+        
+        # Safety check: if allowed_actions is still empty, something went wrong
+        if not allowed_actions:
+            QMessageBox.warning(self, "Invalid Contact", 
+                              f"Cannot determine allowed actions for contact #{contact_number}.")
+            print(f"DEBUG ERROR: allowed_actions is empty - contact_number={contact_number}, prior_serve={prior_contact_was_opponent_serve}, team_id={team_id}")
+            return
+        
+        # Ensure allowed_actions is a list (defensive programming)
+        if not isinstance(allowed_actions, list):
+            allowed_actions = list(allowed_actions) if allowed_actions else []
         
         # Create compact dialog with no title bar
         dialog = QDialog(self.coordinate_mapper if self.coordinate_mapper else self)
@@ -1095,9 +1310,16 @@ class DataEntryWindow(QMainWindow):
                 ("Blk", "block")
             ]
             
+            # Store allowed_actions in local variable to avoid closure issues
+            try:
+                local_allowed_actions = allowed_actions.copy() if allowed_actions else []
+            except (AttributeError, TypeError) as e:
+                print(f"DEBUG ERROR: Failed to copy allowed_actions: {e}, allowed_actions={allowed_actions}")
+                local_allowed_actions = []
+            
             for action_label, action_type in actions:
                 # Only show button if action is allowed for this contact number
-                if action_type not in allowed_actions:
+                if action_type not in local_allowed_actions:
                     continue
                 
                 btn = QPushButton(action_label)
@@ -1150,37 +1372,60 @@ class DataEntryWindow(QMainWindow):
             dialog.move(dialog_x, dialog_y)
         
         # Show dialog and get result
-        if dialog.exec() == QDialog.Accepted and selected_action[0]:
-            player_id_or_down, action_type = selected_action[0]
-            
-            # Check if "down" was selected (floor contact)
-            if player_id_or_down == "down":
-                # Record floor contact
-                self.selected_player_id = None
-                self.selected_player_number = None
-                self.selected_team_id = team_id
-                self.status_label.setText("Recording floor contact (down)...")
-                self.record_contact("down")
-            else:
-                # Set the selected player
-                self.selected_player_id = player_id_or_down
-                self.selected_team_id = team_id
+        # Store allowed_actions in a way that's accessible even if there's a scoping issue
+        # (This is defensive programming - allowed_actions should already be properly scoped)
+        _allowed_actions_backup = allowed_actions.copy() if allowed_actions else []
+        
+        try:
+            if dialog.exec() == QDialog.Accepted and selected_action[0]:
+                player_id_or_down, action_type = selected_action[0]
                 
-                # Get player info for status message
-                cursor.execute("""
-                    SELECT player_number, name
-                    FROM players
-                    WHERE player_id = ?
-                """, (player_id_or_down,))
-                player_info = cursor.fetchone()
-                if player_info:
-                    player_number, player_name = player_info
-                    self.selected_player_number = str(player_number)
-                    player_display = f"#{player_number} {player_name}" if player_name else f"#{player_number}"
-                    self.status_label.setText(f"Selected: {player_display} - Recording {action_type}...")
-                
-                # Record the contact with the selected action type
-                self.record_contact(action_type)
+                # Check if "down" was selected (floor contact)
+                if player_id_or_down == "down":
+                    # Record floor contact
+                    self.selected_player_id = None
+                    self.selected_player_number = None
+                    self.selected_team_id = team_id
+                    self.status_label.setText("Recording floor contact (down)...")
+                    self.record_contact("down")
+                else:
+                    # Set the selected player
+                    self.selected_player_id = player_id_or_down
+                    self.selected_team_id = team_id
+                    
+                    # Get player info for status message
+                    if not self.db.conn:
+                        self.db.connect()
+                    cursor = self.db.conn.cursor()
+                    cursor.execute("""
+                        SELECT player_number, name
+                        FROM players
+                        WHERE player_id = ?
+                    """, (player_id_or_down,))
+                    player_info = cursor.fetchone()
+                    if player_info:
+                        player_number, player_name = player_info
+                        self.selected_player_number = str(player_number)
+                        player_display = f"#{player_number} {player_name}" if player_name else f"#{player_number}"
+                        self.status_label.setText(f"Selected: {player_display} - Recording {action_type}...")
+                    
+                    # Record the contact with the selected action type
+                    self.record_contact(action_type)
+        except UnboundLocalError as e:
+            # Catch scoping errors - this shouldn't happen, but if it does, log and continue
+            error_msg = str(e)
+            print(f"DEBUG ERROR: UnboundLocalError in show_player_selection_dialog: {error_msg}")
+            if 'allowed_actions' in error_msg:
+                print(f"DEBUG ERROR: Scoping issue with allowed_actions. Backup value: {_allowed_actions_backup}")
+            # Don't re-raise - the contact may have already been recorded
+        except Exception as e:
+            # Log other exceptions but don't show error popup if contact was already recorded
+            error_msg = str(e)
+            print(f"DEBUG ERROR: Exception in show_player_selection_dialog: {error_msg}")
+            # Only show error if it's not a scoping issue (those are handled above)
+            if 'allowed_actions' not in error_msg:
+                # Re-raise to let record_contact handle it
+                raise
     
     def eventFilter(self, obj, event):
         """Event filter to capture mouse clicks on outerCourt and court sides."""
@@ -1316,10 +1561,32 @@ class DataEntryWindow(QMainWindow):
             player_number_str = str(player_number)
             self.selected_player_number = player_number_str
             self.selected_team_id = self.team_us_id
-            # Get player_id from database for this game
+            # Get player_id - for team_us, check active_lineup first
             if not self.db.conn:
                 self.db.connect()
-            player = self.db.get_player_by_number_for_game(self.game_id, self.team_us_id, player_number_str)
+            
+            player = None
+            cursor = self.db.conn.cursor()
+            cursor.execute("""
+                SELECT p.player_id, p.player_number, p.name, p.jersey
+                FROM active_lineup al
+                INNER JOIN players p ON al.player_id = p.player_id
+                WHERE al.team_id = ? 
+                AND (p.player_number = ? OR CAST(p.jersey AS TEXT) = ?)
+            """, (self.team_us_id, player_number_str, player_number_str))
+            result = cursor.fetchone()
+            if result:
+                player = {
+                    'player_id': result[0],
+                    'player_number': result[1],
+                    'name': result[2],
+                    'jersey': result[3]
+                }
+            
+            # Fall back to game_players if not found in active_lineup
+            if not player:
+                player = self.db.get_player_by_number_for_game(self.game_id, self.team_us_id, player_number_str)
+            
             if player:
                 self.selected_player_id = player['player_id']
                 self.status_label.setText(f"Selected: Player {player_number_str}")
@@ -1352,6 +1619,25 @@ class DataEntryWindow(QMainWindow):
             # Our team player
             team_id = self.team_us_id
             player_number_str = str(player_number)
+            # For team_us, check active_lineup first
+            if not self.db.conn:
+                self.db.connect()
+            cursor = self.db.conn.cursor()
+            cursor.execute("""
+                SELECT p.player_id, p.player_number, p.name, p.jersey
+                FROM active_lineup al
+                INNER JOIN players p ON al.player_id = p.player_id
+                WHERE al.team_id = ? 
+                AND (p.player_number = ? OR CAST(p.jersey AS TEXT) = ?)
+            """, (self.team_us_id, player_number_str, player_number_str))
+            result = cursor.fetchone()
+            if result:
+                self.selected_player_id = result[0]
+                self.selected_team_id = self.team_us_id
+                self.selected_player_number = player_number_str
+                # Record the contact
+                self.record_contact(action)
+                return
         
         # Set the selected player/team
         if player_number.startswith('o'):
@@ -1359,7 +1645,7 @@ class DataEntryWindow(QMainWindow):
             opponent_player_number = player_number  # Keep the full "o1", "o2", etc.
             self.selected_team_id = self.team_them_id
             self.selected_player_number = opponent_player_number
-            # Get player_id from database for opponent player
+            # Get player_id from database for opponent player (always use game_players for opponents)
             if not self.db.conn:
                 self.db.connect()
             player = self.db.get_player_by_number_for_game(self.game_id, self.team_them_id, opponent_player_number)
@@ -1370,15 +1656,15 @@ class DataEntryWindow(QMainWindow):
                                   f"Opponent player {opponent_player_number} not found in this game. Please add players to the game first.")
                 return
         else:
-            # Our team player
-            self.selected_team_id = self.team_us_id
-            self.selected_player_number = player_number_str
-            # Get player_id from database
+            # Our team player - already handled above with active_lineup check
+            # If we get here, player wasn't found in active_lineup, so fall back to game_players
             if not self.db.conn:
                 self.db.connect()
             player = self.db.get_player_by_number_for_game(self.game_id, self.team_us_id, player_number_str)
             if player:
                 self.selected_player_id = player['player_id']
+                self.selected_team_id = self.team_us_id
+                self.selected_player_number = player_number_str
             else:
                 QMessageBox.warning(self, "Player Not Found", 
                                   f"Player {player_number_str} not found in this game. Please add players to the game first.")
@@ -1490,8 +1776,48 @@ class DataEntryWindow(QMainWindow):
             # Debug output
             print(f"DEBUG: Recording contact with coordinates: x={x_coord}, y={y_coord}, timecode={timecode_ms}ms")
             
-            # Set outcome for "down", "net", and "fault" contacts
-            outcome = "down" if contact_type in ("down", "net", "fault") else "continue"
+            # Detect court side based on Y coordinate
+            # Y <= 300 is team_us side, Y > 300 is team_them side
+            is_team_us_side = y_coord <= 300 if y_coord is not None else None
+            
+            # If click is on team_us side, this is team_us's first contact
+            if is_team_us_side is True and team_id != self.team_us_id:
+                # Click is on team_us side but team_id was set to team_them
+                # This means team_them sent the ball to team_us side - switch to team_us
+                team_id = self.team_us_id
+                self.selected_team_id = team_id
+                # Reset player selection since we're switching teams
+                player_id = None
+                self.selected_player_id = None
+                print(f"DEBUG: Click on team_us side (Y={y_coord}) - switching to team_us first contact")
+            
+            # Block detection based on Y coordinate
+            # If contact_type is block, check Y coordinate to determine team
+            if contact_type == "block" and y_coord is not None:
+                # Y coordinate 301-315: team_them contacted and sent back to team_us side
+                # Y coordinate 285-301: team_us contacted and sent back to team_them side
+                if 301 <= y_coord <= 315:
+                    # team_them blocked and sent back to team_us side
+                    team_id = self.team_them_id
+                    print(f"DEBUG: Block detected at Y={y_coord} - team_them blocked")
+                    # Update selected_team_id to match for consistency
+                    self.selected_team_id = team_id
+                elif 285 <= y_coord < 301:
+                    # team_us blocked and sent back to team_them side
+                    team_id = self.team_us_id
+                    print(f"DEBUG: Block detected at Y={y_coord} - team_us blocked")
+                    # Update selected_team_id to match for consistency
+                    self.selected_team_id = team_id
+                # Note: If Y is outside these ranges, use the originally selected team_id
+            
+            # Set outcome for contacts
+            if contact_type in ("down", "net", "fault"):
+                outcome = "down"
+            elif contact_type == "block":
+                # Block outcome is always "continue"
+                outcome = "continue"
+            else:
+                outcome = "continue"
             
             print(f"DEBUG RECORD: >>> WRITING TO DATABASE <<<")
             print(f"DEBUG RECORD:   rally_id={self.current_rally_id}")
@@ -1516,6 +1842,27 @@ class DataEntryWindow(QMainWindow):
             )
             
             print(f"DEBUG RECORD: *** SUCCESS! Contact saved with contact_id={contact_id} ***")
+            
+            # If this is a "down" contact, check if the previous contact was a block
+            # If so, update the block's outcome to "stuff"
+            if contact_type == "down":
+                if not self.db.conn:
+                    self.db.connect()
+                cursor = self.db.conn.cursor()
+                cursor.execute("""
+                    SELECT contact_id, contact_type, team_id
+                    FROM contacts
+                    WHERE rally_id = ? AND sequence_number < ?
+                    ORDER BY sequence_number DESC
+                    LIMIT 1
+                """, (self.current_rally_id, self.current_sequence))
+                result = cursor.fetchone()
+                if result:
+                    prev_contact_id, prev_contact_type, prev_team_id = result
+                    if prev_contact_type == "block":
+                        # Previous contact was a block - update its outcome to "stuff"
+                        self.db.update_contact_outcome(prev_contact_id, "stuff")
+                        print(f"DEBUG: Updated block contact {prev_contact_id} outcome to 'stuff' (next contact was 'down')")
             
             # Reset opponent contact count if this was a team A contact (not opponent)
             if team_id == self.team_us_id:
@@ -1814,6 +2161,10 @@ class DataEntryWindow(QMainWindow):
     
     def update_score_display(self):
         """Update the score display in status bar."""
+        # Check if score_label exists (may not be initialized yet)
+        if not hasattr(self, 'score_label') or self.score_label is None:
+            return
+        
         if not self.game_id:
             self.score_label.setText("")
             return
@@ -1840,12 +2191,169 @@ class DataEntryWindow(QMainWindow):
     
     def update_status(self):
         """Update the status message."""
+        # Check if status_label exists (may not be initialized yet)
+        if not hasattr(self, 'status_label') or self.status_label is None:
+            return
+        
         if self.rally_in_progress:
             serving_team = "Us" if self.serving_team_id == self.team_us_id else "Them"
             self.status_label.setText(f"Rally #{self.current_rally_number} in progress (served by {serving_team}) | Select player, then contact type")
         else:
             next_serving = "Us" if self.serving_team_id == self.team_us_id else "Them"
             self.status_label.setText(f"Ready for Rally #{self.current_rally_number} | {next_serving} will serve | Start with SERVE")
+    
+    def update_mainwindow_player_buttons(self):
+        """Update MainWindow player buttons and labels based on active lineup for team_us.
+        
+        This method:
+        1. Updates roster labels (label_TeamUsRosterP1-P9) with jersey numbers in ascending order
+        2. Connects buttons on each row to the correct player_id
+        3. Enables/disables player-action buttons based on whether the player is in active lineup
+        """
+        if not self.game_id or not self.team_us_id:
+            return
+        
+        # Get active players for team_us
+        active_players = self.get_team_players(self.team_us_id)
+        
+        if not active_players:
+            return
+        
+        # Get jersey numbers for all players in one query
+        if not self.db.conn:
+            self.db.connect()
+        cursor = self.db.conn.cursor()
+        player_ids = [p[0] for p in active_players]
+        placeholders = ','.join('?' * len(player_ids))
+        cursor.execute(f"""
+            SELECT player_id, COALESCE(jersey, player_number) as jersey
+            FROM players
+            WHERE player_id IN ({placeholders})
+        """, player_ids)
+        jersey_map = {row[0]: row[1] for row in cursor.fetchall()}
+        
+        # Sort players by jersey number (ascending numeric order)
+        def get_jersey_for_sort(player_data):
+            player_id, player_number, player_name = player_data
+            jersey = jersey_map.get(player_id, player_number)
+            try:
+                return int(jersey) if jersey else 999
+            except (ValueError, TypeError):
+                return 999
+        
+        sorted_players = sorted(active_players, key=get_jersey_for_sort)
+        
+        # Create mapping of player_number to player_id for button connections
+        player_number_to_id = {}
+        for player_id, player_number, player_name in sorted_players:
+            player_number_to_id[str(player_number)] = player_id
+        
+        # Update roster labels (label_TeamUsRosterP1 through P9)
+        # Show up to 9 players, sorted by jersey number
+        label_names = [f'label_TeamUsRosterP{i}' for i in range(1, 10)]
+        for i, label_name in enumerate(label_names):
+            if hasattr(self.ui, label_name):
+                label = getattr(self.ui, label_name)
+                if i < len(sorted_players):
+                    player_id, player_number, player_name = sorted_players[i]
+                    # Get jersey number for display (already fetched above)
+                    jersey = jersey_map.get(player_id, player_number)
+                    label.setText(str(jersey))
+                    label.setProperty('player_id', player_id)
+                    label.setProperty('player_number', str(player_number))
+                    label.show()
+                else:
+                    # Hide label if no player for this position
+                    label.setText("")
+                    label.hide()
+        
+        # Update player-action buttons (pattern: {player_number}_{action})
+        # Reconnect buttons to correct player_id based on sorted order
+        action_mapping = {
+            'receive': 'receive',
+            'pass': 'pass',
+            'set': 'set',
+            'attack': 'attack',
+            'freeball': 'freeball',
+            'block': 'block',
+            'serve': 'serve'
+        }
+        
+        # Map of label position to player data
+        position_to_player = {}
+        for i, (player_id, player_number, player_name) in enumerate(sorted_players[:9], 1):
+            jersey = jersey_map.get(player_id, player_number)
+            position_to_player[i] = {
+                'player_id': player_id,
+                'player_number': str(player_number),
+                'jersey': jersey
+            }
+        
+        # Create mapping of jersey/player_number to player data for button connections
+        jersey_to_player = {}
+        for player_id, player_number, player_name in sorted_players:
+            jersey = jersey_map.get(player_id, player_number)
+            jersey_str = str(jersey)
+            player_number_str = str(player_number)
+            # Map both jersey and player_number to the same player
+            jersey_to_player[jersey_str] = {
+                'player_id': player_id,
+                'player_number': player_number_str,
+                'jersey': jersey
+            }
+            if jersey_str != player_number_str:
+                jersey_to_player[player_number_str] = jersey_to_player[jersey_str]
+        
+        # Get all widgets and update player-action buttons
+        # Buttons follow pattern: {jersey}_{action} (e.g., "1_pass", "3_set", "8_attack")
+        for widget_name in dir(self.ui):
+            if not widget_name.startswith('_'):
+                widget = getattr(self.ui, widget_name, None)
+                if widget and hasattr(widget, 'setEnabled') and hasattr(widget, 'clicked'):
+                    # Check if it matches the pattern {jersey}_{action}
+                    if '_' in widget_name:
+                        parts = widget_name.split('_', 1)
+                        if len(parts) == 2:
+                            jersey_part = parts[0]  # e.g., "1", "3", "8"
+                            action_part = parts[1]  # e.g., "pass", "set", "attack"
+                            
+                            # Check if action_part is a valid action
+                            if action_part in action_mapping:
+                                action = action_mapping[action_part]
+                                
+                                # Check if we have a player with this jersey/number
+                                if jersey_part in jersey_to_player:
+                                    player_data = jersey_to_player[jersey_part]
+                                    player_number_str = player_data['player_number']
+                                    
+                                    # Disconnect existing connections
+                                    # Check if widget exists and has the clicked signal before disconnecting
+                                    if widget is not None and hasattr(widget, 'clicked'):
+                                        try:
+                                            # Try to disconnect all connections
+                                            # If no connections exist, this will emit a RuntimeWarning
+                                            # We suppress it by catching the exception or using a context manager
+                                            import warnings
+                                            with warnings.catch_warnings():
+                                                warnings.simplefilter("ignore", RuntimeWarning)
+                                                widget.clicked.disconnect()
+                                        except (TypeError, RuntimeError):
+                                            # No connections to disconnect or signal not connected
+                                            pass
+                                    
+                                    # Reconnect to correct player
+                                    widget.clicked.connect(
+                                        lambda checked=False, pnum=player_number_str, act=action: 
+                                        self.handle_player_action(pnum, act)
+                                    )
+                                    
+                                    # Enable button
+                                    widget.setEnabled(True)
+                                    widget.setStyleSheet("")  # Clear any previous styling
+                                else:
+                                    # No player with this jersey - disable button
+                                    widget.setEnabled(False)
+                                    widget.setStyleSheet("background-color: #E0E0E0; color: #808080;")
     
     def update_ui_state(self):
         """Update UI button states based on current game state."""
@@ -1862,15 +2370,15 @@ class DataEntryWindow(QMainWindow):
             # Rally not started - only serve is allowed
             allowed_actions = ['serve']
         else:
-            # Get the last contact type in the current rally
+            # Get the last contact type and team in the current rally
             if not self.db.conn:
                 self.db.connect()
             
             cursor = self.db.conn.cursor()
             cursor.execute("""
-                SELECT contact_type 
+                SELECT contact_type, team_id
                 FROM contacts 
-                WHERE rally_id = ? 
+                WHERE rally_id = ? AND contact_type != 'down'
                 ORDER BY sequence_number DESC 
                 LIMIT 1
             """, (self.current_rally_id,))
@@ -1878,21 +2386,49 @@ class DataEntryWindow(QMainWindow):
             result = cursor.fetchone()
             
             if result:
-                last_contact_type = result[0]
+                last_contact_type, last_contact_team_id = result[0], result[1]
                 
-                # Apply volleyball rules based on last contact type
+                # Get contact counts for both teams
+                team_us_count = self.get_team_contact_count(self.team_us_id)
+                team_them_count = self.get_team_contact_count(self.team_them_id)
+                
+                # Determine which team is making the next contact
+                # If last contact was by team_us, next is team_them, and vice versa
+                next_team_id = self.team_them_id if last_contact_team_id == self.team_us_id else self.team_us_id
+                next_team_count = team_them_count if next_team_id == self.team_them_id else team_us_count
+                next_contact_number = next_team_count + 1
+                
+                # Get opponent's contact count (the team that just contacted)
+                opponent_contact_count = team_us_count if last_contact_team_id == self.team_us_id else team_them_count
+                
+                # Apply volleyball rules based on last contact type and contact sequence
                 if last_contact_type == 'serve':
                     # After serve, only receive is allowed
                     allowed_actions = ['receive']
                 elif last_contact_type == 'receive':
-                    # After receive, pass, set, attack, block, freeball allowed (not receive or serve)
-                    allowed_actions = ['pass', 'set', 'attack', 'block', 'freeball']
+                    # After receive, pass, set, attack, freeball allowed (not receive or serve)
+                    # Also allow block if opponent has 1st or 2nd contact
+                    allowed_actions = ['pass', 'set', 'attack', 'freeball']
+                    if opponent_contact_count == 1 or opponent_contact_count == 2:
+                        allowed_actions.append('block')
                 elif last_contact_type in ['pass', 'set']:
-                    # After pass/set, set, attack, block, freeball allowed
-                    allowed_actions = ['set', 'attack', 'block', 'freeball']
+                    # After pass/set, set, attack, freeball allowed
+                    # Also allow block if opponent has 1st or 2nd contact
+                    allowed_actions = ['set', 'attack', 'freeball']
+                    if opponent_contact_count == 1 or opponent_contact_count == 2:
+                        allowed_actions.append('block')
                 elif last_contact_type in ['attack', 'block', 'freeball']:
-                    # After attack/block/freeball, all actions except serve
-                    allowed_actions = ['receive', 'pass', 'set', 'attack', 'block', 'freeball']
+                    # After attack/block/freeball, check contact number
+                    if next_contact_number == 1:
+                        allowed_actions = ['pass', 'attack', 'block']
+                    elif next_contact_number == 2:
+                        allowed_actions = ['set', 'attack', 'freeball']
+                        # Also allow block if opponent has 1st or 2nd contact
+                        if opponent_contact_count == 1 or opponent_contact_count == 2:
+                            allowed_actions.append('block')
+                    elif next_contact_number == 3:
+                        allowed_actions = ['attack', 'freeball']
+                    # No 4th+ contact allowed
                 else:
                     # Default: allow all except serve
                     allowed_actions = ['receive', 'pass', 'set', 'attack', 'block', 'freeball']

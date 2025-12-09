@@ -191,6 +191,81 @@ class VideoStatsDB:
             )
         """)
         
+        # Positions table (static - immutable position definitions)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS positions (
+                number INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                abbrev TEXT NOT NULL,
+                row TEXT NOT NULL CHECK(row IN ('Front', 'Back')),
+                side TEXT NOT NULL CHECK(side IN ('Left', 'Middle', 'Right')),
+                x INTEGER NOT NULL,
+                y INTEGER NOT NULL
+            )
+        """)
+        
+        # Active lineup table - who is currently in each position
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS active_lineup (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                team_id INTEGER NOT NULL REFERENCES teams(team_id),
+                position_number INTEGER NOT NULL REFERENCES positions(number),
+                player_id INTEGER NOT NULL REFERENCES players(player_id),
+                role_code TEXT NOT NULL,
+                is_server BOOLEAN DEFAULT 0,
+                placed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(team_id, position_number)
+            )
+        """)
+        
+        # Rotation state table - current rotation index and term of service
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS rotation_state (
+                team_id INTEGER PRIMARY KEY REFERENCES teams(team_id),
+                rotation_order TEXT NOT NULL, -- JSON array e.g. [1,6,5,4,3,2]
+                rotation_index INTEGER NOT NULL DEFAULT 0,
+                serving BOOLEAN DEFAULT 0,
+                term_of_service_start TIMESTAMP NULL
+            )
+        """)
+        
+        # Events log table (generic)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                team_id INTEGER NOT NULL REFERENCES teams(team_id),
+                event_type TEXT NOT NULL CHECK(event_type IN ('rotation', 'substitution', 'libero', 'server_change', 'initial_setup')),
+                payload TEXT NOT NULL, -- JSON
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        # Substitutions table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS substitutions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                team_id INTEGER NOT NULL REFERENCES teams(team_id),
+                out_player_id INTEGER NOT NULL REFERENCES players(player_id),
+                in_player_id INTEGER NOT NULL REFERENCES players(player_id),
+                out_position INTEGER NULL,
+                in_position INTEGER NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        # Libero actions table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS libero_actions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                team_id INTEGER NOT NULL REFERENCES teams(team_id),
+                libero_id INTEGER NOT NULL REFERENCES players(player_id),
+                replaced_player_id INTEGER NOT NULL REFERENCES players(player_id),
+                replaced_position INTEGER NOT NULL,
+                action TEXT NOT NULL CHECK(action IN ('enter', 'exit')),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
         # Create indexes for better query performance
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_contacts_rally ON contacts(rally_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_contacts_player ON contacts(player_id)")
@@ -202,6 +277,28 @@ class VideoStatsDB:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_game_players_player ON game_players(player_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_player_stats_game ON player_stats(game_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_player_stats_player ON player_stats(player_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_active_lineup_team ON active_lineup(team_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_active_lineup_player ON active_lineup(player_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_team ON events(team_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_substitutions_team ON substitutions(team_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_libero_actions_team ON libero_actions(team_id)")
+        
+        # Populate positions table with static data if empty
+        cursor.execute("SELECT COUNT(*) FROM positions")
+        if cursor.fetchone()[0] == 0:
+            positions_data = [
+                (1, 'Right Back', 'RB', 'Back', 'Right', 299, 0),
+                (2, 'Right Front', 'RF', 'Front', 'Right', 299, 299),
+                (3, 'Middle Front', 'MF', 'Front', 'Middle', 150, 299),
+                (4, 'Left Front', 'LF', 'Front', 'Left', 0, 299),
+                (5, 'Left Back', 'LB', 'Back', 'Left', 0, 0),
+                (6, 'Middle Back', 'MB', 'Back', 'Middle', 150, 0)
+            ]
+            cursor.executemany(
+                "INSERT INTO positions (number, name, abbrev, row, side, x, y) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                positions_data
+            )
         
         self.conn.commit()
         print("Database tables created successfully!")
@@ -590,6 +687,56 @@ class VideoStatsDB:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_player_stats_player ON player_stats(player_id)")
             self.conn.commit()
             print("player_stats table created successfully!")
+        
+        # Add new columns to players table for lineup management
+        cursor.execute("PRAGMA table_info(players)")
+        columns = [row[1] for row in cursor.fetchall()]
+        
+        if 'role_code' not in columns:
+            print("Adding role_code column to players table...")
+            try:
+                cursor.execute("ALTER TABLE players ADD COLUMN role_code TEXT")
+                self.conn.commit()
+                print("role_code column added successfully!")
+            except Exception as e:
+                print(f"Failed to add role_code column: {e}")
+        
+        if 'is_active' not in columns:
+            print("Adding is_active column to players table...")
+            try:
+                cursor.execute("ALTER TABLE players ADD COLUMN is_active BOOLEAN DEFAULT 0")
+                self.conn.commit()
+                print("is_active column added successfully!")
+            except Exception as e:
+                print(f"Failed to add is_active column: {e}")
+        
+        if 'jersey' not in columns:
+            print("Adding jersey column to players table...")
+            try:
+                cursor.execute("ALTER TABLE players ADD COLUMN jersey INTEGER")
+                self.conn.commit()
+                print("jersey column added successfully!")
+            except Exception as e:
+                print(f"Failed to add jersey column: {e}")
+        
+        # Ensure positions table is populated
+        cursor.execute("SELECT COUNT(*) FROM positions")
+        if cursor.fetchone()[0] == 0:
+            print("Populating positions table...")
+            positions_data = [
+                (1, 'Right Back', 'RB', 'Back', 'Right', 299, 0),
+                (2, 'Right Front', 'RF', 'Front', 'Right', 299, 299),
+                (3, 'Middle Front', 'MF', 'Front', 'Middle', 150, 299),
+                (4, 'Left Front', 'LF', 'Front', 'Left', 0, 299),
+                (5, 'Left Back', 'LB', 'Back', 'Left', 0, 0),
+                (6, 'Middle Back', 'MB', 'Back', 'Middle', 150, 0)
+            ]
+            cursor.executemany(
+                "INSERT INTO positions (number, name, abbrev, row, side, x, y) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                positions_data
+            )
+            self.conn.commit()
+            print("Positions table populated successfully!")
     
     # Helper methods for common operations
     

@@ -352,12 +352,12 @@ class ContactEditDialog(QDialog):
         
         self.setWindowTitle("Edit Contact")
         self.setModal(True)
-        self.resize(1800, 1000)  # Larger window
+        self.resize(1550, 800)  # Fits on 1920x1080 screen (video scene stays 1200x666 for homography)
         
         # Main layout
         main_layout = QHBoxLayout(self)
-        main_layout.setContentsMargins(10, 10, 10, 10)
-        main_layout.setSpacing(10)
+        main_layout.setContentsMargins(5, 5, 5, 5)  # Reduced from 10 to 5 for less white space
+        main_layout.setSpacing(5)  # Reduced from 10 to 5
         
         # Left side: Video player
         video_widget = QWidget()
@@ -917,15 +917,33 @@ class ContactEditDialog(QDialog):
             return
         team_us_id, team_them_id = result
         
-        # Get only team_us players
+        # Get team_us players from active_lineup (current lineup on court)
         cursor.execute("""
-            SELECT p.player_id, p.player_number, p.name
-            FROM players p
-            WHERE p.team_id = ?
-            ORDER BY p.player_number
+            SELECT p.player_id, 
+                   COALESCE(p.jersey, p.player_number) as player_number,
+                   p.name
+            FROM active_lineup al
+            INNER JOIN players p ON al.player_id = p.player_id
+            WHERE al.team_id = ?
+            ORDER BY al.position_number
         """, (team_us_id,))
         
         players = cursor.fetchall()
+        
+        # If no active lineup found, fall back to all team players
+        if not players:
+            cursor.execute("""
+                SELECT p.player_id, p.player_number, p.name
+                FROM players p
+                WHERE p.team_id = ?
+                ORDER BY CASE 
+                    WHEN CAST(p.player_number AS INTEGER) IS NOT NULL 
+                    THEN CAST(p.player_number AS INTEGER)
+                    ELSE 999
+                END,
+                p.player_number
+            """, (team_us_id,))
+            players = cursor.fetchall()
         
         # Add "Floor" option (no player)
         floor_rb = QRadioButton("Floor")
@@ -1197,8 +1215,8 @@ class ContactPathViewer(QMainWindow):
         # Graphics scene for drawing contacts
         self.scene = None
         self.graphics_view = None
-        self.court_width = 440  # Scaled up to make total ~900px tall
-        self.court_height = 880  # Scaled up to make total ~900px tall
+        self.court_width = 374  # Reduced by 15% to fit full court with apron (was 440)
+        self.court_height = 748  # Reduced by 15% to fit full court with apron (was 880)
         self.apron_size = 10
         self.centerline_item = None  # Store reference to centerline for redrawing
         
@@ -1237,10 +1255,10 @@ class ContactPathViewer(QMainWindow):
     
     def setup_graphics_view(self):
         """Set up QGraphicsView for drawing contacts. Creates it in outerCourt if available, otherwise creates standalone on left side."""
-        # Court dimensions: 440 units wide, 880 units tall
-        # With 10-unit apron on all sides: total is 460 x 900
-        total_width = self.court_width + (self.apron_size * 2)  # 460
-        total_height = self.court_height + (self.apron_size * 2)  # 900
+        # Court dimensions: 374 units wide, 748 units tall (reduced by 15% to fit full court with apron)
+        # With 10-unit apron on all sides: total is 394 x 768
+        total_width = self.court_width + (self.apron_size * 2)  # 394
+        total_height = self.court_height + (self.apron_size * 2)  # 768
         
         # Create graphics scene with total dimensions including apron
         self.scene = ClickableGraphicsScene(self, 0, 0, total_width, total_height)
@@ -1272,14 +1290,14 @@ class ContactPathViewer(QMainWindow):
                 
                 # Create graphics view with fixed size to ensure controls remain visible
                 self.graphics_view = QGraphicsView(self.scene)
-                self.graphics_view.setFixedSize(640, 1000)  # Fixed size to not cover controls
+                self.graphics_view.setFixedSize(576, 768)  # Reduced height to match smaller scene (748 + 20 apron)
                 
                 # Insert at beginning of layout (left side)
                 layout.insertWidget(0, self.graphics_view)
             else:
                 # Fallback: create standalone
                 self.graphics_view = QGraphicsView(self.scene)
-                self.graphics_view.setFixedSize(640, 1000)
+                self.graphics_view.setFixedSize(576, 768)  # Reduced height to match smaller scene
         
         # Configure graphics view
         self.graphics_view.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -2570,9 +2588,9 @@ class ContactPathViewer(QMainWindow):
         if not self.scene:
             return
         
-        # Court dimensions: 440 x 880 with 10-unit apron
-        court_width = getattr(self, 'court_width', 440)
-        court_height = getattr(self, 'court_height', 880)
+        # Court dimensions: 374 x 748 with 10-unit apron (reduced by 15%)
+        court_width = getattr(self, 'court_width', 374)
+        court_height = getattr(self, 'court_height', 748)
         apron_size = getattr(self, 'apron_size', 10)
         
         # Create a set of filtered contact (rally_id, seq_num) tuples for quick lookup
@@ -2597,8 +2615,8 @@ class ContactPathViewer(QMainWindow):
         # Database coordinates are in the original 300x600 system, need to scale to current court size
         db_court_width = 300
         db_court_height = 600
-        scale_x = court_width / db_court_width  # 440/300 = 1.467
-        scale_y = court_height / db_court_height  # 880/600 = 1.467
+        scale_x = court_width / db_court_width  # 374/300 = 1.247 (was 1.467)
+        scale_y = court_height / db_court_height  # 748/600 = 1.247 (was 1.467)
         
         for contact in filtered_contacts:
             (contact_id, rally_id, seq_num, contact_type, x, y, 
@@ -2612,7 +2630,7 @@ class ContactPathViewer(QMainWindow):
             scaled_y = y * scale_y
             
             # Convert y from lower-left origin (stored in DB: 0 at bottom, 600 at top)
-            # to top-left origin (Qt Graphics: 0 at top, 880 at bottom)
+            # to top-left origin (Qt Graphics: 0 at top, 748 at bottom)
             # Then add apron offset
             draw_y = apron_size + (court_height - scaled_y)
             draw_x = apron_size + scaled_x

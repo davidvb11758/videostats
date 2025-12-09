@@ -70,6 +70,7 @@ class CoordinateMapper(QMainWindow):
         self.media_player.setAudioOutput(self.audio_output)
         self.video_item = None  # Will be created when video is loaded
         self.video_loaded = False
+        self.video_file_path = None  # Store the video file path
         
         # Setup UI
         self.setup_ui()
@@ -169,6 +170,7 @@ class CoordinateMapper(QMainWindow):
         # Connect media player signals
         self.media_player.positionChanged.connect(self.update_position)
         self.media_player.durationChanged.connect(self.update_duration)
+        self.media_player.mediaStatusChanged.connect(self.on_media_status_changed)
         
         # Install event filter on the view to capture mouse clicks and key presses
         self.view.viewport().installEventFilter(self)
@@ -251,15 +253,30 @@ class CoordinateMapper(QMainWindow):
         # Load the video
         self.media_player.setSource(QUrl.fromLocalFile(file_path))
         
-        # Enable controls
-        self.play_pause_btn.setEnabled(True)
-        self.video_slider.setEnabled(True)
-        self.speed_combo.setEnabled(True)
+        # Store the video file path
+        self.video_file_path = file_path
         self.video_loaded = True
+        
+        # Enable controls when media is ready (will be enabled in on_media_status_changed)
+        # Also enable immediately as fallback
+        self.enable_video_controls()
         
         # Update status
         self.status_label.setText("Video loaded. Click 'Set Court Boundaries' to start defining the court.")
         print(f"DEBUG: Video loaded from: {file_path}")
+    
+    def enable_video_controls(self):
+        """Enable video playback controls."""
+        self.play_pause_btn.setEnabled(True)
+        self.video_slider.setEnabled(True)
+        self.speed_combo.setEnabled(True)
+    
+    def on_media_status_changed(self, status):
+        """Handle media status changes to enable controls when media is loaded."""
+        from PySide6.QtMultimedia import QMediaPlayer
+        if status == QMediaPlayer.MediaStatus.LoadedMedia or status == QMediaPlayer.MediaStatus.BufferedMedia:
+            self.enable_video_controls()
+            print(f"DEBUG: Media status changed to {status}, controls enabled")
     
     def toggle_play_pause(self):
         """Toggle between play and pause."""
@@ -367,7 +384,16 @@ class CoordinateMapper(QMainWindow):
                 print(f"DEBUG: Storing court boundaries for game_id = {self.game_id}")
                 # Save homography matrix along with court boundaries
                 self.db.save_game_court_boundaries(self.game_id, court_points_dict, self.homography_matrix)
-                status_msg = f"Court boundaries stored to database for game {self.game_id}! Click on contact locations to map coordinates."
+                
+                # Save video file path if available
+                if self.video_file_path:
+                    try:
+                        self.db.update_game_video_path(self.game_id, self.video_file_path)
+                        print(f"DEBUG: Video file path stored: {self.video_file_path}")
+                    except Exception as e:
+                        print(f"Warning: Failed to save video file path: {e}")
+                
+                status_msg = f"Court boundaries and video path stored to database for game {self.game_id}! Click on contact locations to map coordinates."
             except Exception as e:
                 status_msg = f"Error saving to database: {str(e)}"
                 print(f"Database error: {e}")
