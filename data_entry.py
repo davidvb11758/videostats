@@ -2,13 +2,16 @@
 Data entry screen for tracking ball contacts during a volleyball game.
 """
 
-from PySide6.QtWidgets import QMainWindow, QMessageBox, QLabel, QDialog, QVBoxLayout, QHBoxLayout, QListWidget, QPushButton, QListWidgetItem, QScrollArea, QWidget
+from PySide6.QtWidgets import QMainWindow, QMessageBox, QLabel, QDialog, QVBoxLayout, QHBoxLayout, QListWidget, QPushButton, QListWidgetItem, QScrollArea, QWidget, QGroupBox, QGridLayout
 from PySide6.QtCore import Qt, QEvent, QPoint, Signal, QObject, QThread
 from PySide6.QtGui import QMouseEvent, QFont
+from PySide6.QtUiTools import QUiLoader
+from pathlib import Path
 from database import VideoStatsDB
 from datetime import datetime
 from typing import Optional
 from coordinate_mapper import CoordinateMapper
+from lineup_manager import LineupManager
 import json
 import threading
 
@@ -238,6 +241,9 @@ class DataEntryWindow(QMainWindow):
         self.team_them_id = team_them_id
         self.game_id = game_id
         self.lock_game_selection = lock_game_selection
+        
+        # Lineup manager for rotations
+        self.lineup_manager = LineupManager(db)
         
         # Rally tracking
         self.current_rally_id = None
@@ -553,22 +559,22 @@ class DataEntryWindow(QMainWindow):
             self.status_label.setText("No rally in progress - cannot record DOWN contact")
             return
         
-        # Only handle double-clicks on opponent side (team_them_id)
-        # Y > 300 is opponent side, Y <= 300 is our side
+        # Handle double-clicks on both sides
+        # Y > 300 is opponent side (team_them), Y <= 300 is our side (team_us)
         if logical_y <= 300:
-            # Double-click on our side - ignore or handle differently if needed
-            self.status_label.setText("Double-click on opponent side to record DOWN contact")
-            return
+            # Double-click on team_us side - always allow DOWN contact (even on 4th contact)
+            # because the ball contacted the floor, not a player
+            losing_team_id = self.team_us_id
+            print(f"DEBUG: on_double_click_mapped - DOWN contact at x={logical_x}, y={logical_y}, timecode={timecode_ms}ms (team_us side)")
+        else:
+            # Double-click on team_them side
+            losing_team_id = self.team_them_id
+            print(f"DEBUG: on_double_click_mapped - DOWN contact at x={logical_x}, y={logical_y}, timecode={timecode_ms}ms (opponent side)")
         
         # Store the coordinates
         self.last_clicked_x = logical_x
         self.last_clicked_y = logical_y
         self.last_clicked_timecode = timecode_ms
-        
-        print(f"DEBUG: on_double_click_mapped - DOWN contact at x={logical_x}, y={logical_y}, timecode={timecode_ms}ms (opponent side)")
-        
-        # Ball went down on opponent side - set team_them_id as losing team
-        losing_team_id = self.team_them_id
         
         # Set up for DOWN contact
         self.selected_team_id = losing_team_id
@@ -1113,8 +1119,96 @@ class DataEntryWindow(QMainWindow):
         
         return players
     
+    def get_active_lineup_with_roles(self, team_id: int):
+        """Get active lineup players with their role_code and position_number.
+        
+        Args:
+            team_id: The team ID to get active lineup for
+            
+        Returns:
+            List of (player_id, player_number, player_name, role_code, position_number) tuples
+        """
+        if not self.game_id:
+            return []
+        
+        if not self.db.conn:
+            self.db.connect()
+        
+        cursor = self.db.conn.cursor()
+        
+        # For team_us, get active lineup with roles and positions
+        if team_id == self.team_us_id:
+            cursor.execute("""
+                SELECT p.player_id, 
+                       COALESCE(p.jersey, p.player_number) as player_number,
+                       p.name,
+                       al.role_code,
+                       al.position_number
+                FROM active_lineup al
+                INNER JOIN players p ON al.player_id = p.player_id
+                WHERE al.team_id = ?
+                ORDER BY al.position_number
+            """, (team_id,))
+            return cursor.fetchall()
+        else:
+            # For team_them, return empty (they don't use active_lineup)
+            return []
+    
+    def map_player_to_groupbox(self, role_code: str, position_number: int, has_libero: bool):
+        """Map a player to a GroupBox based on role and position.
+        
+        Args:
+            role_code: Player's role (OH, MH, RS, S, Lib, DS)
+            position_number: Court position (1-6)
+            has_libero: Whether libero is currently on court
+            
+        Returns:
+            GroupBox name (e.g., 'groupBox_LF') or None if no match
+        """
+        # Normalize role codes (RS and RH are synonyms, S is Setter)
+        role = role_code.upper()
+        if role == 'RH':
+            role = 'RS'
+        
+        # Front row positions: 2, 3, 4 (RF, MF, LF)
+        # Back row positions: 1, 5, 6 (RB, MB, LB)
+        FRONT_ROW = {2, 3, 4}
+        BACK_ROW = {1, 5, 6}
+        
+        if position_number in FRONT_ROW:
+            # Front row logic
+            if role == 'OH':
+                return 'groupBox_LF'
+            elif role == 'MH':
+                return 'groupBox_MF'
+            elif role in ('RS', 'S'):
+                return 'groupBox_RF'
+        elif position_number in BACK_ROW:
+            # Back row logic
+            if role == 'Lib':
+                # Libero always uses LB when in back row
+                return 'groupBox_LB'
+            elif role in ('S', 'RS'):
+                # Setter or RS always uses RB when in back row
+                return 'groupBox_RB'
+            elif role in ('OH', 'DS'):
+                # OH or DS: use MB normally, but LB when libero is NOT on court
+                if has_libero:
+                    return 'groupBox_MB'
+                else:
+                    return 'groupBox_LB'
+            elif role == 'MH':
+                # MH: use MB when libero is NOT on court
+                if not has_libero:
+                    return 'groupBox_MB'
+                # If libero is on court and MH is in back row, no specific mapping?
+                # (This case might not occur in practice)
+                return None
+        
+        return None
+    
     def show_player_selection_dialog(self, team_id: int, x_coord: float, y_coord: float, pixel_x: float = None, pixel_y: float = None):
-        """Show a dialog to select a player from the specified team.
+        """Show a dialog to select a player from the specified team using the new UI layout.
         
         Args:
             team_id: The team ID to get players from
@@ -1139,12 +1233,23 @@ class DataEntryWindow(QMainWindow):
             team_id = self.team_them_id
             print(f"DEBUG: Click on team_them side (Y={y_coord}) - using team_them")
         
-        # Get players using the new method that uses active_lineup for team_us
-        players = self.get_team_players(team_id)
-        
-        if not players:
-            QMessageBox.warning(self, "No Players", "No players found for this team in this game.")
-            return
+        # Only use new UI for team_us (they have active_lineup)
+        # For team_them, fall back to old dialog
+        if team_id != self.team_us_id:
+            # For team_them, use the old dialog implementation
+            players = self.get_team_players(team_id)
+            if not players:
+                QMessageBox.warning(self, "No Players", "No players found for this team in this game.")
+                return
+            # Continue with old dialog implementation below (will be handled in the else branch)
+            use_new_ui = False
+        else:
+            # For team_us, use new UI with active lineup
+            active_players = self.get_active_lineup_with_roles(team_id)
+            if not active_players:
+                QMessageBox.warning(self, "No Players", "No active players found for this team.")
+                return
+            use_new_ui = True
         
         # Check if the prior contact was a serve by the opponent team
         prior_contact_was_opponent_serve = False
@@ -1210,7 +1315,54 @@ class DataEntryWindow(QMainWindow):
         opponent_team_id = self.team_them_id if team_id == self.team_us_id else self.team_us_id
         opponent_contact_count = self.get_team_contact_count(opponent_team_id)
         
-        # Prevent 4th+ contacts - max 3 contacts per team
+        # Handle 4th contact on team_us side - show small popup with only "down" button
+        if contact_number > 3 and team_id == self.team_us_id:
+            # Show a very small popup with only "down" button for 4th contact on team_us side
+            dialog = QDialog(self.coordinate_mapper if self.coordinate_mapper else self)
+            dialog.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint)
+            dialog.setModal(True)
+            
+            layout = QVBoxLayout()
+            layout.setContentsMargins(5, 5, 5, 5)
+            layout.setSpacing(2)
+            
+            down_btn = QPushButton("Down (Error)")
+            down_btn.setFont(QFont('Arial', 9))
+            down_btn.setFixedSize(80, 30)
+            down_btn.setStyleSheet("background-color: #FF6B6B; border: 1px solid #505050;")
+            
+            selected_action = [None]
+            down_btn.clicked.connect(lambda: (selected_action.__setitem__(0, ["down", "down", "error"]), dialog.accept()))
+            
+            layout.addWidget(down_btn)
+            dialog.setLayout(layout)
+            dialog.setFixedSize(90, 40)
+            
+            # Position dialog to the upper right corner of the clicked point
+            if self.coordinate_mapper and pixel_x is not None and pixel_y is not None:
+                mapper_pos = self.coordinate_mapper.mapToGlobal(QPoint(0, 0))
+                dialog_x = mapper_pos.x() + int(pixel_x) + 10
+                dialog_y = mapper_pos.y() + int(pixel_y) - 40
+                dialog.move(dialog_x, dialog_y)
+            elif pixel_x is not None and pixel_y is not None:
+                dialog_x = int(pixel_x) + 10
+                dialog_y = int(pixel_y) - 40
+                dialog.move(dialog_x, dialog_y)
+            
+            if dialog.exec() == QDialog.Accepted and selected_action[0]:
+                # Record down contact with error outcome
+                self.selected_player_id = None
+                self.selected_player_number = None
+                self.selected_team_id = team_id
+                if hasattr(self, 'status_label'):
+                    self.status_label.setText("Recording DOWN contact (error)...")
+                # Store the outcome for record_contact
+                self._pending_contact_outcome = "error"
+                self.record_contact("down")
+                self._pending_contact_outcome = None
+            return
+        
+        # Prevent 4th+ contacts for team_them - max 3 contacts per team
         if contact_number > 3:
             QMessageBox.warning(self, "Invalid Contact", 
                               f"Maximum 3 contacts allowed per team. This would be contact #{contact_number}.")
@@ -1265,31 +1417,292 @@ class DataEntryWindow(QMainWindow):
         if not isinstance(allowed_actions, list):
             allowed_actions = list(allowed_actions) if allowed_actions else []
         
-        # Create compact dialog with no title bar
-        dialog = QDialog(self.coordinate_mapper if self.coordinate_mapper else self)
-        dialog.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint)
-        dialog.setModal(True)
-        
-        main_layout = QVBoxLayout()
-        main_layout.setContentsMargins(3, 3, 3, 3)
-        main_layout.setSpacing(2)
-        
-        # Store selected action info
-        selected_action = [None]  # [player_id, action_type] or ["down", "down"]
-        
-        # Define action colors matching the player-contact grid
-        action_colors = {
-            'receive': '#FFB3B3',    # light red
-            'pass': '#DDA0DD',       # light purple (plum) - for Dig
-            'set': '#ADD8E6',        # light blue
-            'attack': '#E0FFFF',     # light cyan
-            'freeball': '#90EE90',   # light green
-            'block': '#BFFF00'       # lime (light yellowish-green)
-        }
-        
-        # Create a row for each player with action buttons
-        for player_id, player_number, player_name in players:
-            row_layout = QHBoxLayout()
+        # Use new UI for team_us, old UI for team_them
+        if use_new_ui:
+            # Load the new UI file
+            ui_file = Path(__file__).parent / "contact-popup1.ui"
+            loader = QUiLoader()
+            dialog_widget = loader.load(str(ui_file))
+            
+            if not dialog_widget:
+                QMessageBox.critical(self, "Error", "Failed to load contact popup UI file.")
+                return
+            
+            # Create dialog and set widget
+            dialog = QDialog(self.coordinate_mapper if self.coordinate_mapper else self)
+            dialog.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint)
+            dialog.setModal(True)
+            
+            dialog_layout = QVBoxLayout(dialog)
+            dialog_layout.setContentsMargins(0, 0, 0, 0)
+            dialog_layout.addWidget(dialog_widget)
+            
+            # Store selected action info
+            selected_action = [None]  # [player_id, action_type] or ["down", "down"]
+            
+            # Check if libero is on court
+            has_libero = any(role == 'Lib' for _, _, _, role, _ in active_players)
+            
+            # Map players to GroupBoxes
+            groupbox_assignments = {}  # {groupbox_name: [(player_id, player_number, player_name, role_code, position_number), ...]}
+            
+            for player_data in active_players:
+                player_id, player_number, player_name, role_code, position_number = player_data
+                groupbox_name = self.map_player_to_groupbox(role_code, position_number, has_libero)
+                if groupbox_name:
+                    if groupbox_name not in groupbox_assignments:
+                        groupbox_assignments[groupbox_name] = []
+                    groupbox_assignments[groupbox_name].append(player_data)
+            
+            # Define button configurations by contact number
+            # Button order: 1st contact row (buttons 1-3), 2nd contact row (buttons 4-5), 3rd contact row (buttons 6-7)
+            button_configs = {
+                1: {  # 1st contact
+                    'after_serve': [
+                        ('Recv', 'receive', '#DDA0DD'),  # pushButton_X_1
+                    ],
+                    'other': [
+                        ('Dig', 'pass', '#DDA0DD'),      # pushButton_X_1
+                    ],
+                    'common': [
+                        ('Attack', 'attack', '#E0FFFF'),  # pushButton_X_2
+                        ('Block', 'block', '#BFFF00')     # pushButton_X_3
+                    ]
+                },
+                2: {  # 2nd contact
+                    'buttons': [
+                        ('Set', 'set', '#ADD8E6'),       # pushButton_X_4
+                        ('Free', 'freeball', '#90EE90')  # pushButton_X_5
+                    ]
+                },
+                3: {  # 3rd contact
+                    'buttons': [
+                        ('Attack', 'attack', '#E0FFFF'), # pushButton_X_6
+                        ('Free', 'freeball', '#90EE90')  # pushButton_X_7
+                    ]
+                }
+            }
+            
+            # Define action colors
+            action_colors = {
+                'receive': '#DDA0DD',
+                'pass': '#DDA0DD',
+                'set': '#ADD8E6',
+                'attack': '#E0FFFF',
+                'freeball': '#90EE90',
+                'block': '#BFFF00'
+            }
+            
+            # Create a local copy of allowed_actions to avoid scoping issues
+            local_allowed_actions = allowed_actions.copy() if allowed_actions else []
+            
+            # Process each GroupBox
+            for groupbox_name, players_in_groupbox in groupbox_assignments.items():
+                groupbox = dialog_widget.findChild(QGroupBox, groupbox_name)
+                if not groupbox:
+                    print(f"DEBUG: GroupBox {groupbox_name} not found in UI")
+                    continue
+                
+                # Set GroupBox width to 66px
+                groupbox.setFixedWidth(66)
+                
+                # Set GroupBox title to first player's "#-Name" (or combine if multiple)
+                if players_in_groupbox:
+                    player_labels = []
+                    for _, player_number, player_name, _, _ in players_in_groupbox:
+                        label = f"#{player_number}-{player_name}" if player_name else f"#{player_number}"
+                        player_labels.append(label)
+                    groupbox.setTitle(" / ".join(player_labels))
+                
+                # Get buttons for this GroupBox
+                # Button naming: pushButton_{LF|MF|RF|LB|MB|RB}_{1-7}
+                position_prefix = groupbox_name.replace('groupBox_', '')
+                
+                # Hide all buttons first
+                for btn_num in range(1, 8):
+                    btn_name = f"pushButton_{position_prefix}_{btn_num}"
+                    btn = dialog_widget.findChild(QPushButton, btn_name)
+                    if btn:
+                        btn.setVisible(False)
+                        btn.setEnabled(False)
+                        btn.setText("")
+                
+                # Determine which buttons to show based on contact_number
+                buttons_to_show = []
+                
+                if contact_number == 1:
+                    # 1st contact buttons: buttons 1, 2, 3
+                    if prior_contact_was_opponent_serve:
+                        # Recv, Attack, Block
+                        buttons_to_show = [
+                            (1, 'Recv', 'receive', '#DDA0DD'),
+                            (2, 'Attack', 'attack', '#E0FFFF'),
+                            (3, 'Block', 'block', '#BFFF00')
+                        ]
+                    else:
+                        # Dig, Attack, Block
+                        buttons_to_show = [
+                            (1, 'Dig', 'pass', '#DDA0DD'),
+                            (2, 'Attack', 'attack', '#E0FFFF'),
+                            (3, 'Block', 'block', '#BFFF00')
+                        ]
+                    # Filter by allowed_actions
+                    buttons_to_show = [(num, label, action, color) for num, label, action, color in buttons_to_show if action in local_allowed_actions]
+                elif contact_number == 2:
+                    # 2nd contact buttons: buttons 4, 5, 6 (add Attack for team_us)
+                    if team_id == self.team_us_id:
+                        # For team_us, add Attack to 2nd contact
+                        buttons_to_show = [
+                            (4, 'Set', 'set', '#ADD8E6'),
+                            (5, 'Free', 'freeball', '#90EE90'),
+                            (6, 'Attack', 'attack', '#E0FFFF')
+                        ]
+                    else:
+                        # For team_them, only Set and Free
+                        buttons_to_show = [
+                            (4, 'Set', 'set', '#ADD8E6'),
+                            (5, 'Free', 'freeball', '#90EE90')
+                        ]
+                    # Filter by allowed_actions
+                    buttons_to_show = [(num, label, action, color) for num, label, action, color in buttons_to_show if action in local_allowed_actions]
+                elif contact_number == 3:
+                    # 3rd contact buttons: buttons 6, 7
+                    buttons_to_show = [
+                        (6, 'Attack', 'attack', '#E0FFFF'),
+                        (7, 'Free', 'freeball', '#90EE90')
+                    ]
+                    # Filter by allowed_actions
+                    buttons_to_show = [(num, label, action, color) for num, label, action, color in buttons_to_show if action in local_allowed_actions]
+                
+                # Assign buttons to the first player in the groupbox (or handle multiple players)
+                # If multiple players map to same groupbox, use the first one
+                if players_in_groupbox:
+                    primary_player = players_in_groupbox[0]
+                    player_id, player_number, player_name, role_code, position_number = primary_player
+                    
+                    # Show and configure buttons
+                    for btn_num, btn_label, btn_action, btn_color in buttons_to_show:
+                        btn_name = f"pushButton_{position_prefix}_{btn_num}"
+                        btn = dialog_widget.findChild(QPushButton, btn_name)
+                        if btn:
+                            btn.setText(btn_label)
+                            # Set button width to 60px
+                            btn.setFixedWidth(60)
+                            btn.setStyleSheet(f"background-color: {btn_color}; border: 1px solid #505050; padding: 1px 2px;")
+                            btn.setVisible(True)
+                            btn.setEnabled(True)
+                            
+                            # Connect button to player and action
+                            def make_handler(pid, atype):
+                                return lambda: (selected_action.__setitem__(0, [pid, atype]), dialog.accept())
+                            btn.clicked.connect(make_handler(player_id, btn_action))
+                        else:
+                            print(f"DEBUG: Button {btn_name} not found")
+            
+            # Hide empty GroupBoxes
+            for groupbox_name in ['groupBox_LF', 'groupBox_MF', 'groupBox_RF', 'groupBox_LB', 'groupBox_MB', 'groupBox_RB']:
+                if groupbox_name not in groupbox_assignments:
+                    groupbox = dialog_widget.findChild(QGroupBox, groupbox_name)
+                    if groupbox:
+                        groupbox.setVisible(False)
+            
+            # Connect down button
+            down_btn = dialog_widget.findChild(QPushButton, "pushButton_down")
+            if down_btn:
+                down_btn.clicked.connect(lambda: (selected_action.__setitem__(0, ["down", "down"]), dialog.accept()))
+            
+            # Set dialog size - adjust for narrower GroupBoxes (66px each + 2px spacing = 70px per column, 3 columns = 210px + margins)
+            dialog.setFixedSize(220, 280)
+            
+            # Position dialog to the upper right corner of the clicked point
+            if self.coordinate_mapper and pixel_x is not None and pixel_y is not None:
+                mapper_pos = self.coordinate_mapper.mapToGlobal(QPoint(0, 0))
+                # Position to upper right: x = click + offset, y = click - dialog height
+                dialog_x = mapper_pos.x() + int(pixel_x) + 10  # 10 pixels to the right
+                dialog_y = mapper_pos.y() + int(pixel_y) - 280  # Above the click point
+                dialog.move(dialog_x, dialog_y)
+            elif pixel_x is not None and pixel_y is not None:
+                # Fallback: use logical coordinates for positioning
+                dialog_x = int(pixel_x) + 10
+                dialog_y = int(pixel_y) - 280
+                dialog.move(dialog_x, dialog_y)
+            
+            # Show dialog and get result (for new UI)
+            _allowed_actions_backup = allowed_actions.copy() if allowed_actions else []
+            try:
+                if dialog.exec() == QDialog.Accepted and selected_action[0]:
+                    player_id_or_down, action_type = selected_action[0]
+                    
+                    # Check if "down" was selected (floor contact)
+                    if player_id_or_down == "down":
+                        self.selected_player_id = None
+                        self.selected_player_number = None
+                        self.selected_team_id = team_id
+                        if hasattr(self, 'status_label'):
+                            self.status_label.setText("Recording floor contact (down)...")
+                        self.record_contact("down")
+                    else:
+                        # Set the selected player
+                        self.selected_player_id = player_id_or_down
+                        self.selected_team_id = team_id
+                        
+                        # Get player info for status message
+                        if not self.db.conn:
+                            self.db.connect()
+                        cursor = self.db.conn.cursor()
+                        cursor.execute("""
+                            SELECT player_number, name
+                            FROM players
+                            WHERE player_id = ?
+                        """, (player_id_or_down,))
+                        player_info = cursor.fetchone()
+                        if player_info:
+                            player_number, player_name = player_info
+                            self.selected_player_number = str(player_number)
+                            player_display = f"#{player_number} {player_name}" if player_name else f"#{player_number}"
+                            if hasattr(self, 'status_label'):
+                                self.status_label.setText(f"Selected: {player_display} - Recording {action_type}...")
+                        
+                        # Record the contact with the selected action type
+                        self.record_contact(action_type)
+            except UnboundLocalError as e:
+                error_msg = str(e)
+                print(f"DEBUG ERROR: UnboundLocalError in show_player_selection_dialog: {error_msg}")
+                if 'allowed_actions' in error_msg:
+                    print(f"DEBUG ERROR: Scoping issue with allowed_actions. Backup value: {_allowed_actions_backup}")
+            except Exception as e:
+                error_msg = str(e)
+                print(f"DEBUG ERROR: Exception in show_player_selection_dialog: {error_msg}")
+                if 'allowed_actions' not in error_msg:
+                    raise
+            
+        else:
+            # Old dialog implementation for team_them
+            # Create compact dialog with no title bar
+            dialog = QDialog(self.coordinate_mapper if self.coordinate_mapper else self)
+            dialog.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint)
+            dialog.setModal(True)
+            
+            main_layout = QVBoxLayout()
+            main_layout.setContentsMargins(3, 3, 3, 3)
+            main_layout.setSpacing(2)
+            
+            # Store selected action info
+            selected_action = [None]  # [player_id, action_type] or ["down", "down"]
+            
+            # Define action colors matching the player-contact grid
+            action_colors = {
+                'receive': '#FFB3B3',    # light red
+                'pass': '#DDA0DD',       # light purple (plum) - for Dig
+                'set': '#ADD8E6',        # light blue
+                'attack': '#E0FFFF',     # light cyan
+                'freeball': '#90EE90',   # light green
+                'block': '#BFFF00'       # lime (light yellowish-green)
+            }
+            
+            # Create a row for each player with action buttons
+            for player_id, player_number, player_name in players:
+                row_layout = QHBoxLayout()
             row_layout.setSpacing(2)
             row_layout.setContentsMargins(0, 0, 0, 0)
             
@@ -1338,94 +1751,94 @@ class DataEntryWindow(QMainWindow):
                 btn.clicked.connect(make_handler(player_id, action_type))
                 row_layout.addWidget(btn, 0)  # 0 stretch factor
             
-            main_layout.addLayout(row_layout)
-        
-        # Add "down" button at the bottom for floor contact
-        down_layout = QHBoxLayout()
-        down_btn = QPushButton("down (floor contact)")
-        down_btn.setFont(QFont('Arial', 9))
-        down_btn.clicked.connect(lambda: (selected_action.__setitem__(0, ["down", "down"]), dialog.accept()))
-        down_layout.addWidget(down_btn)
-        main_layout.addLayout(down_layout)
-        
-        dialog.setLayout(main_layout)
-        
-        # Set size - compact width for player name + buttons, tall enough for all players
-        dialog.setFixedWidth(320)
-        # Calculate height: each row is ~26px, plus padding
-        total_rows = len(players) + 1  # +1 for "down" button
-        dialog.setFixedHeight(total_rows * 26 + 20)
-        
-        # Position dialog to the right of the clicked point
-        # Use pixel coordinates if available (from coordinate mapper)
-        if self.coordinate_mapper and pixel_x is not None and pixel_y is not None:
-            # Get the coordinate mapper's global position
-            mapper_pos = self.coordinate_mapper.mapToGlobal(QPoint(0, 0))
-            # Position dialog to the right of the click point
-            dialog_x = mapper_pos.x() + int(pixel_x) + 20  # 20 pixels to the right
-            dialog_y = mapper_pos.y() + int(pixel_y) - 50  # Adjust to center on click
-            dialog.move(dialog_x, dialog_y)
-        elif pixel_x is not None and pixel_y is not None:
-            # Fallback: use logical coordinates for positioning
-            dialog_x = int(pixel_x) + 20
-            dialog_y = int(pixel_y) - 50
-            dialog.move(dialog_x, dialog_y)
-        
-        # Show dialog and get result
-        # Store allowed_actions in a way that's accessible even if there's a scoping issue
-        # (This is defensive programming - allowed_actions should already be properly scoped)
-        _allowed_actions_backup = allowed_actions.copy() if allowed_actions else []
-        
-        try:
-            if dialog.exec() == QDialog.Accepted and selected_action[0]:
-                player_id_or_down, action_type = selected_action[0]
-                
-                # Check if "down" was selected (floor contact)
-                if player_id_or_down == "down":
-                    # Record floor contact
-                    self.selected_player_id = None
-                    self.selected_player_number = None
-                    self.selected_team_id = team_id
-                    self.status_label.setText("Recording floor contact (down)...")
-                    self.record_contact("down")
-                else:
-                    # Set the selected player
-                    self.selected_player_id = player_id_or_down
-                    self.selected_team_id = team_id
+                main_layout.addLayout(row_layout)
+            
+            # Add "down" button at the bottom for floor contact
+            down_layout = QHBoxLayout()
+            down_btn = QPushButton("down (floor contact)")
+            down_btn.setFont(QFont('Arial', 9))
+            down_btn.clicked.connect(lambda: (selected_action.__setitem__(0, ["down", "down"]), dialog.accept()))
+            down_layout.addWidget(down_btn)
+            main_layout.addLayout(down_layout)
+            
+            dialog.setLayout(main_layout)
+            
+            # Set size - compact width for player name + buttons, tall enough for all players
+            dialog.setFixedWidth(320)
+            # Calculate height: each row is ~26px, plus padding
+            total_rows = len(players) + 1  # +1 for "down" button
+            dialog.setFixedHeight(total_rows * 26 + 20)
+            
+            # Position dialog to the right of the clicked point
+            # Use pixel coordinates if available (from coordinate mapper)
+            if self.coordinate_mapper and pixel_x is not None and pixel_y is not None:
+                # Get the coordinate mapper's global position
+                mapper_pos = self.coordinate_mapper.mapToGlobal(QPoint(0, 0))
+                # Position dialog to the right of the click point
+                dialog_x = mapper_pos.x() + int(pixel_x) + 20  # 20 pixels to the right
+                dialog_y = mapper_pos.y() + int(pixel_y) - 50  # Adjust to center on click
+                dialog.move(dialog_x, dialog_y)
+            elif pixel_x is not None and pixel_y is not None:
+                # Fallback: use logical coordinates for positioning
+                dialog_x = int(pixel_x) + 20
+                dialog_y = int(pixel_y) - 50
+                dialog.move(dialog_x, dialog_y)
+            
+            # Show dialog and get result
+            # Store allowed_actions in a way that's accessible even if there's a scoping issue
+            # (This is defensive programming - allowed_actions should already be properly scoped)
+            _allowed_actions_backup = allowed_actions.copy() if allowed_actions else []
+            
+            try:
+                if dialog.exec() == QDialog.Accepted and selected_action[0]:
+                    player_id_or_down, action_type = selected_action[0]
                     
-                    # Get player info for status message
-                    if not self.db.conn:
-                        self.db.connect()
-                    cursor = self.db.conn.cursor()
-                    cursor.execute("""
-                        SELECT player_number, name
-                        FROM players
-                        WHERE player_id = ?
-                    """, (player_id_or_down,))
-                    player_info = cursor.fetchone()
-                    if player_info:
-                        player_number, player_name = player_info
-                        self.selected_player_number = str(player_number)
-                        player_display = f"#{player_number} {player_name}" if player_name else f"#{player_number}"
-                        self.status_label.setText(f"Selected: {player_display} - Recording {action_type}...")
-                    
-                    # Record the contact with the selected action type
-                    self.record_contact(action_type)
-        except UnboundLocalError as e:
-            # Catch scoping errors - this shouldn't happen, but if it does, log and continue
-            error_msg = str(e)
-            print(f"DEBUG ERROR: UnboundLocalError in show_player_selection_dialog: {error_msg}")
-            if 'allowed_actions' in error_msg:
-                print(f"DEBUG ERROR: Scoping issue with allowed_actions. Backup value: {_allowed_actions_backup}")
-            # Don't re-raise - the contact may have already been recorded
-        except Exception as e:
-            # Log other exceptions but don't show error popup if contact was already recorded
-            error_msg = str(e)
-            print(f"DEBUG ERROR: Exception in show_player_selection_dialog: {error_msg}")
-            # Only show error if it's not a scoping issue (those are handled above)
-            if 'allowed_actions' not in error_msg:
-                # Re-raise to let record_contact handle it
-                raise
+                    # Check if "down" was selected (floor contact)
+                    if player_id_or_down == "down":
+                        # Record floor contact
+                        self.selected_player_id = None
+                        self.selected_player_number = None
+                        self.selected_team_id = team_id
+                        self.status_label.setText("Recording floor contact (down)...")
+                        self.record_contact("down")
+                    else:
+                        # Set the selected player
+                        self.selected_player_id = player_id_or_down
+                        self.selected_team_id = team_id
+                        
+                        # Get player info for status message
+                        if not self.db.conn:
+                            self.db.connect()
+                        cursor = self.db.conn.cursor()
+                        cursor.execute("""
+                            SELECT player_number, name
+                            FROM players
+                            WHERE player_id = ?
+                        """, (player_id_or_down,))
+                        player_info = cursor.fetchone()
+                        if player_info:
+                            player_number, player_name = player_info
+                            self.selected_player_number = str(player_number)
+                            player_display = f"#{player_number} {player_name}" if player_name else f"#{player_number}"
+                            self.status_label.setText(f"Selected: {player_display} - Recording {action_type}...")
+                        
+                        # Record the contact with the selected action type
+                        self.record_contact(action_type)
+            except UnboundLocalError as e:
+                # Catch scoping errors - this shouldn't happen, but if it does, log and continue
+                error_msg = str(e)
+                print(f"DEBUG ERROR: UnboundLocalError in show_player_selection_dialog: {error_msg}")
+                if 'allowed_actions' in error_msg:
+                    print(f"DEBUG ERROR: Scoping issue with allowed_actions. Backup value: {_allowed_actions_backup}")
+                # Don't re-raise - the contact may have already been recorded
+            except Exception as e:
+                # Log other exceptions but don't show error popup if contact was already recorded
+                error_msg = str(e)
+                print(f"DEBUG ERROR: Exception in show_player_selection_dialog: {error_msg}")
+                # Only show error if it's not a scoping issue (those are handled above)
+                if 'allowed_actions' not in error_msg:
+                    # Re-raise to let record_contact handle it
+                    raise
     
     def eventFilter(self, obj, event):
         """Event filter to capture mouse clicks on outerCourt and court sides."""
@@ -1811,7 +2224,10 @@ class DataEntryWindow(QMainWindow):
                 # Note: If Y is outside these ranges, use the originally selected team_id
             
             # Set outcome for contacts
-            if contact_type in ("down", "net", "fault"):
+            # Check if there's a pending outcome (e.g., from 4th contact error)
+            if hasattr(self, '_pending_contact_outcome') and self._pending_contact_outcome:
+                outcome = self._pending_contact_outcome
+            elif contact_type in ("down", "net", "fault"):
                 outcome = "down"
             elif contact_type == "block":
                 # Block outcome is always "continue"
@@ -2136,6 +2552,36 @@ class DataEntryWindow(QMainWindow):
             else:
                 self.score_them += 1
             
+            # Check if team_them served (first contact in rally was a serve by team_them)
+            team_them_served = False
+            if self.current_rally_id:
+                if not self.db.conn:
+                    self.db.connect()
+                cursor = self.db.conn.cursor()
+                cursor.execute("""
+                    SELECT contact_type, team_id 
+                    FROM contacts 
+                    WHERE rally_id = ? 
+                    ORDER BY sequence_number ASC 
+                    LIMIT 1
+                """, (self.current_rally_id,))
+                first_contact = cursor.fetchone()
+                if first_contact:
+                    first_contact_type, first_contact_team_id = first_contact
+                    if first_contact_type == 'serve' and first_contact_team_id == self.team_them_id:
+                        team_them_served = True
+            
+            # Auto-rotate team_us if team_them served and team_us won the point
+            if team_them_served and point_winner_id == self.team_us_id:
+                try:
+                    self.lineup_manager.rotate(self.team_us_id)
+                    print(f"DEBUG: Auto-rotated team_us after winning point (team_them had served)")
+                except Exception as e:
+                    print(f"DEBUG ERROR: Failed to rotate team_us: {e}")
+            
+            # Display debug message with team_us lineup after each point
+            self.print_team_us_lineup()
+            
             # Reset for next rally
             self.rally_in_progress = False
             self.current_rally_id = None
@@ -2158,6 +2604,42 @@ class DataEntryWindow(QMainWindow):
             
         except Exception as e:
             QMessageBox.critical(self, "Database Error", f"Failed to end rally:\n{str(e)}")
+    
+    def print_team_us_lineup(self):
+        """Print debug message listing the 6 players on team_us and their court positions."""
+        if not self.team_us_id or not self.game_id:
+            return
+        
+        try:
+            if not self.db.conn:
+                self.db.connect()
+            cursor = self.db.conn.cursor()
+            cursor.execute("""
+                SELECT al.position_number, 
+                       p.player_id,
+                       COALESCE(p.jersey, p.player_number) as player_number,
+                       p.name,
+                       al.role_code
+                FROM active_lineup al
+                INNER JOIN players p ON al.player_id = p.player_id
+                WHERE al.team_id = ?
+                ORDER BY al.position_number
+            """, (self.team_us_id,))
+            
+            players = cursor.fetchall()
+            
+            if players:
+                print("\n" + "="*60)
+                print("DEBUG: Team_US Lineup After Point:")
+                print("="*60)
+                for position_number, player_id, player_number, player_name, role_code in players:
+                    name_display = player_name if player_name else "Unknown"
+                    print(f"  Position {position_number}: Player #{player_number} - {name_display} ({role_code})")
+                print("="*60 + "\n")
+            else:
+                print("DEBUG: No active lineup found for team_us")
+        except Exception as e:
+            print(f"DEBUG ERROR: Failed to print team_us lineup: {e}")
     
     def update_score_display(self):
         """Update the score display in status bar."""
