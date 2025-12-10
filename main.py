@@ -7,6 +7,7 @@ import sys
 from PySide6.QtWidgets import QApplication
 from main_menu import MainMenuWindow
 
+
 def main():
     """Main entry point - launches the main menu."""
     app = QApplication(sys.argv)

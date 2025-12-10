@@ -1,0 +1,499 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>CreateGameDialog</class>
+ <widget class="QDialog" name="CreateGameDialog">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>900</width>
+    <height>800</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>Create New Game</string>
+  </property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <property name="spacing">
+    <number>15</number>
+   </property>
+   <item>
+    <layout class="QHBoxLayout" name="dateLayout">
+     <item>
+      <widget class="QLabel" name="dateLabel">
+       <property name="text">
+        <string>Game Date:</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QDateEdit" name="dateEdit">
+       <property name="calendarPopup">
+        <bool>true</bool>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <spacer name="dateSpacer">
+       <property name="orientation">
+        <enum>Qt::Orientation::Horizontal</enum>
+       </property>
+       <property name="sizeHint" stdset="0">
+        <size>
+         <width>40</width>
+         <height>20</height>
+        </size>
+       </property>
+      </spacer>
+     </item>
+    </layout>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="teamGroup">
+     <property name="title">
+      <string>Team Selection</string>
+     </property>
+     <layout class="QVBoxLayout" name="teamLayout">
+      <item>
+       <layout class="QHBoxLayout" name="teamUsLayout">
+        <item>
+         <widget class="QLabel" name="teamUsLabel">
+          <property name="text">
+           <string>Team Us:</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QComboBox" name="teamUsCombo"/>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="opponentLayout">
+        <item>
+         <widget class="QLabel" name="opponentLabel">
+          <property name="text">
+           <string>Opponent:</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="opponentNameLabel">
+          <property name="styleSheet">
+           <string notr="true">font-weight: bold;</string>
+          </property>
+          <property name="text">
+           <string>Opp1</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="aliasLabel">
+          <property name="text">
+           <string>Alias:</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLineEdit" name="opponentAliasInput">
+          <property name="placeholderText">
+           <string>Enter opponent team alias (e.g., 'State University')</string>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="lineupGroup">
+     <property name="title">
+      <string>Starting Lineup for Team Us</string>
+     </property>
+     <layout class="QVBoxLayout" name="lineupLayout">
+      <item>
+       <widget class="QLabel" name="instructionsLabel">
+        <property name="text">
+         <string>Select players for each position. Each player can only be selected once.</string>
+        </property>
+        <property name="wordWrap">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <layout class="QGridLayout" name="positionGrid">
+        <property name="leftMargin">
+         <number>20</number>
+        </property>
+        <property name="topMargin">
+         <number>10</number>
+        </property>
+        <property name="rightMargin">
+         <number>20</number>
+        </property>
+        <property name="bottomMargin">
+         <number>10</number>
+        </property>
+        <property name="spacing">
+         <number>15</number>
+        </property>
+        <item row="0" column="0" colspan="2">
+         <widget class="QLabel" name="pos4Label">
+          <property name="styleSheet">
+           <string notr="true">font-weight: bold; padding: 5px; background-color: #f0f0f0; border: 1px solid #ccc;</string>
+          </property>
+          <property name="text">
+           <string>LF
+(Left Front)</string>
+          </property>
+          <property name="alignment">
+           <set>Qt::AlignmentFlag::AlignCenter</set>
+          </property>
+         </widget>
+        </item>
+        <item row="0" column="2" colspan="2">
+         <widget class="QLabel" name="pos3Label">
+          <property name="styleSheet">
+           <string notr="true">font-weight: bold; padding: 5px; background-color: #f0f0f0; border: 1px solid #ccc;</string>
+          </property>
+          <property name="text">
+           <string>MF
+(Middle Front)</string>
+          </property>
+          <property name="alignment">
+           <set>Qt::AlignmentFlag::AlignCenter</set>
+          </property>
+         </widget>
+        </item>
+        <item row="0" column="4" colspan="2">
+         <widget class="QLabel" name="pos2Label">
+          <property name="styleSheet">
+           <string notr="true">font-weight: bold; padding: 5px; background-color: #f0f0f0; border: 1px solid #ccc;</string>
+          </property>
+          <property name="text">
+           <string>RF
+(Right Front)</string>
+          </property>
+          <property name="alignment">
+           <set>Qt::AlignmentFlag::AlignCenter</set>
+          </property>
+         </widget>
+        </item>
+        <item row="1" column="0">
+         <widget class="QLabel" name="player4Label">
+          <property name="text">
+           <string>Player:</string>
+          </property>
+         </widget>
+        </item>
+        <item row="1" column="1">
+         <widget class="QComboBox" name="player4Combo"/>
+        </item>
+        <item row="1" column="2">
+         <widget class="QLabel" name="player3Label">
+          <property name="text">
+           <string>Player:</string>
+          </property>
+         </widget>
+        </item>
+        <item row="1" column="3">
+         <widget class="QComboBox" name="player3Combo"/>
+        </item>
+        <item row="1" column="4">
+         <widget class="QLabel" name="player2Label">
+          <property name="text">
+           <string>Player:</string>
+          </property>
+         </widget>
+        </item>
+        <item row="1" column="5">
+         <widget class="QComboBox" name="player2Combo"/>
+        </item>
+        <item row="2" column="0">
+         <widget class="QLabel" name="role4Label">
+          <property name="text">
+           <string>Role:</string>
+          </property>
+         </widget>
+        </item>
+        <item row="2" column="1">
+         <widget class="QComboBox" name="role4Combo">
+          <property name="editable">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+        <item row="2" column="2">
+         <widget class="QLabel" name="role3Label">
+          <property name="text">
+           <string>Role:</string>
+          </property>
+         </widget>
+        </item>
+        <item row="2" column="3">
+         <widget class="QComboBox" name="role3Combo">
+          <property name="editable">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+        <item row="2" column="4">
+         <widget class="QLabel" name="role2Label">
+          <property name="text">
+           <string>Role:</string>
+          </property>
+         </widget>
+        </item>
+        <item row="2" column="5">
+         <widget class="QComboBox" name="role2Combo">
+          <property name="editable">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+        <item row="3" column="0" colspan="6">
+         <widget class="QFrame" name="separator">
+          <property name="frameShape">
+           <enum>QFrame::Shape::HLine</enum>
+          </property>
+          <property name="frameShadow">
+           <enum>QFrame::Shadow::Sunken</enum>
+          </property>
+         </widget>
+        </item>
+        <item row="4" column="0" colspan="2">
+         <widget class="QLabel" name="pos5Label">
+          <property name="styleSheet">
+           <string notr="true">font-weight: bold; padding: 5px; background-color: #f0f0f0; border: 1px solid #ccc;</string>
+          </property>
+          <property name="text">
+           <string>LB
+(Left Back)</string>
+          </property>
+          <property name="alignment">
+           <set>Qt::AlignmentFlag::AlignCenter</set>
+          </property>
+         </widget>
+        </item>
+        <item row="4" column="2" colspan="2">
+         <widget class="QLabel" name="pos6Label">
+          <property name="styleSheet">
+           <string notr="true">font-weight: bold; padding: 5px; background-color: #f0f0f0; border: 1px solid #ccc;</string>
+          </property>
+          <property name="text">
+           <string>MB
+(Middle Back)</string>
+          </property>
+          <property name="alignment">
+           <set>Qt::AlignmentFlag::AlignCenter</set>
+          </property>
+         </widget>
+        </item>
+        <item row="4" column="4" colspan="2">
+         <widget class="QLabel" name="pos1Label">
+          <property name="styleSheet">
+           <string notr="true">font-weight: bold; padding: 5px; background-color: #f0f0f0; border: 1px solid #ccc;</string>
+          </property>
+          <property name="text">
+           <string>RB
+(Right Back)</string>
+          </property>
+          <property name="alignment">
+           <set>Qt::AlignmentFlag::AlignCenter</set>
+          </property>
+         </widget>
+        </item>
+        <item row="5" column="0">
+         <widget class="QLabel" name="player5Label">
+          <property name="text">
+           <string>Player:</string>
+          </property>
+         </widget>
+        </item>
+        <item row="5" column="1">
+         <widget class="QComboBox" name="player5Combo"/>
+        </item>
+        <item row="5" column="2">
+         <widget class="QLabel" name="player6Label">
+          <property name="text">
+           <string>Player:</string>
+          </property>
+         </widget>
+        </item>
+        <item row="5" column="3">
+         <widget class="QComboBox" name="player6Combo"/>
+        </item>
+        <item row="5" column="4">
+         <widget class="QLabel" name="player1Label">
+          <property name="text">
+           <string>Player:</string>
+          </property>
+         </widget>
+        </item>
+        <item row="5" column="5">
+         <widget class="QComboBox" name="player1Combo"/>
+        </item>
+        <item row="6" column="0">
+         <widget class="QLabel" name="role5Label">
+          <property name="text">
+           <string>Role:</string>
+          </property>
+         </widget>
+        </item>
+        <item row="6" column="1">
+         <widget class="QComboBox" name="role5Combo">
+          <property name="editable">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+        <item row="6" column="2">
+         <widget class="QLabel" name="role6Label">
+          <property name="text">
+           <string>Role:</string>
+          </property>
+         </widget>
+        </item>
+        <item row="6" column="3">
+         <widget class="QComboBox" name="role6Combo">
+          <property name="editable">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+        <item row="6" column="4">
+         <widget class="QLabel" name="role1Label">
+          <property name="text">
+           <string>Role:</string>
+          </property>
+         </widget>
+        </item>
+        <item row="6" column="5">
+         <widget class="QComboBox" name="role1Combo">
+          <property name="editable">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="liberoLayout">
+        <item>
+         <widget class="QLabel" name="liberoLabel">
+          <property name="text">
+           <string>Libero:</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QComboBox" name="liberoCombo"/>
+        </item>
+        <item>
+         <spacer name="liberoSpacer">
+          <property name="orientation">
+           <enum>Qt::Orientation::Horizontal</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>40</width>
+            <height>20</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+       </layout>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="servingGroup">
+     <property name="title">
+      <string>Serving Team</string>
+     </property>
+     <layout class="QHBoxLayout" name="servingLayout">
+      <item>
+       <widget class="QRadioButton" name="serveUsRadio">
+        <property name="text">
+         <string>Team Us</string>
+        </property>
+        <property name="checked">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QRadioButton" name="serveThemRadio">
+        <property name="text">
+         <string>Opponent (Opp1)</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <spacer name="servingSpacer">
+        <property name="orientation">
+         <enum>Qt::Orientation::Horizontal</enum>
+        </property>
+        <property name="sizeHint" stdset="0">
+         <size>
+          <width>40</width>
+          <height>20</height>
+         </size>
+        </property>
+       </spacer>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <spacer name="verticalSpacer">
+     <property name="orientation">
+      <enum>Qt::Orientation::Vertical</enum>
+     </property>
+     <property name="sizeHint" stdset="0">
+      <size>
+       <width>20</width>
+       <height>40</height>
+      </size>
+     </property>
+    </spacer>
+   </item>
+   <item>
+    <layout class="QHBoxLayout" name="buttonLayout">
+     <item>
+      <spacer name="buttonSpacer">
+       <property name="orientation">
+        <enum>Qt::Orientation::Horizontal</enum>
+       </property>
+       <property name="sizeHint" stdset="0">
+        <size>
+         <width>40</width>
+         <height>20</height>
+        </size>
+       </property>
+      </spacer>
+     </item>
+     <item>
+      <widget class="QPushButton" name="btnCancel">
+       <property name="text">
+        <string>Cancel</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QPushButton" name="btnCreate">
+       <property name="text">
+        <string>Create Game &amp; Start Tracking</string>
+       </property>
+      </widget>
+     </item>
+    </layout>
+   </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

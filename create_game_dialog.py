@@ -43,126 +43,89 @@ class CreateGameDialog(QDialog):
             1: ("Right Back", "RB")
         }
         
-        self.setWindowTitle("Create New Game")
-        self.setGeometry(100, 100, 900, 800)
+        # Load UI file
+        ui_file = Path(__file__).parent / "create_game_dialog.ui"
+        if not ui_file.exists():
+            QMessageBox.critical(
+                parent,
+                "UI File Not Found",
+                f"UI file not found: {ui_file}\nPlease ensure create_game_dialog.ui exists."
+            )
+            self.reject()
+            return
         
-        layout = QVBoxLayout(self)
-        layout.setSpacing(15)
+        loader = QUiLoader()
+        ui_widget = loader.load(str(ui_file))
+        if not ui_widget:
+            QMessageBox.critical(
+                parent,
+                "UI Load Error",
+                f"Failed to load UI file: {ui_file}"
+            )
+            self.reject()
+            return
         
-        # Game date
-        date_layout = QHBoxLayout()
-        date_layout.addWidget(QLabel("Game Date:"))
-        self.date_edit = QDateEdit()
-        self.date_edit.setDate(QDate.currentDate())
-        self.date_edit.setCalendarPopup(True)
-        date_layout.addWidget(self.date_edit)
-        date_layout.addStretch()
-        layout.addLayout(date_layout)
+        # Copy properties from loaded UI
+        self.setWindowTitle(ui_widget.windowTitle())
+        self.setGeometry(ui_widget.geometry())
         
-        # Team selection section
-        team_group = QGroupBox("Team Selection")
-        team_layout = QVBoxLayout()
+        # Get main layout from UI and set it
+        main_layout = ui_widget.layout()
+        if main_layout:
+            self.setLayout(main_layout)
+            # Reparent all widgets to self
+            for child in ui_widget.findChildren(QWidget):
+                if child.parent() == ui_widget:
+                    child.setParent(self)
         
-        # Team Us selection
-        team_us_layout = QHBoxLayout()
-        team_us_layout.addWidget(QLabel("Team Us:"))
-        self.team_us_combo = QComboBox()
-        self.team_us_combo.currentIndexChanged.connect(self.on_team_us_selected)
-        team_us_layout.addWidget(self.team_us_combo)
-        team_layout.addLayout(team_us_layout)
+        # Map UI widgets to class attributes
+        self.date_edit = self.findChild(QDateEdit, "dateEdit")
+        if self.date_edit:
+            self.date_edit.setDate(QDate.currentDate())
         
-        # Opponent (always Opp1 with alias)
-        opponent_layout = QHBoxLayout()
-        opponent_layout.addWidget(QLabel("Opponent:"))
-        opponent_label = QLabel("Opp1")
-        opponent_label.setStyleSheet("font-weight: bold;")
-        opponent_layout.addWidget(opponent_label)
-        opponent_layout.addWidget(QLabel("Alias:"))
-        self.opponent_alias_input = QLineEdit()
-        self.opponent_alias_input.setPlaceholderText("Enter opponent team alias (e.g., 'State University')")
-        opponent_layout.addWidget(self.opponent_alias_input)
-        team_layout.addLayout(opponent_layout)
+        self.team_us_combo = self.findChild(QComboBox, "teamUsCombo")
+        if self.team_us_combo:
+            self.team_us_combo.currentIndexChanged.connect(self.on_team_us_selected)
         
-        team_group.setLayout(team_layout)
-        layout.addWidget(team_group)
+        self.opponent_alias_input = self.findChild(QLineEdit, "opponentAliasInput")
         
-        # Starting Lineup section
-        lineup_group = QGroupBox("Starting Lineup for Team Us")
-        lineup_layout = QVBoxLayout()
+        # Map position combos: position -> (player_combo, role_combo)
+        self.position_widgets = {}
+        position_map = {
+            1: ("player1Combo", "role1Combo"),
+            2: ("player2Combo", "role2Combo"),
+            3: ("player3Combo", "role3Combo"),
+            4: ("player4Combo", "role4Combo"),
+            5: ("player5Combo", "role5Combo"),
+            6: ("player6Combo", "role6Combo")
+        }
         
-        # Instructions
-        instructions = QLabel("Select players for each position. Each player can only be selected once.")
-        instructions.setWordWrap(True)
-        lineup_layout.addWidget(instructions)
+        for pos, (player_name, role_name) in position_map.items():
+            player_combo = self.findChild(QComboBox, player_name)
+            role_combo = self.findChild(QComboBox, role_name)
+            if player_combo and role_combo:
+                player_combo.addItem("-- Select Player --", None)
+                role_combo.addItems(['S', 'RS', 'RH', 'MH', 'OH', 'DS'])
+                player_combo.currentIndexChanged.connect(lambda idx, p=pos: self.on_player_selected(p, idx))
+                self.position_widgets[pos] = (player_combo, role_combo)
         
-        # Position grid layout
-        position_grid = QGridLayout()
-        position_grid.setSpacing(15)
-        position_grid.setContentsMargins(20, 10, 20, 10)
+        self.libero_combo = self.findChild(QComboBox, "liberoCombo")
+        if self.libero_combo:
+            self.libero_combo.addItem("-- No Libero --", None)
         
-        # Store position widgets
-        self.position_widgets = {}  # position -> (player_combo, role_combo)
-        
-        # Top row: LF(4), MF(3), RF(2) - Front row
-        top_row_positions = [4, 3, 2]
-        for col, pos in enumerate(top_row_positions):
-            pos_name, pos_abbrev = self.position_info[pos]
-            self._create_position_widget(position_grid, pos, pos_name, pos_abbrev, 0, col)
-        
-        # Add a separator line between front and back row
-        separator = QFrame()
-        separator.setFrameShape(QFrame.HLine)
-        separator.setFrameShadow(QFrame.Sunken)
-        position_grid.addWidget(separator, 1, 0, 1, 6)
-        
-        # Bottom row: LB(5), MB(6), RB(1) - Back row
-        bottom_row_positions = [5, 6, 1]
-        for col, pos in enumerate(bottom_row_positions):
-            pos_name, pos_abbrev = self.position_info[pos]
-            self._create_position_widget(position_grid, pos, pos_name, pos_abbrev, 2, col)
-        
-        lineup_layout.addLayout(position_grid)
-        
-        # Libero selection
-        libero_layout = QHBoxLayout()
-        libero_layout.addWidget(QLabel("Libero:"))
-        self.libero_combo = QComboBox()
-        self.libero_combo.addItem("-- No Libero --", None)
-        libero_layout.addWidget(self.libero_combo)
-        libero_layout.addStretch()
-        lineup_layout.addLayout(libero_layout)
-        
-        lineup_group.setLayout(lineup_layout)
-        layout.addWidget(lineup_group)
-        
-        # Serving team selection
-        serving_group = QGroupBox("Serving Team")
-        serving_layout = QHBoxLayout()
+        self.serve_us_radio = self.findChild(QRadioButton, "serveUsRadio")
+        self.serve_them_radio = self.findChild(QRadioButton, "serveThemRadio")
         self.serving_button_group = QButtonGroup()
+        if self.serve_us_radio and self.serve_them_radio:
+            self.serving_button_group.addButton(self.serve_us_radio, 0)
+            self.serving_button_group.addButton(self.serve_them_radio, 1)
         
-        self.serve_us_radio = QRadioButton("Team Us")
-        self.serve_us_radio.setChecked(True)
-        self.serve_them_radio = QRadioButton("Opponent (Opp1)")
-        
-        self.serving_button_group.addButton(self.serve_us_radio, 0)
-        self.serving_button_group.addButton(self.serve_them_radio, 1)
-        
-        serving_layout.addWidget(self.serve_us_radio)
-        serving_layout.addWidget(self.serve_them_radio)
-        serving_layout.addStretch()
-        serving_group.setLayout(serving_layout)
-        layout.addWidget(serving_group)
-        
-        # Buttons
-        button_layout = QHBoxLayout()
-        button_layout.addStretch()
-        self.btn_cancel = QPushButton("Cancel")
-        self.btn_cancel.clicked.connect(self.reject)
-        self.btn_create = QPushButton("Create Game & Start Tracking")
-        self.btn_create.clicked.connect(self.create_game_and_start)
-        button_layout.addWidget(self.btn_cancel)
-        button_layout.addWidget(self.btn_create)
-        layout.addLayout(button_layout)
+        self.btn_cancel = self.findChild(QPushButton, "btnCancel")
+        if self.btn_cancel:
+            self.btn_cancel.clicked.connect(self.reject)
+        self.btn_create = self.findChild(QPushButton, "btnCreate")
+        if self.btn_create:
+            self.btn_create.clicked.connect(self.create_game_and_start)
         
         # Populate teams
         self.populate_teams()
@@ -170,32 +133,6 @@ class CreateGameDialog(QDialog):
         # Initially disable lineup until team is selected
         self.set_lineup_enabled(False)
     
-    def _create_position_widget(self, grid_layout, position, pos_name, pos_abbrev, row, col):
-        """Create a position widget with player and role dropdowns."""
-        # Adjust row for separator (row 1 is separator)
-        actual_row = row if row < 1 else row + 1
-        
-        # Position label
-        pos_label = QLabel(f"{pos_abbrev}\n({pos_name})")
-        pos_label.setAlignment(Qt.AlignCenter)
-        pos_label.setStyleSheet("font-weight: bold; padding: 5px; background-color: #f0f0f0; border: 1px solid #ccc;")
-        grid_layout.addWidget(pos_label, actual_row, col * 2, 1, 2)
-        
-        # Player combo
-        player_combo = QComboBox()
-        player_combo.addItem("-- Select Player --", None)
-        player_combo.currentIndexChanged.connect(lambda idx, p=position: self.on_player_selected(p, idx))
-        grid_layout.addWidget(QLabel("Player:"), actual_row + 1, col * 2)
-        grid_layout.addWidget(player_combo, actual_row + 1, col * 2 + 1)
-        
-        # Role combo
-        role_combo = QComboBox()
-        role_combo.addItems(['S', 'RS', 'RH', 'MH', 'OH', 'DS'])
-        role_combo.setEditable(True)
-        grid_layout.addWidget(QLabel("Role:"), actual_row + 2, col * 2)
-        grid_layout.addWidget(role_combo, actual_row + 2, col * 2 + 1)
-        
-        self.position_widgets[position] = (player_combo, role_combo)
     
     def populate_teams(self):
         """Populate team dropdown."""
@@ -227,11 +164,11 @@ class CreateGameDialog(QDialog):
                 WHERE team_id = ?
                 ORDER BY 
                     CASE 
-                        WHEN CAST(jersey AS INTEGER) IS NOT NULL 
-                        THEN CAST(jersey AS INTEGER)
+                        WHEN CAST(player_number AS INTEGER) IS NOT NULL 
+                        THEN CAST(player_number AS INTEGER)
                         ELSE 999999
                     END,
-                    jersey, player_number
+                    player_number
             """, (team_id,))
             
             players = cursor.fetchall()
@@ -391,7 +328,7 @@ class CreateGameDialog(QDialog):
             
             # Initialize lineup using LineupManager
             lineup_manager = LineupManager(self.db)
-            lineup_manager.initialize_game(team_us_id, lineup, serving=serving)
+            lineup_manager.initialize_game(self.game_id, team_us_id, lineup, serving=serving)
             
             # Update role_code in active_lineup for each position based on user selection
             cursor = self.db.conn.cursor()

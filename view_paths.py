@@ -917,29 +917,36 @@ class ContactEditDialog(QDialog):
             return
         team_us_id, team_them_id = result
         
-        # Get team_us players from active_lineup (current lineup on court)
+        # Get all team_us players from game_players (all roster players for this game)
         cursor.execute("""
             SELECT p.player_id, 
                    COALESCE(p.jersey, p.player_number) as player_number,
                    p.name
-            FROM active_lineup al
-            INNER JOIN players p ON al.player_id = p.player_id
-            WHERE al.team_id = ?
-            ORDER BY al.position_number
-        """, (team_us_id,))
+            FROM game_players gp
+            INNER JOIN players p ON gp.player_id = p.player_id
+            WHERE gp.game_id = ? AND gp.team_id = ?
+            ORDER BY CASE 
+                WHEN CAST(p.player_number AS INTEGER) IS NOT NULL 
+                THEN CAST(p.player_number AS INTEGER)
+                ELSE 999999
+            END,
+            p.player_number
+        """, (self.game_id, team_us_id))
         
         players = cursor.fetchall()
         
-        # If no active lineup found, fall back to all team players
+        # If no game_players found, fall back to all team players
         if not players:
             cursor.execute("""
-                SELECT p.player_id, p.player_number, p.name
+                SELECT p.player_id, 
+                       COALESCE(p.jersey, p.player_number) as player_number,
+                       p.name
                 FROM players p
                 WHERE p.team_id = ?
                 ORDER BY CASE 
                     WHEN CAST(p.player_number AS INTEGER) IS NOT NULL 
                     THEN CAST(p.player_number AS INTEGER)
-                    ELSE 999
+                    ELSE 999999
                 END,
                 p.player_number
             """, (team_us_id,))

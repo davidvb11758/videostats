@@ -208,24 +208,27 @@ class VideoStatsDB:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS active_lineup (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                game_id INTEGER NOT NULL REFERENCES games(game_id) ON DELETE CASCADE,
                 team_id INTEGER NOT NULL REFERENCES teams(team_id),
                 position_number INTEGER NOT NULL REFERENCES positions(number),
                 player_id INTEGER NOT NULL REFERENCES players(player_id),
                 role_code TEXT NOT NULL,
                 is_server BOOLEAN DEFAULT 0,
                 placed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(team_id, position_number)
+                UNIQUE(game_id, team_id, position_number)
             )
         """)
         
         # Rotation state table - current rotation index and term of service
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS rotation_state (
-                team_id INTEGER PRIMARY KEY REFERENCES teams(team_id),
+                game_id INTEGER NOT NULL REFERENCES games(game_id) ON DELETE CASCADE,
+                team_id INTEGER NOT NULL REFERENCES teams(team_id),
                 rotation_order TEXT NOT NULL, -- JSON array e.g. [1,6,5,4,3,2]
                 rotation_index INTEGER NOT NULL DEFAULT 0,
                 serving BOOLEAN DEFAULT 0,
-                term_of_service_start TIMESTAMP NULL
+                term_of_service_start TIMESTAMP NULL,
+                PRIMARY KEY (game_id, team_id)
             )
         """)
         
@@ -291,6 +294,48 @@ class VideoStatsDB:
         except sqlite3.OperationalError:
             pass  # Column already exists
         
+        # Migration: Add game_id to active_lineup if it doesn't exist
+        cursor.execute("PRAGMA table_info(active_lineup)")
+        active_lineup_columns = [row[1] for row in cursor.fetchall()]
+        if 'game_id' not in active_lineup_columns:
+            print("Adding game_id column to active_lineup table...")
+            try:
+                # SQLite doesn't support adding NOT NULL columns easily, so we'll add it as nullable first
+                cursor.execute("ALTER TABLE active_lineup ADD COLUMN game_id INTEGER REFERENCES games(game_id)")
+                # Set default game_id for existing records (use most recent game)
+                cursor.execute("""
+                    UPDATE active_lineup 
+                    SET game_id = (SELECT game_id FROM games ORDER BY game_id DESC LIMIT 1)
+                    WHERE game_id IS NULL
+                """)
+                # Note: We can't easily add NOT NULL constraint or change UNIQUE constraint in SQLite
+                # The application code will need to ensure game_id is provided for new records
+                self.conn.commit()
+                print("game_id column added to active_lineup successfully!")
+            except Exception as e:
+                print(f"Failed to add game_id to active_lineup: {e}")
+        
+        # Migration: Add game_id to rotation_state if it doesn't exist
+        cursor.execute("PRAGMA table_info(rotation_state)")
+        rotation_state_columns = [row[1] for row in cursor.fetchall()]
+        if 'game_id' not in rotation_state_columns:
+            print("Adding game_id column to rotation_state table...")
+            try:
+                # SQLite doesn't support changing PRIMARY KEY easily, so we'll add game_id as nullable first
+                cursor.execute("ALTER TABLE rotation_state ADD COLUMN game_id INTEGER REFERENCES games(game_id)")
+                # Set default game_id for existing records (use most recent game)
+                cursor.execute("""
+                    UPDATE rotation_state 
+                    SET game_id = (SELECT game_id FROM games ORDER BY game_id DESC LIMIT 1)
+                    WHERE game_id IS NULL
+                """)
+                # Note: We can't easily change PRIMARY KEY in SQLite without recreating the table
+                # The application code will need to ensure game_id is provided for new records
+                self.conn.commit()
+                print("game_id column added to rotation_state successfully!")
+            except Exception as e:
+                print(f"Failed to add game_id to rotation_state: {e}")
+        
         # Create indexes for better query performance
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_contacts_rally ON contacts(rally_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_contacts_player ON contacts(player_id)")
@@ -302,8 +347,11 @@ class VideoStatsDB:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_game_players_player ON game_players(player_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_player_stats_game ON player_stats(game_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_player_stats_player ON player_stats(player_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_active_lineup_game ON active_lineup(game_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_active_lineup_team ON active_lineup(team_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_active_lineup_player ON active_lineup(player_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_rotation_state_game ON rotation_state(game_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_rotation_state_team ON rotation_state(team_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_team ON events(team_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_substitutions_team ON substitutions(team_id)")
@@ -1244,6 +1292,121 @@ class VideoStatsDB:
             'y400_right': (result[18], result[19]) if result[18] is not None else None,
             'homography_matrix': homography_matrix
         }
+    
+    def delete_game(self, game_id: int) -> dict:
+        """Delete a single game and all related data.
+        
+        This method deletes:
+        - contacts (via rallies)
+        - rallies
+        - game_players
+        - player_stats
+        - substitutions
+        - libero_actions
+        - rotation_state (for teams in the game)
+        - the game itself
+        
+        Args:
+            game_id: The ID of the game to delete
+            
+        Returns:
+            Dictionary with counts of deleted records:
+            {
+                'contacts': int,
+                'rallies': int,
+                'game_players': int,
+                'player_stats': int,
+                'substitutions': int,
+                'libero_actions': int,
+                'rotation_state': int,
+                'game': int (should be 1 if successful, 0 if game not found)
+            }
+            
+        Raises:
+            ValueError: If game_id is invalid
+            Exception: If database operations fail
+        """
+        if not game_id or game_id <= 0:
+            raise ValueError("game_id must be a positive integer")
+        
+        if not self.conn:
+            self.connect()
+        
+        try:
+            cursor = self.conn.cursor()
+            
+            # Verify game exists and get team IDs
+            cursor.execute("""
+                SELECT game_id, team_us_id, team_them_id 
+                FROM games 
+                WHERE game_id = ?
+            """, (game_id,))
+            game = cursor.fetchone()
+            
+            if not game:
+                return {
+                    'contacts': 0,
+                    'rallies': 0,
+                    'game_players': 0,
+                    'player_stats': 0,
+                    'substitutions': 0,
+                    'libero_actions': 0,
+                    'active_lineup': 0,
+                    'rotation_state': 0,
+                    'game': 0
+                }
+            
+            team_us_id, team_them_id = game[1], game[2]
+            deleted_counts = {}
+            
+            # 1. Delete contacts (via rallies)
+            cursor.execute("""
+                DELETE FROM contacts 
+                WHERE rally_id IN (
+                    SELECT rally_id FROM rallies WHERE game_id = ?
+                )
+            """, (game_id,))
+            deleted_counts['contacts'] = cursor.rowcount
+            
+            # 2. Delete rallies
+            cursor.execute("DELETE FROM rallies WHERE game_id = ?", (game_id,))
+            deleted_counts['rallies'] = cursor.rowcount
+            
+            # 3. Delete game_players
+            cursor.execute("DELETE FROM game_players WHERE game_id = ?", (game_id,))
+            deleted_counts['game_players'] = cursor.rowcount
+            
+            # 4. Delete player_stats
+            cursor.execute("DELETE FROM player_stats WHERE game_id = ?", (game_id,))
+            deleted_counts['player_stats'] = cursor.rowcount
+            
+            # 5. Delete substitutions
+            cursor.execute("DELETE FROM substitutions WHERE game_id = ?", (game_id,))
+            deleted_counts['substitutions'] = cursor.rowcount
+            
+            # 6. Delete libero_actions
+            cursor.execute("DELETE FROM libero_actions WHERE game_id = ?", (game_id,))
+            deleted_counts['libero_actions'] = cursor.rowcount
+            
+            # 7. Delete active_lineup for the game
+            cursor.execute("DELETE FROM active_lineup WHERE game_id = ?", (game_id,))
+            deleted_counts['active_lineup'] = cursor.rowcount
+            
+            # 8. Delete rotation_state for the game
+            cursor.execute("DELETE FROM rotation_state WHERE game_id = ?", (game_id,))
+            deleted_counts['rotation_state'] = cursor.rowcount
+            
+            # 9. Finally, delete the game itself
+            cursor.execute("DELETE FROM games WHERE game_id = ?", (game_id,))
+            deleted_counts['game'] = cursor.rowcount
+            
+            self.conn.commit()
+            
+            return deleted_counts
+            
+        except Exception as e:
+            self.conn.rollback()
+            raise Exception(f"Failed to delete game {game_id}: {str(e)}")
 
 
 if __name__ == "__main__":

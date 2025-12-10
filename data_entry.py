@@ -1150,9 +1150,9 @@ class DataEntryWindow(QMainWindow):
                        al.position_number
                 FROM active_lineup al
                 INNER JOIN players p ON al.player_id = p.player_id
-                WHERE al.team_id = ?
+                WHERE al.game_id = ? AND al.team_id = ?
                 ORDER BY al.position_number
-            """, (team_id,))
+            """, (self.game_id, team_id))
             return cursor.fetchall()
         else:
             # For team_them, return empty (they don't use active_lineup)
@@ -2690,7 +2690,7 @@ class DataEntryWindow(QMainWindow):
             # Auto-rotate team_us if team_them served and team_us won the point
             if team_them_served and point_winner_id == self.team_us_id:
                 try:
-                    self.lineup_manager.rotate(self.team_us_id)
+                    self.lineup_manager.rotate(self.game_id, self.team_us_id)
                     print(f"DEBUG: Auto-rotated team_us after winning point (team_them had served)")
                 except Exception as e:
                     print(f"DEBUG ERROR: Failed to rotate team_us: {e}")
@@ -3348,7 +3348,7 @@ class DataEntryWindow(QMainWindow):
                 contacts_deleted, rallies_deleted = self.db.delete_game_rallies_and_contacts(self.game_id)
                 
                 # Restore initial lineup and rotation state for team_us
-                success, team_us_serving = self.lineup_manager.restore_initial_lineup(self.team_us_id, self.game_id)
+                success, team_us_serving = self.lineup_manager.restore_initial_lineup(self.game_id, self.team_us_id)
                 if success:
                     # Set serving team based on initial setup
                     if team_us_serving:
