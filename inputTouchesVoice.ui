@@ -1512,6 +1512,37 @@ QPushButton:disabled {
      <enum>Qt::Orientation::Horizontal</enum>
     </property>
    </widget>
+   <widget class="QLabel" name="label_substitution_title">
+    <property name="geometry">
+     <rect>
+      <x>10</x>
+      <y>590</y>
+      <width>200</width>
+      <height>20</height>
+     </rect>
+    </property>
+    <property name="font">
+     <font>
+      <bold>true</bold>
+     </font>
+    </property>
+    <property name="text">
+     <string>Player Substitution</string>
+    </property>
+   </widget>
+   <widget class="QPushButton" name="pushButton_substitution">
+    <property name="geometry">
+     <rect>
+      <x>10</x>
+      <y>620</y>
+      <width>150</width>
+      <height>30</height>
+     </rect>
+    </property>
+    <property name="text">
+     <string>Substitute Player</string>
+    </property>
+   </widget>
   </widget>
   <widget class="QMenuBar" name="menubar">
    <property name="geometry">

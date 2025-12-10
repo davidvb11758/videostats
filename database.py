@@ -244,6 +244,7 @@ class VideoStatsDB:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS substitutions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                game_id INTEGER NOT NULL REFERENCES games(game_id),
                 team_id INTEGER NOT NULL REFERENCES teams(team_id),
                 out_player_id INTEGER NOT NULL REFERENCES players(player_id),
                 in_player_id INTEGER NOT NULL REFERENCES players(player_id),
@@ -257,6 +258,7 @@ class VideoStatsDB:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS libero_actions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                game_id INTEGER NOT NULL REFERENCES games(game_id),
                 team_id INTEGER NOT NULL REFERENCES teams(team_id),
                 libero_id INTEGER NOT NULL REFERENCES players(player_id),
                 replaced_player_id INTEGER NOT NULL REFERENCES players(player_id),
@@ -265,6 +267,29 @@ class VideoStatsDB:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        
+        # Migration: Add game_id column if it doesn't exist (for existing databases)
+        try:
+            cursor.execute("ALTER TABLE substitutions ADD COLUMN game_id INTEGER REFERENCES games(game_id)")
+            # Set default game_id for existing records (use most recent game or NULL)
+            cursor.execute("""
+                UPDATE substitutions 
+                SET game_id = (SELECT game_id FROM games ORDER BY game_id DESC LIMIT 1)
+                WHERE game_id IS NULL
+            """)
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+        
+        try:
+            cursor.execute("ALTER TABLE libero_actions ADD COLUMN game_id INTEGER REFERENCES games(game_id)")
+            # Set default game_id for existing records
+            cursor.execute("""
+                UPDATE libero_actions 
+                SET game_id = (SELECT game_id FROM games ORDER BY game_id DESC LIMIT 1)
+                WHERE game_id IS NULL
+            """)
+        except sqlite3.OperationalError:
+            pass  # Column already exists
         
         # Create indexes for better query performance
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_contacts_rally ON contacts(rally_id)")
@@ -282,7 +307,9 @@ class VideoStatsDB:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_team ON events(team_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_substitutions_team ON substitutions(team_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_substitutions_game ON substitutions(game_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_libero_actions_team ON libero_actions(team_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_libero_actions_game ON libero_actions(game_id)")
         
         # Populate positions table with static data if empty
         cursor.execute("SELECT COUNT(*) FROM positions")

@@ -413,6 +413,23 @@ class CreateGameDialog(QDialog):
             
             self.db.conn.commit()
             
+            # Populate game_players for team_us (all roster players)
+            # This makes all players available for substitutions and libero replacements
+            cursor = self.db.conn.cursor()
+            cursor.execute("""
+                SELECT player_id FROM players WHERE team_id = ?
+            """, (team_us_id,))
+            team_us_roster = cursor.fetchall()
+            
+            for (player_id,) in team_us_roster:
+                try:
+                    self.db.add_player_to_game(self.game_id, team_us_id, player_id)
+                except Exception as e:
+                    # Player might already be in game - log but continue
+                    print(f"Warning: Could not add team_us player {player_id} to game: {e}")
+            
+            self.db.conn.commit()
+            
             # Populate game_players for team_them (opponent)
             # Default to team_id 12 with player_ids 30, 31, 32, 33
             cursor = self.db.conn.cursor()

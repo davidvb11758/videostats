@@ -110,6 +110,12 @@ class CoordinateMapper(QMainWindow):
         self.store_boundaries_btn.setEnabled(False)  # Disabled until court is set
         button_layout.addWidget(self.store_boundaries_btn)
         
+        self.clear_dots_btn = QPushButton("Clear Dots")
+        self.clear_dots_btn.setFont(QFont('Arial', 12))
+        self.clear_dots_btn.clicked.connect(self.clear_green_dots)
+        self.clear_dots_btn.setEnabled(True)  # Always enabled
+        button_layout.addWidget(self.clear_dots_btn)
+        
         button_layout.addStretch()  # Push buttons to the left
         layout.addLayout(button_layout)
         
@@ -880,6 +886,21 @@ class CoordinateMapper(QMainWindow):
                 
                 # Emit signal with mapped coordinates and timecode
                 self.coordinate_mapped.emit(logical_coords[0], logical_coords[1], x, y, timecode_ms)
+    
+    def clear_green_dots(self):
+        """Clear all green dots and coordinate text from the canvas."""
+        # Remove all graphics items (dots and text) but keep corner points and homography
+        for item in self.graphics_items:
+            self.scene.removeItem(item)
+        self.graphics_items.clear()
+        
+        # Clear mapped_points list (but keep corner_points for homography)
+        self.mapped_points.clear()
+        
+        # Clear coordinate label
+        self.coord_label.setText("")
+        
+        print("DEBUG: Cleared all green dots and coordinate text from canvas")
     
     def _compute_homography(self):
         """Compute the homography matrix using OpenCV based on the 10 control points."""

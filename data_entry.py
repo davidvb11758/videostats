@@ -960,6 +960,10 @@ class DataEntryWindow(QMainWindow):
         if hasattr(self.ui, 'resetTheGame'):
             self.ui.resetTheGame.clicked.connect(self.reset_the_game)
         
+        # Substitution button
+        if hasattr(self.ui, 'pushButton_substitution'):
+            self.ui.pushButton_substitution.clicked.connect(self.show_substitution_dialog)
+        
         # Store selected player
         self.selected_player_number = None
         self.selected_team_id = None
@@ -1165,10 +1169,15 @@ class DataEntryWindow(QMainWindow):
         Returns:
             GroupBox name (e.g., 'groupBox_LF') or None if no match
         """
-        # Normalize role codes (RS and RH are synonyms, S is Setter)
-        role = role_code.upper()
-        if role == 'RH':
-            role = 'RS'
+        # Handle None or empty role_code
+        if not role_code or role_code.strip() == '':
+            # Default to OH if role is not set
+            role = 'OH'
+        else:
+            # Normalize role codes (RS and RH are synonyms, S is Setter)
+            role = role_code.upper().strip()
+            if role == 'RH':
+                role = 'RS'
         
         # Front row positions: 2, 3, 4 (RF, MF, LF)
         # Back row positions: 1, 5, 6 (RB, MB, LB)
@@ -1181,14 +1190,22 @@ class DataEntryWindow(QMainWindow):
                 return 'groupBox_LF'
             elif role == 'MH':
                 return 'groupBox_MF'
-            elif role in ('RS', 'S'):
+            elif role in ('RS', 'S', 'RH'):
                 return 'groupBox_RF'
+            else:
+                # Fallback for unknown roles in front row: distribute evenly
+                if position_number == 2:
+                    return 'groupBox_RF'
+                elif position_number == 3:
+                    return 'groupBox_MF'
+                elif position_number == 4:
+                    return 'groupBox_LF'
         elif position_number in BACK_ROW:
             # Back row logic
             if role == 'Lib':
                 # Libero always uses LB when in back row
                 return 'groupBox_LB'
-            elif role in ('S', 'RS'):
+            elif role in ('S', 'RS', 'RH'):
                 # Setter or RS always uses RB when in back row
                 return 'groupBox_RB'
             elif role in ('OH', 'DS'):
@@ -1198,12 +1215,22 @@ class DataEntryWindow(QMainWindow):
                 else:
                     return 'groupBox_LB'
             elif role == 'MH':
-                # MH: use MB when libero is NOT on court
-                if not has_libero:
+                # MH: always use MB when in back row (regardless of libero status)
+                return 'groupBox_MB'
+            else:
+                # Fallback for unknown roles in back row: distribute evenly
+                if position_number == 1:
+                    return 'groupBox_RB'
+                elif position_number == 5:
+                    return 'groupBox_LB'
+                elif position_number == 6:
                     return 'groupBox_MB'
-                # If libero is on court and MH is in back row, no specific mapping?
-                # (This case might not occur in practice)
-                return None
+        
+        # Final fallback: return a default based on position
+        if position_number in FRONT_ROW:
+            return 'groupBox_MF'  # Default to middle front
+        elif position_number in BACK_ROW:
+            return 'groupBox_MB'  # Default to middle back
         
         return None
     
@@ -1232,6 +1259,88 @@ class DataEntryWindow(QMainWindow):
             # Click is on team_them side - use team_them
             team_id = self.team_them_id
             print(f"DEBUG: Click on team_them side (Y={y_coord}) - using team_them")
+        
+        # Check if this is a serve (no rally in progress and team_us is serving)
+        # This must be checked BEFORE all the contact counting logic
+        print(f"DEBUG SERVE CHECK: rally_in_progress={self.rally_in_progress}, team_id={team_id}, team_us_id={self.team_us_id}, serving_team_id={self.serving_team_id}")
+        if not self.rally_in_progress and team_id == self.team_us_id:
+            # Check if team_us is serving (serving_team_id can be None initially, so check explicitly)
+            if self.serving_team_id == self.team_us_id or (self.serving_team_id is None and team_id == self.team_us_id):
+                # This is a serve - get the server from active_lineup
+                if not self.db.conn:
+                    self.db.connect()
+                cursor = self.db.conn.cursor()
+                cursor.execute("""
+                    SELECT al.player_id, COALESCE(p.jersey, p.player_number) as player_number, p.name
+                    FROM active_lineup al
+                    INNER JOIN players p ON al.player_id = p.player_id
+                    WHERE al.team_id = ? AND al.is_server = 1
+                """, (team_id,))
+                result = cursor.fetchone()
+                server_player_id = None
+                server_player_number = None
+                server_player_name = None
+                
+                if result:
+                    server_player_id, server_player_number, server_player_name = result
+                    print(f"DEBUG: Serve detected - Server: #{server_player_number} {server_player_name} (ID:{server_player_id})")
+                else:
+                    # Fallback: position 1 is the server
+                    cursor.execute("""
+                        SELECT al.player_id, COALESCE(p.jersey, p.player_number) as player_number, p.name
+                        FROM active_lineup al
+                        INNER JOIN players p ON al.player_id = p.player_id
+                        WHERE al.team_id = ? AND al.position_number = 1
+                    """, (team_id,))
+                    result = cursor.fetchone()
+                    if result:
+                        server_player_id, server_player_number, server_player_name = result
+                        print(f"DEBUG: Serve detected (fallback to position 1) - Server: #{server_player_number} {server_player_name} (ID:{server_player_id})")
+                
+                if server_player_id:
+                    # Show serve dialog and return immediately
+                    dialog = QDialog(self.coordinate_mapper if self.coordinate_mapper else self)
+                    dialog.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint)
+                    dialog.setModal(True)
+                    
+                    layout = QVBoxLayout()
+                    layout.setContentsMargins(10, 10, 10, 10)
+                    layout.setSpacing(5)
+                    
+                    # Server label
+                    server_label = QLabel(f"Server: #{server_player_number} {server_player_name or 'Unknown'}")
+                    server_label.setFont(QFont('Arial', 10, QFont.Weight.Bold))
+                    layout.addWidget(server_label)
+                    
+                    # Serve button
+                    serve_btn = QPushButton("Serve")
+                    serve_btn.setFont(QFont('Arial', 10))
+                    serve_btn.setFixedSize(100, 40)
+                    serve_btn.setStyleSheet("background-color: #E0FFFF; border: 1px solid #505050;")
+                    
+                    selected_action = [None]
+                    serve_btn.clicked.connect(lambda: (selected_action.__setitem__(0, [server_player_id, "serve"]), dialog.accept()))
+                    
+                    layout.addWidget(serve_btn)
+                    dialog.setLayout(layout)
+                    dialog.setFixedSize(120, 80)
+                    
+                    # Position dialog to the upper right corner of the clicked point
+                    if self.coordinate_mapper and pixel_x is not None and pixel_y is not None:
+                        mapper_pos = self.coordinate_mapper.mapToGlobal(QPoint(0, 0))
+                        dialog_x = mapper_pos.x() + int(pixel_x) + 10
+                        dialog_y = mapper_pos.y() + int(pixel_y) - 80
+                        dialog.move(dialog_x, dialog_y)
+                    elif pixel_x is not None and pixel_y is not None:
+                        dialog_x = int(pixel_x) + 10
+                        dialog_y = int(pixel_y) - 80
+                        dialog.move(dialog_x, dialog_y)
+                    
+                    if dialog.exec() == QDialog.Accepted and selected_action[0]:
+                        self.selected_player_id = selected_action[0][0]
+                        self.selected_team_id = team_id
+                        self.record_contact(selected_action[0][1])
+                    return  # Return immediately after handling serve
         
         # Only use new UI for team_us (they have active_lineup)
         # For team_them, fall back to old dialog
@@ -1446,13 +1555,20 @@ class DataEntryWindow(QMainWindow):
             # Map players to GroupBoxes
             groupbox_assignments = {}  # {groupbox_name: [(player_id, player_number, player_name, role_code, position_number), ...]}
             
+            print(f"DEBUG POPUP: Active players count: {len(active_players)}")
             for player_data in active_players:
                 player_id, player_number, player_name, role_code, position_number = player_data
+                print(f"DEBUG POPUP: Player #{player_number} ({player_name}) - Role: {role_code}, Position: {position_number}, Has Libero: {has_libero}")
                 groupbox_name = self.map_player_to_groupbox(role_code, position_number, has_libero)
+                print(f"DEBUG POPUP:   -> Mapped to GroupBox: {groupbox_name}")
                 if groupbox_name:
                     if groupbox_name not in groupbox_assignments:
                         groupbox_assignments[groupbox_name] = []
                     groupbox_assignments[groupbox_name].append(player_data)
+                else:
+                    print(f"DEBUG POPUP:   -> WARNING: No GroupBox mapping for player #{player_number} (Role: {role_code}, Position: {position_number})")
+            
+            print(f"DEBUG POPUP: GroupBox assignments: {list(groupbox_assignments.keys())}")
             
             # Define button configurations by contact number
             # Button order: 1st contact row (buttons 1-3), 2nd contact row (buttons 4-5), 3rd contact row (buttons 6-7)
@@ -2606,7 +2722,7 @@ class DataEntryWindow(QMainWindow):
             QMessageBox.critical(self, "Database Error", f"Failed to end rally:\n{str(e)}")
     
     def print_team_us_lineup(self):
-        """Print debug message listing the 6 players on team_us and their court positions."""
+        """Print debug message listing the 6 players on team_us and their court positions, plus bench players."""
         if not self.team_us_id or not self.game_id:
             return
         
@@ -2634,12 +2750,242 @@ class DataEntryWindow(QMainWindow):
                 print("="*60)
                 for position_number, player_id, player_number, player_name, role_code in players:
                     name_display = player_name if player_name else "Unknown"
-                    print(f"  Position {position_number}: Player #{player_number} - {name_display} ({role_code})")
+                    print(f"  Position {position_number}: Player #{player_number} (ID:{player_id}) - {name_display} ({role_code})")
+                print("="*60)
+                
+                # Also print bench players
+                bench_players = self.get_bench_players(self.team_us_id)
+                if bench_players:
+                    print("DEBUG: Team_US Bench Players:")
+                    print("-"*60)
+                    for player_id, player_number, player_name in bench_players:
+                        name_display = player_name if player_name else "Unknown"
+                        # Get role code for bench player
+                        cursor.execute("""
+                            SELECT role_code FROM players WHERE player_id = ?
+                        """, (player_id,))
+                        role_result = cursor.fetchone()
+                        role_code = role_result[0] if role_result and role_result[0] else "N/A"
+                        print(f"  Bench: Player #{player_number} (ID:{player_id}) - {name_display} ({role_code})")
+                    print("-"*60)
+                else:
+                    print("DEBUG: No bench players available")
                 print("="*60 + "\n")
             else:
                 print("DEBUG: No active lineup found for team_us")
         except Exception as e:
             print(f"DEBUG ERROR: Failed to print team_us lineup: {e}")
+    
+    def get_bench_players(self, team_id: int):
+        """Get bench players (players in game_players but not in active_lineup).
+        
+        Args:
+            team_id: The team ID to get bench players for
+            
+        Returns:
+            List of (player_id, player_number, player_name) tuples
+        """
+        if not self.game_id:
+            return []
+        
+        if not self.db.conn:
+            self.db.connect()
+        
+        cursor = self.db.conn.cursor()
+        
+        # Get all players in game_players for this team
+        cursor.execute("""
+            SELECT p.player_id, 
+                   COALESCE(p.jersey, p.player_number) as player_number,
+                   p.name
+            FROM players p
+            INNER JOIN game_players gp ON p.player_id = gp.player_id
+            WHERE gp.game_id = ? AND gp.team_id = ?
+            ORDER BY CASE 
+                WHEN CAST(COALESCE(p.jersey, p.player_number) AS INTEGER) IS NOT NULL 
+                THEN CAST(COALESCE(p.jersey, p.player_number) AS INTEGER)
+                ELSE 999
+            END,
+            COALESCE(p.jersey, p.player_number)
+        """, (self.game_id, team_id))
+        
+        all_players = cursor.fetchall()
+        
+        # Get active players (those in active_lineup)
+        cursor.execute("""
+            SELECT player_id
+            FROM active_lineup
+            WHERE team_id = ?
+        """, (team_id,))
+        
+        active_player_ids = {row[0] for row in cursor.fetchall()}
+        
+        # Filter to get bench players (not in active_lineup)
+        bench_players = [(pid, pnum, pname) for pid, pnum, pname in all_players if pid not in active_player_ids]
+        
+        return bench_players
+    
+    def get_active_players_with_positions(self, team_id: int):
+        """Get active players with their court positions.
+        
+        Args:
+            team_id: The team ID to get active players for
+            
+        Returns:
+            List of (player_id, player_number, player_name, position_number) tuples
+        """
+        if not self.game_id:
+            return []
+        
+        if not self.db.conn:
+            self.db.connect()
+        
+        cursor = self.db.conn.cursor()
+        
+        cursor.execute("""
+            SELECT p.player_id, 
+                   COALESCE(p.jersey, p.player_number) as player_number,
+                   p.name,
+                   al.position_number
+            FROM active_lineup al
+            INNER JOIN players p ON al.player_id = p.player_id
+            WHERE al.team_id = ?
+            ORDER BY al.position_number
+        """, (team_id,))
+        
+        return cursor.fetchall()
+    
+    def show_substitution_dialog(self):
+        """Show dialog for player substitution."""
+        if not self.game_id or not self.team_us_id:
+            QMessageBox.warning(self, "No Game", "Please select a game first.")
+            return
+        
+        # Get bench players and active players
+        bench_players = self.get_bench_players(self.team_us_id)
+        active_players = self.get_active_players_with_positions(self.team_us_id)
+        
+        if not bench_players:
+            QMessageBox.information(self, "No Bench Players", "No bench players available for substitution.")
+            return
+        
+        if not active_players:
+            QMessageBox.information(self, "No Active Players", "No active players on court.")
+            return
+        
+        # Create substitution dialog
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Player Substitution")
+        dialog.setModal(True)
+        dialog.setMinimumSize(500, 400)
+        
+        layout = QVBoxLayout(dialog)
+        
+        # Instructions
+        instructions = QLabel("Select a bench player to enter and an active player to exit:")
+        instructions.setWordWrap(True)
+        layout.addWidget(instructions)
+        
+        # Two column layout for lists
+        lists_layout = QHBoxLayout()
+        
+        # Bench players list (left)
+        bench_label = QLabel("Bench Players:")
+        bench_label.setFont(QFont('Arial', 10, QFont.Weight.Bold))
+        bench_list = QListWidget()
+        bench_list.setMinimumWidth(200)
+        for player_id, player_number, player_name in bench_players:
+            display_text = f"#{player_number} - {player_name}" if player_name else f"#{player_number}"
+            item = QListWidgetItem(display_text)
+            item.setData(Qt.ItemDataRole.UserRole, player_id)
+            bench_list.addItem(item)
+        
+        bench_layout = QVBoxLayout()
+        bench_layout.addWidget(bench_label)
+        bench_layout.addWidget(bench_list)
+        lists_layout.addLayout(bench_layout)
+        
+        # Active players list (right)
+        active_label = QLabel("Active Players (on court):")
+        active_label.setFont(QFont('Arial', 10, QFont.Weight.Bold))
+        active_list = QListWidget()
+        active_list.setMinimumWidth(200)
+        for player_id, player_number, player_name, position_number in active_players:
+            display_text = f"#{player_number} - {player_name} (Pos {position_number})" if player_name else f"#{player_number} (Pos {position_number})"
+            item = QListWidgetItem(display_text)
+            item.setData(Qt.ItemDataRole.UserRole, player_id)
+            active_list.addItem(item)
+        
+        active_layout = QVBoxLayout()
+        active_layout.addWidget(active_label)
+        active_layout.addWidget(active_list)
+        lists_layout.addLayout(active_layout)
+        
+        layout.addLayout(lists_layout)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(dialog.reject)
+        button_layout.addWidget(cancel_btn)
+        
+        substitute_btn = QPushButton("Substitute")
+        substitute_btn.setDefault(True)
+        substitute_btn.setEnabled(False)  # Disabled until both are selected
+        
+        def on_selection_changed():
+            """Enable substitute button when both players are selected."""
+            bench_selected = bench_list.currentItem() is not None
+            active_selected = active_list.currentItem() is not None
+            substitute_btn.setEnabled(bench_selected and active_selected)
+        
+        bench_list.itemSelectionChanged.connect(on_selection_changed)
+        active_list.itemSelectionChanged.connect(on_selection_changed)
+        
+        def perform_substitution():
+            """Perform the substitution."""
+            bench_item = bench_list.currentItem()
+            active_item = active_list.currentItem()
+            
+            if not bench_item or not active_item:
+                return
+            
+            in_player_id = bench_item.data(Qt.ItemDataRole.UserRole)
+            out_player_id = active_item.data(Qt.ItemDataRole.UserRole)
+            
+            try:
+                # Perform substitution using LineupManager
+                self.lineup_manager.substitution(
+                    team_id=self.team_us_id,
+                    out_player_id=out_player_id,
+                    in_player_id=in_player_id,
+                    game_id=self.game_id
+                )
+                
+                # Update the MainWindow player buttons to reflect the new lineup
+                self.update_mainwindow_player_buttons()
+                
+                # Update UI state to ensure action buttons are properly enabled/disabled
+                self.update_ui_state()
+                
+                # Print updated lineup
+                self.print_team_us_lineup()
+                
+                QMessageBox.information(self, "Substitution Complete", 
+                                      "Player substitution completed successfully.")
+                dialog.accept()
+            except Exception as e:
+                QMessageBox.critical(self, "Substitution Error", 
+                                   f"Failed to perform substitution:\n{str(e)}")
+        
+        substitute_btn.clicked.connect(perform_substitution)
+        button_layout.addWidget(substitute_btn)
+        
+        layout.addLayout(button_layout)
+        
+        dialog.exec()
     
     def update_score_display(self):
         """Update the score display in status bar."""
@@ -2695,11 +3041,27 @@ class DataEntryWindow(QMainWindow):
         if not self.game_id or not self.team_us_id:
             return
         
-        # Get active players for team_us
-        active_players = self.get_team_players(self.team_us_id)
+        # Get active players for team_us directly from active_lineup
+        # This ensures we get the most up-to-date lineup after substitutions
+        if not self.db.conn:
+            self.db.connect()
+        cursor = self.db.conn.cursor()
+        cursor.execute("""
+            SELECT al.player_id, 
+                   COALESCE(p.jersey, p.player_number) as player_number,
+                   p.name
+            FROM active_lineup al
+            INNER JOIN players p ON al.player_id = p.player_id
+            WHERE al.team_id = ?
+            ORDER BY al.position_number
+        """, (self.team_us_id,))
+        active_players = cursor.fetchall()
         
         if not active_players:
-            return
+            # Fallback to get_team_players if active_lineup is empty
+            active_players = self.get_team_players(self.team_us_id)
+            if not active_players:
+                return
         
         # Get jersey numbers for all players in one query
         if not self.db.conn:
@@ -2985,17 +3347,35 @@ class DataEntryWindow(QMainWindow):
                 # Delete all rallies and contacts for this game
                 contacts_deleted, rallies_deleted = self.db.delete_game_rallies_and_contacts(self.game_id)
                 
+                # Restore initial lineup and rotation state for team_us
+                success, team_us_serving = self.lineup_manager.restore_initial_lineup(self.team_us_id, self.game_id)
+                if success:
+                    # Set serving team based on initial setup
+                    if team_us_serving:
+                        self.serving_team_id = self.team_us_id
+                    else:
+                        self.serving_team_id = self.team_them_id
+                else:
+                    # Fallback: if no initial setup found, default to team_us serving
+                    self.serving_team_id = self.team_us_id
+                    print("WARNING: Could not find initial setup event. Using default lineup.")
+                
                 # Reset tracking state
                 self.current_rally_id = None
                 self.current_rally_number = 0
                 self.current_sequence = 0
-                self.serving_team_id = self.team_us_id  # Start with our team serving
                 self.rally_in_progress = False
                 self.score_us = 0
                 self.score_them = 0
                 self.selected_player_number = None
                 self.selected_team_id = None
                 self.opponent_contact_count = 0  # Reset opponent contact sequence
+                
+                # Update MainWindow player buttons to reflect restored lineup
+                self.update_mainwindow_player_buttons()
+                
+                # Print restored lineup
+                self.print_team_us_lineup()
                 
                 # Update UI
                 self.update_score_display()
@@ -3005,7 +3385,8 @@ class DataEntryWindow(QMainWindow):
                 QMessageBox.information(
                     self, "Game Reset",
                     f"Game has been reset successfully!\n\n"
-                    f"Deleted: {rallies_deleted} rallies and {contacts_deleted} contacts."
+                    f"Deleted: {rallies_deleted} rallies and {contacts_deleted} contacts.\n"
+                    f"Restored starting lineup and rotation state."
                 )
                 
             except Exception as e:

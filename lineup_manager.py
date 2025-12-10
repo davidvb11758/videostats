@@ -358,6 +358,7 @@ class LineupManager:
         self.db.conn.commit()
     
     def substitution(self, team_id: int, out_player_id: int, in_player_id: int,
+                     game_id: Optional[int] = None,
                      out_position: Optional[int] = None, in_position: Optional[int] = None):
         """Perform a substitution.
         
@@ -365,28 +366,41 @@ class LineupManager:
             team_id: Team ID
             out_player_id: Player leaving the court
             in_player_id: Player entering the court
+            game_id: Game ID (required for tracking)
             out_position: Optional position of outgoing player (validated if provided)
             in_position: Optional position for incoming player (must match out_position if both provided)
         
         Raises:
             ValueError: If substitution is invalid
         """
+        if game_id is None:
+            raise ValueError("game_id is required for substitution")
         cursor = self.db.conn.cursor()
         
-        # Validate in_player is on bench
-        cursor.execute("SELECT is_active FROM players WHERE player_id = ?", (in_player_id,))
-        in_player_row = cursor.fetchone()
-        if not in_player_row:
+        # Validate in_player exists
+        cursor.execute("SELECT player_id FROM players WHERE player_id = ?", (in_player_id,))
+        if not cursor.fetchone():
             raise ValueError(f"Player {in_player_id} not found")
-        if in_player_row[0]:
+        
+        # Validate in_player is on bench (not in active_lineup)
+        cursor.execute("""
+            SELECT player_id FROM active_lineup
+            WHERE team_id = ? AND player_id = ?
+        """, (team_id, in_player_id))
+        if cursor.fetchone():
             raise ValueError(f"Player {in_player_id} is already on court")
         
-        # Validate out_player is on court
-        cursor.execute("SELECT is_active FROM players WHERE player_id = ?", (out_player_id,))
-        out_player_row = cursor.fetchone()
-        if not out_player_row:
+        # Validate out_player exists
+        cursor.execute("SELECT player_id FROM players WHERE player_id = ?", (out_player_id,))
+        if not cursor.fetchone():
             raise ValueError(f"Player {out_player_id} not found")
-        if not out_player_row[0]:
+        
+        # Validate out_player is on court (in active_lineup)
+        cursor.execute("""
+            SELECT player_id FROM active_lineup
+            WHERE team_id = ? AND player_id = ?
+        """, (team_id, out_player_id))
+        if not cursor.fetchone():
             raise ValueError(f"Player {out_player_id} is not on court")
         
         # Find out_player's current position
@@ -430,9 +444,9 @@ class LineupManager:
             # Record substitution
             cursor.execute("""
                 INSERT INTO substitutions 
-                (team_id, out_player_id, in_player_id, out_position, in_position, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (team_id, out_player_id, in_player_id, target_position, target_position, datetime.now(timezone.utc)))
+                (game_id, team_id, out_player_id, in_player_id, out_position, in_position, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (game_id, team_id, out_player_id, in_player_id, target_position, target_position, datetime.now(timezone.utc)))
             
             # Run role adjustment check
             self.role_adjustment_check(team_id)
@@ -453,7 +467,7 @@ class LineupManager:
             raise
     
     def libero_replace(self, team_id: int, libero_id: int, replaced_player_id: int,
-                      replaced_position: int, action: str):
+                      replaced_position: int, action: str, game_id: Optional[int] = None):
         """Perform a libero replacement (enter or exit).
         
         Args:
@@ -462,10 +476,13 @@ class LineupManager:
             replaced_player_id: Player ID being replaced
             replaced_position: Position number (must be back row)
             action: 'enter' or 'exit'
+            game_id: Game ID (required for tracking)
         
         Raises:
             ValueError: If replacement is invalid
         """
+        if game_id is None:
+            raise ValueError("game_id is required for libero replacement")
         if action not in ('enter', 'exit'):
             raise ValueError(f"Action must be 'enter' or 'exit', got '{action}'")
         
@@ -529,9 +546,9 @@ class LineupManager:
             # Record libero action
             cursor.execute("""
                 INSERT INTO libero_actions
-                (team_id, libero_id, replaced_player_id, replaced_position, action, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (team_id, libero_id, replaced_player_id, replaced_position, action, datetime.now(timezone.utc)))
+                (game_id, team_id, libero_id, replaced_player_id, replaced_position, action, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (game_id, team_id, libero_id, replaced_player_id, replaced_position, action, datetime.now(timezone.utc)))
             
             # Run role adjustment check
             self.role_adjustment_check(team_id)
@@ -586,4 +603,104 @@ class LineupManager:
             'serving': state.serving,
             'term_of_service_start': state.term_of_service_start.isoformat() if state.term_of_service_start else None
         }
+    
+    def restore_initial_lineup(self, team_id: int, game_id: Optional[int] = None) -> Tuple[bool, bool]:
+        """Restore the initial lineup from the initial_setup event.
+        
+        Args:
+            team_id: Team ID to restore lineup for
+            game_id: Game ID (required to delete substitutions and libero actions)
+            
+        Returns:
+            Tuple of (success: bool, serving: bool) - success indicates if initial setup was found and restored
+            
+        Raises:
+            ValueError: If initial setup cannot be restored
+        """
+        cursor = self.db.conn.cursor()
+        
+        # Find the initial_setup event (should be the first one)
+        cursor.execute("""
+            SELECT payload, created_at
+            FROM events
+            WHERE team_id = ? AND event_type = 'initial_setup'
+            ORDER BY created_at ASC
+            LIMIT 1
+        """, (team_id,))
+        
+        result = cursor.fetchone()
+        if not result:
+            return False, False
+        
+        payload_json = result[0]
+        try:
+            payload = json.loads(payload_json) if isinstance(payload_json, str) else payload_json
+        except json.JSONDecodeError:
+            raise ValueError("Failed to parse initial_setup payload")
+        
+        lineup_snapshot = payload.get('lineup', {})
+        serving = payload.get('serving', False)
+        rotation_order = payload.get('rotation_order', DEFAULT_ROTATION_ORDER)
+        
+        if not lineup_snapshot or len(lineup_snapshot) != 6:
+            raise ValueError("Invalid initial lineup in event")
+        
+        try:
+            # Clear current active lineup
+            cursor.execute("DELETE FROM active_lineup WHERE team_id = ?", (team_id,))
+            
+            # Mark all players from this team as inactive first
+            cursor.execute("""
+                UPDATE players 
+                SET is_active = 0 
+                WHERE team_id = ?
+            """, (team_id,))
+            
+            # Restore initial lineup
+            now = datetime.now(timezone.utc)
+            restored_lineup = []
+            for pos in sorted(lineup_snapshot.keys(), key=int):
+                player_data = lineup_snapshot[pos]
+                player_id = player_data['player_id']
+                role_code = player_data.get('role_code', 'OH')
+                is_server = player_data.get('is_server', False)
+                
+                role_code = self._normalize_role_code(role_code)
+                
+                cursor.execute("""
+                    INSERT INTO active_lineup (team_id, position_number, player_id, role_code, is_server, placed_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (team_id, int(pos), player_id, role_code, 1 if is_server else 0, now))
+                
+                # Mark player as active
+                self._update_player_active(player_id, True)
+                
+                restored_lineup.append((int(pos), player_id))
+            
+            # Restore rotation state
+            rotation_order_json = json.dumps(rotation_order)
+            term_start = now if serving else None
+            
+            cursor.execute("""
+                INSERT OR REPLACE INTO rotation_state 
+                (team_id, rotation_order, rotation_index, serving, term_of_service_start)
+                VALUES (?, ?, ?, ?, ?)
+            """, (team_id, rotation_order_json, 0, 1 if serving else 0, term_start))
+            
+            # Delete all substitutions for this game
+            if game_id:
+                cursor.execute("DELETE FROM substitutions WHERE game_id = ?", (game_id,))
+                
+                # Delete all libero actions for this game
+                cursor.execute("DELETE FROM libero_actions WHERE game_id = ?", (game_id,))
+            
+            # Run role adjustment check
+            self.role_adjustment_check(team_id)
+            
+            self.db.conn.commit()
+            return True, serving
+            
+        except Exception as e:
+            self.db.conn.rollback()
+            raise ValueError(f"Failed to restore initial lineup: {e}")
 
