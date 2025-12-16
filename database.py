@@ -4,6 +4,7 @@ Tracks player ball contacts from serve through rally end.
 """
 
 import sqlite3
+import re
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
@@ -308,12 +309,90 @@ class VideoStatsDB:
                     SET game_id = (SELECT game_id FROM games ORDER BY game_id DESC LIMIT 1)
                     WHERE game_id IS NULL
                 """)
-                # Note: We can't easily add NOT NULL constraint or change UNIQUE constraint in SQLite
-                # The application code will need to ensure game_id is provided for new records
                 self.conn.commit()
                 print("game_id column added to active_lineup successfully!")
             except Exception as e:
                 print(f"Failed to add game_id to active_lineup: {e}")
+        
+        # Migration: Fix UNIQUE constraint on active_lineup to include game_id
+        # Check if the constraint needs to be updated
+        # Only do this if game_id column exists (from previous migration)
+        if 'game_id' in active_lineup_columns:
+            needs_migration = False
+            
+            # Check table definition for UNIQUE constraint
+            cursor.execute("""
+                SELECT sql FROM sqlite_master 
+                WHERE type='table' AND name='active_lineup'
+            """)
+            result = cursor.fetchone()
+            if result and result[0]:
+                sql = result[0].upper()
+                # Check if UNIQUE constraint includes game_id
+                # Look for UNIQUE constraint that doesn't start with game_id
+                unique_match = re.search(r'UNIQUE\s*\(([^)]+)\)', sql)
+                if unique_match:
+                    unique_cols = unique_match.group(1).upper()
+                    # If the constraint doesn't start with GAME_ID, we need to recreate
+                    if not unique_cols.strip().startswith('GAME_ID'):
+                        needs_migration = True
+            
+            # Also check for UNIQUE indexes that might exist separately
+            if not needs_migration:
+                cursor.execute("""
+                    SELECT name, sql FROM sqlite_master 
+                    WHERE type='index' AND tbl_name='active_lineup' AND sql LIKE '%UNIQUE%'
+                """)
+                indexes = cursor.fetchall()
+                for index_name, index_sql in indexes:
+                    if index_sql:
+                        index_sql_upper = index_sql.upper()
+                        # Check if index is on (team_id, position_number) without game_id
+                        if 'TEAM_ID' in index_sql_upper and 'POSITION_NUMBER' in index_sql_upper:
+                            if 'GAME_ID' not in index_sql_upper:
+                                needs_migration = True
+                                break
+            
+            if needs_migration:
+                print("Migrating active_lineup table to fix UNIQUE constraint (adding game_id)...")
+                try:
+                    # Create new table with correct constraint
+                    cursor.execute("""
+                        CREATE TABLE active_lineup_new (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            game_id INTEGER NOT NULL REFERENCES games(game_id) ON DELETE CASCADE,
+                            team_id INTEGER NOT NULL REFERENCES teams(team_id),
+                            position_number INTEGER NOT NULL REFERENCES positions(number),
+                            player_id INTEGER NOT NULL REFERENCES players(player_id),
+                            role_code TEXT NOT NULL,
+                            is_server BOOLEAN DEFAULT 0,
+                            placed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            UNIQUE(game_id, team_id, position_number)
+                        )
+                    """)
+                    
+                    # Copy data from old table
+                    cursor.execute("""
+                        INSERT INTO active_lineup_new 
+                        (id, game_id, team_id, position_number, player_id, role_code, is_server, placed_at)
+                        SELECT id, game_id, team_id, position_number, player_id, role_code, is_server, placed_at
+                        FROM active_lineup
+                    """)
+                    
+                    # Drop old table and rename new one
+                    cursor.execute("DROP TABLE active_lineup")
+                    cursor.execute("ALTER TABLE active_lineup_new RENAME TO active_lineup")
+                    
+                    # Recreate indexes
+                    cursor.execute("CREATE INDEX IF NOT EXISTS idx_active_lineup_game ON active_lineup(game_id)")
+                    cursor.execute("CREATE INDEX IF NOT EXISTS idx_active_lineup_team ON active_lineup(team_id)")
+                    cursor.execute("CREATE INDEX IF NOT EXISTS idx_active_lineup_player ON active_lineup(player_id)")
+                    
+                    self.conn.commit()
+                    print("active_lineup table migrated successfully!")
+                except Exception as e:
+                    self.conn.rollback()
+                    print(f"Migration of active_lineup failed: {e}. You may need to manually migrate the database.")
         
         # Migration: Add game_id to rotation_state if it doesn't exist
         cursor.execute("PRAGMA table_info(rotation_state)")

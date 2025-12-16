@@ -169,15 +169,8 @@ class LineupManager:
         if front_row_count != 3 or back_row_count != 3:
             raise ValueError(f"Lineup must have 3 front row and 3 back row players")
         
-        # Validate libero not in front row
-        cursor = self.db.conn.cursor()
-        for pos, player_id in lineup:
-            if pos in FRONT_ROW_POSITIONS:
-                role = self._get_player_role(player_id)
-                if role == 'Lib':
-                    raise ValueError(f"Libero (player_id={player_id}) cannot be placed in front row position {pos}")
-        
         # Start transaction
+        cursor = self.db.conn.cursor()
         try:
             # Clear existing lineup for this game
             cursor.execute("DELETE FROM active_lineup WHERE game_id = ? AND team_id = ?", (game_id, team_id))
@@ -288,8 +281,10 @@ class LineupManager:
             # Log rotation event
             old_lineup_snapshot = {pos: {'player_id': entry.player_id, 'role_code': entry.role_code}
                                   for pos, entry in lineup.items()}
+            # Refresh lineup after potential libero removal
+            current_lineup = self._get_active_lineup(game_id, team_id)
             new_lineup_snapshot = {pos: {'player_id': entry.player_id, 'role_code': entry.role_code}
-                                  for pos, entry in new_lineup.items()}
+                                  for pos, entry in current_lineup.items()}
             
             self._log_event(team_id, 'rotation', {
                 'old_lineup': old_lineup_snapshot,
@@ -425,10 +420,8 @@ class LineupManager:
         
         target_position = actual_out_position
         
-        # Validate libero not entering front row
+        # Get in_player's role
         in_role = self._get_player_role(in_player_id)
-        if in_role == 'Lib' and target_position in FRONT_ROW_POSITIONS:
-            raise ValueError(f"Libero cannot be substituted into front row position {target_position}")
         
         try:
             # Update active_lineup
@@ -487,9 +480,6 @@ class LineupManager:
             raise ValueError("game_id is required for libero replacement")
         if action not in ('enter', 'exit'):
             raise ValueError(f"Action must be 'enter' or 'exit', got '{action}'")
-        
-        if replaced_position not in BACK_ROW_POSITIONS:
-            raise ValueError(f"Libero can only replace players in back row positions {BACK_ROW_POSITIONS}")
         
         cursor = self.db.conn.cursor()
         

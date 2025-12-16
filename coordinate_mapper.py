@@ -27,6 +27,10 @@ class CoordinateMapper(QMainWindow):
     # Parameters: (logical_x, logical_y, pixel_x, pixel_y, timecode_ms)
     double_click_mapped = Signal(float, float, float, float, int)
     
+    # Signal emitted when a point is awarded
+    # Parameters: (point_winner_id)
+    point_awarded = Signal(int)
+    
     def __init__(self, parent=None, db=None, game_id=None):
         super().__init__(parent)
         self.setWindowTitle("Coordinate Mapper")
@@ -35,13 +39,25 @@ class CoordinateMapper(QMainWindow):
         self.db = db
         self.game_id = game_id
         
+        # Team IDs and score tracking
+        self.team_us_id = None
+        self.team_them_id = None
+        self.score_us = 0
+        self.score_them = 0
+        self.current_rally_number = 0
+        
+        # Load team IDs and score if game_id is available
+        if self.db and self.game_id:
+            self._load_team_ids()
+            self._load_score()
+        
         # Fixed dimensions of the logical plane
         self.plane_width = 300
         self.plane_height = 600
         
         # Canvas/view dimensions
-        self.canvas_width = 1800
-        self.canvas_height = 1000
+        self.canvas_width = 1500
+        self.canvas_height = 900
         
         # Storage for clicks
         self.corner_points = []  # Will store 4 corners + 6 horizontal line points (10 total)
@@ -116,6 +132,26 @@ class CoordinateMapper(QMainWindow):
         self.clear_dots_btn.setEnabled(True)  # Always enabled
         button_layout.addWidget(self.clear_dots_btn)
         
+        # Score display and buttons
+        button_layout.addSpacing(20)  # Add some space before score section
+        
+        self.score_label = QLabel("Score: 0 - 0")
+        self.score_label.setFont(QFont('Arial', 12, QFont.Weight.Bold))
+        self.score_label.setStyleSheet("color: blue; padding: 5px;")
+        button_layout.addWidget(self.score_label)
+        
+        self.award_point_us_btn = QPushButton("+1 Us")
+        self.award_point_us_btn.setFont(QFont('Arial', 12))
+        self.award_point_us_btn.clicked.connect(lambda: self.award_point('us'))
+        self.award_point_us_btn.setEnabled(self.db is not None and self.game_id is not None)
+        button_layout.addWidget(self.award_point_us_btn)
+        
+        self.award_point_them_btn = QPushButton("+1 Them")
+        self.award_point_them_btn.setFont(QFont('Arial', 12))
+        self.award_point_them_btn.clicked.connect(lambda: self.award_point('them'))
+        self.award_point_them_btn.setEnabled(self.db is not None and self.game_id is not None)
+        button_layout.addWidget(self.award_point_them_btn)
+        
         button_layout.addStretch()  # Push buttons to the left
         layout.addLayout(button_layout)
         
@@ -182,6 +218,178 @@ class CoordinateMapper(QMainWindow):
         self.view.viewport().installEventFilter(self)
         self.view.installEventFilter(self)
         self.installEventFilter(self)
+        
+        # Update score display after UI is set up
+        self._update_score_display()
+    
+    def _load_team_ids(self):
+        """Load team_us_id and team_them_id from the game."""
+        if not self.db or not self.game_id:
+            return
+        
+        try:
+            if not self.db.conn:
+                self.db.connect()
+            cursor = self.db.conn.cursor()
+            cursor.execute(
+                "SELECT team_us_id, team_them_id FROM games WHERE game_id = ?",
+                (self.game_id,)
+            )
+            result = cursor.fetchone()
+            if result:
+                self.team_us_id, self.team_them_id = result
+        except Exception as e:
+            print(f"Warning: Failed to load team IDs: {e}")
+    
+    def _load_score(self):
+        """Load current score from completed rallies."""
+        if not self.db or not self.game_id or not self.team_us_id or not self.team_them_id:
+            return
+        
+        try:
+            if not self.db.conn:
+                self.db.connect()
+            
+            cursor = self.db.conn.cursor()
+            cursor.execute(
+                """SELECT point_winner_id, COUNT(*) 
+                   FROM rallies 
+                   WHERE game_id = ? AND point_winner_id IS NOT NULL
+                   GROUP BY point_winner_id""",
+                (self.game_id,)
+            )
+            results = cursor.fetchall()
+            
+            self.score_us = 0
+            self.score_them = 0
+            
+            for point_winner_id, count in results:
+                if point_winner_id == self.team_us_id:
+                    self.score_us = count
+                elif point_winner_id == self.team_them_id:
+                    self.score_them = count
+            
+            # Get current rally number
+            cursor.execute(
+                "SELECT MAX(rally_number) FROM rallies WHERE game_id = ?",
+                (self.game_id,)
+            )
+            result = cursor.fetchone()
+            if result and result[0]:
+                self.current_rally_number = result[0]
+            else:
+                self.current_rally_number = 0
+        except Exception as e:
+            print(f"Warning: Failed to load score: {e}")
+    
+    def _update_score_display(self):
+        """Update the score display label."""
+        if not hasattr(self, 'score_label'):
+            return
+        
+        if not self.team_us_id or not self.team_them_id:
+            self.score_label.setText("Score: 0 - 0")
+            return
+        
+        try:
+            if not self.db.conn:
+                self.db.connect()
+            
+            # Get team names
+            cursor = self.db.conn.cursor()
+            cursor.execute("SELECT name FROM teams WHERE team_id = ?", (self.team_us_id,))
+            result = cursor.fetchone()
+            team_us_name = result[0] if result else "Us"
+            cursor.execute("SELECT name FROM teams WHERE team_id = ?", (self.team_them_id,))
+            result = cursor.fetchone()
+            team_them_name = result[0] if result else "Them"
+            
+            self.score_label.setText(f"Score: {team_us_name} {self.score_us} - {self.score_them} {team_them_name}")
+        except Exception as e:
+            print(f"Warning: Failed to update score display: {e}")
+            self.score_label.setText(f"Score: {self.score_us} - {self.score_them}")
+    
+    def award_point(self, team: str):
+        """Award a point to team_us or team_them by creating and immediately ending a rally.
+        
+        Args:
+            team: 'us' to award point to team_us, 'them' to award point to team_them
+        """
+        if not self.db or not self.game_id:
+            self.status_label.setText("Error: No database connection or game selected!")
+            return
+        
+        if team == 'us' and not self.team_us_id:
+            self.status_label.setText("Error: team_us_id not loaded!")
+            return
+        elif team == 'them' and not self.team_them_id:
+            self.status_label.setText("Error: team_them_id not loaded!")
+            return
+        
+        try:
+            if not self.db.conn:
+                self.db.connect()
+            
+            # Determine point winner
+            point_winner_id = self.team_us_id if team == 'us' else self.team_them_id
+            
+            # Determine serving team (the team that won the point serves next)
+            serving_team_id = point_winner_id
+            
+            # Get next rally number
+            cursor = self.db.conn.cursor()
+            cursor.execute(
+                "SELECT MAX(rally_number) FROM rallies WHERE game_id = ?",
+                (self.game_id,)
+            )
+            result = cursor.fetchone()
+            next_rally_number = (result[0] + 1) if result and result[0] else 1
+            
+            # Check who served in the previous rally (if any) to determine if rotation is needed
+            # Get the previous rally number
+            previous_rally_number = next_rally_number - 1
+            team_them_served_previous = False
+            if previous_rally_number > 0:
+                cursor.execute("""
+                    SELECT serving_team_id 
+                    FROM rallies 
+                    WHERE game_id = ? AND rally_number = ?
+                """, (self.game_id, previous_rally_number))
+                prev_rally = cursor.fetchone()
+                if prev_rally:
+                    prev_serving_team_id = prev_rally[0]
+                    if prev_serving_team_id == self.team_them_id:
+                        team_them_served_previous = True
+            
+            # Create a rally
+            rally_id = self.db.start_rally(self.game_id, next_rally_number, serving_team_id)
+            
+            # Immediately end the rally with the point winner
+            self.db.end_rally(rally_id, point_winner_id)
+            
+            # Update local score
+            if team == 'us':
+                self.score_us += 1
+            else:
+                self.score_them += 1
+            
+            # Update display
+            self._update_score_display()
+            
+            # Emit signal to notify data entry window (include whether team_them served in previous rally)
+            # This allows the handler to determine if rotation is needed
+            self.point_awarded.emit(point_winner_id)
+            
+            # Update status
+            team_name = "Us" if team == 'us' else "Them"
+            self.status_label.setText(f"Point awarded to {team_name}! Score: {self.score_us} - {self.score_them}")
+            
+            print(f"DEBUG: Point awarded to {team_name} (team_id={point_winner_id}). New score: {self.score_us} - {self.score_them}")
+            
+        except Exception as e:
+            error_msg = f"Error awarding point: {str(e)}"
+            self.status_label.setText(error_msg)
+            print(f"ERROR: {error_msg}")
     
     def start_set_boundaries(self):
         """Start the process of setting court boundaries."""

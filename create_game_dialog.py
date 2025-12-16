@@ -112,6 +112,7 @@ class CreateGameDialog(QDialog):
         self.libero_combo = self.findChild(QComboBox, "liberoCombo")
         if self.libero_combo:
             self.libero_combo.addItem("-- No Libero --", None)
+            self.libero_combo.currentIndexChanged.connect(self.on_libero_selected)
         
         self.serve_us_radio = self.findChild(QRadioButton, "serveUsRadio")
         self.serve_them_radio = self.findChild(QRadioButton, "serveThemRadio")
@@ -192,12 +193,167 @@ class CreateGameDialog(QDialog):
                 for player_combo, _ in self.position_widgets.values():
                     player_combo.addItem(display_name, player_id)
                 
-                # Add to libero combo (only if role is Lib or no role set)
-                if not role_code or role_code == 'Lib':
-                    self.libero_combo.addItem(display_name, player_id)
+                # Add to libero combo (all players available)
+                self.libero_combo.addItem(display_name, player_id)
         
         except Exception as e:
             QMessageBox.warning(self, "Error", f"Failed to load roster: {str(e)}")
+    
+    def update_libero_combo(self):
+        """Update libero combo to exclude players in the starting lineup."""
+        if not self.libero_combo:
+            return
+        
+        # Get currently selected libero
+        current_libero_id = self.libero_combo.currentData()
+        current_libero_index = self.libero_combo.currentIndex()
+        
+        # Get all players currently in starting lineup
+        lineup_player_ids = set()
+        for player_combo, _ in self.position_widgets.values():
+            player_id = player_combo.currentData()
+            if player_id:
+                lineup_player_ids.add(player_id)
+        
+        # Rebuild libero combo, excluding lineup players
+        self.libero_combo.blockSignals(True)
+        self.libero_combo.clear()
+        self.libero_combo.addItem("-- No Libero --", None)
+        
+        # Get team ID
+        team_id = self.team_us_combo.currentData()
+        if not team_id:
+            self.libero_combo.blockSignals(False)
+            return
+        
+        try:
+            cursor = self.db.conn.cursor()
+            cursor.execute("""
+                SELECT player_id, name, jersey, player_number, role_code
+                FROM players
+                WHERE team_id = ?
+                ORDER BY 
+                    CASE 
+                        WHEN CAST(player_number AS INTEGER) IS NOT NULL 
+                        THEN CAST(player_number AS INTEGER)
+                        ELSE 999999
+                    END,
+                    player_number
+            """, (team_id,))
+            
+            players = cursor.fetchall()
+            
+            for player in players:
+                player_id, name, jersey, player_number, role_code = player
+                # Skip if player is in starting lineup
+                if player_id in lineup_player_ids:
+                    continue
+                
+                display_name = f"#{jersey or player_number} {name or 'Unknown'}"
+                if role_code:
+                    display_name += f" ({role_code})"
+                
+                self.libero_combo.addItem(display_name, player_id)
+            
+            # Restore previous selection if still valid
+            if current_libero_id and current_libero_id not in lineup_player_ids:
+                for i in range(self.libero_combo.count()):
+                    if self.libero_combo.itemData(i) == current_libero_id:
+                        self.libero_combo.setCurrentIndex(i)
+                        break
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to update libero combo: {str(e)}")
+        
+        self.libero_combo.blockSignals(False)
+    
+    def on_libero_selected(self, index):
+        """Handle libero selection - update starting lineup combos to exclude libero."""
+        if index <= 0:  # "-- No Libero --" selected
+            # Libero deselected, update all position combos to include all players
+            self.update_position_combos()
+            return
+        
+        libero_id = self.libero_combo.currentData()
+        if not libero_id:
+            return
+        
+        # Check if libero is selected in any starting lineup position
+        for position, (player_combo, _) in self.position_widgets.items():
+            if player_combo.currentData() == libero_id:
+                QMessageBox.warning(
+                    self,
+                    "Invalid Selection",
+                    "This player is in the starting lineup. The libero cannot be one of the 6 starting players."
+                )
+                # Reset libero to "-- No Libero --"
+                self.libero_combo.blockSignals(True)
+                self.libero_combo.setCurrentIndex(0)
+                self.libero_combo.blockSignals(False)
+                return
+        
+        # Update position combos to exclude libero
+        self.update_position_combos()
+    
+    def update_position_combos(self):
+        """Update all position combos to exclude the selected libero."""
+        libero_id = self.libero_combo.currentData() if self.libero_combo else None
+        
+        # Get team ID
+        team_id = self.team_us_combo.currentData()
+        if not team_id:
+            return
+        
+        try:
+            cursor = self.db.conn.cursor()
+            cursor.execute("""
+                SELECT player_id, name, jersey, player_number, role_code
+                FROM players
+                WHERE team_id = ?
+                ORDER BY 
+                    CASE 
+                        WHEN CAST(player_number AS INTEGER) IS NOT NULL 
+                        THEN CAST(player_number AS INTEGER)
+                        ELSE 999999
+                    END,
+                    player_number
+            """, (team_id,))
+            
+            players = cursor.fetchall()
+            
+            # Get currently selected players for each position
+            current_selections = {}
+            for pos, (player_combo, _) in self.position_widgets.items():
+                current_selections[pos] = player_combo.currentData()
+            
+            # Rebuild each position combo
+            for position, (player_combo, _) in self.position_widgets.items():
+                player_combo.blockSignals(True)
+                player_combo.clear()
+                player_combo.addItem("-- Select Player --", None)
+                
+                for player in players:
+                    player_id, name, jersey, player_number, role_code = player
+                    
+                    # Skip if this is the libero
+                    if libero_id and player_id == libero_id:
+                        continue
+                    
+                    display_name = f"#{jersey or player_number} {name or 'Unknown'}"
+                    if role_code:
+                        display_name += f" ({role_code})"
+                    
+                    player_combo.addItem(display_name, player_id)
+                
+                # Restore previous selection if still valid
+                if current_selections.get(position):
+                    for i in range(player_combo.count()):
+                        if player_combo.itemData(i) == current_selections[position]:
+                            player_combo.setCurrentIndex(i)
+                            break
+                
+                player_combo.blockSignals(False)
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to update position combos: {str(e)}")
     
     def set_lineup_enabled(self, enabled):
         """Enable/disable lineup controls."""
@@ -207,12 +363,26 @@ class CreateGameDialog(QDialog):
         self.libero_combo.setEnabled(enabled)
     
     def on_player_selected(self, position, index):
-        """Handle player selection - prevent duplicate selections."""
+        """Handle player selection - prevent duplicate selections and libero conflicts."""
         if index <= 0:  # "-- Select Player --" selected
+            # Player deselected, update libero combo to include this player again
+            self.update_libero_combo()
             return
         
         selected_player_id = self.position_widgets[position][0].currentData()
         if not selected_player_id:
+            return
+        
+        # Check if this player is the selected libero
+        libero_id = self.libero_combo.currentData()
+        if libero_id and selected_player_id == libero_id:
+            QMessageBox.warning(
+                self,
+                "Invalid Selection",
+                "This player is selected as the libero. The libero cannot be in the starting lineup."
+            )
+            # Reset to "-- Select Player --"
+            self.position_widgets[position][0].setCurrentIndex(0)
             return
         
         # Check if this player is selected in another position
@@ -226,6 +396,9 @@ class CreateGameDialog(QDialog):
                 # Reset to "-- Select Player --"
                 self.position_widgets[position][0].setCurrentIndex(0)
                 return
+        
+        # Update libero combo to exclude this player
+        self.update_libero_combo()
     
     def validate_lineup(self):
         """Validate that lineup is complete and valid."""

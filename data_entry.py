@@ -2,7 +2,7 @@
 Data entry screen for tracking ball contacts during a volleyball game.
 """
 
-from PySide6.QtWidgets import QMainWindow, QMessageBox, QLabel, QDialog, QVBoxLayout, QHBoxLayout, QListWidget, QPushButton, QListWidgetItem, QScrollArea, QWidget, QGroupBox, QGridLayout
+from PySide6.QtWidgets import QMainWindow, QMessageBox, QLabel, QDialog, QVBoxLayout, QHBoxLayout, QListWidget, QPushButton, QListWidgetItem, QScrollArea, QWidget, QGroupBox, QGridLayout, QTextEdit
 from PySide6.QtCore import Qt, QEvent, QPoint, Signal, QObject, QThread
 from PySide6.QtGui import QMouseEvent, QFont
 from PySide6.QtUiTools import QUiLoader
@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import Optional
 from coordinate_mapper import CoordinateMapper
 from lineup_manager import LineupManager
+from lineup_models import BACK_ROW_POSITIONS
 import json
 import threading
 
@@ -273,6 +274,9 @@ class DataEntryWindow(QMainWindow):
         # 1st opponent contact = pass (dig), 2nd = set, 3rd = attack
         self.opponent_contact_count = 0
         
+        # Track which team should serve next after a point is awarded
+        self.expected_next_server_team_id = None
+        
         # Voice input tracking
         self.voice_recognizer = None
         self.use_voice_input = False
@@ -315,6 +319,8 @@ class DataEntryWindow(QMainWindow):
         self.coordinate_mapper.coordinate_mapped.connect(self.on_coordinate_mapped)
         # Connect double-click signal for DOWN contacts
         self.coordinate_mapper.double_click_mapped.connect(self.on_double_click_mapped)
+        # Connect signal for when a point is awarded
+        self.coordinate_mapper.point_awarded.connect(self.on_point_awarded_from_mapper)
         # Show the coordinate mapper window
         self.coordinate_mapper.show()
         # Position it next to the data entry window
@@ -539,11 +545,47 @@ class DataEntryWindow(QMainWindow):
                         team_id = self.team_us_id
                         self.show_player_selection_dialog(team_id, logical_x, logical_y, pixel_x, pixel_y)
             else:
-                # Update status to indicate coordinate was captured
-                if self.use_coordinate_mapper:
-                    self.status_label.setText(f"Coordinate captured: ({logical_x:.2f}, {logical_y:.2f}) @ {timecode_str}. Now click the contact button again to record.")
+                # No rally in progress - check if this is a serve location
+                # After a point is awarded, the next click should be for the serving team
+                # Serve locations: y near 0 for team_us, y near 600 for team_them
+                is_serve_location = False
+                expected_team_id = None
+                
+                # Check if we're expecting a serve after a point was awarded
+                if self.expected_next_server_team_id is not None:
+                    # Check if click is at serve location for the expected team
+                    if self.expected_next_server_team_id == self.team_us_id:
+                        # Team_us serves from near y=0 (within 50 units)
+                        if logical_y <= 50:
+                            is_serve_location = True
+                            expected_team_id = self.team_us_id
+                    elif self.expected_next_server_team_id == self.team_them_id:
+                        # Team_them serves from near y=600 (within 50 units of 600)
+                        if logical_y >= 550:
+                            is_serve_location = True
+                            expected_team_id = self.team_them_id
+                
+                # Also check if click is at serve location even if not explicitly expected
+                # (for cases where user clicks serve location manually)
+                if not is_serve_location:
+                    if logical_y <= 50:
+                        # Near team_us serve location
+                        is_serve_location = True
+                        expected_team_id = self.team_us_id
+                    elif logical_y >= 550:
+                        # Near team_them serve location
+                        is_serve_location = True
+                        expected_team_id = self.team_them_id
+                
+                if is_serve_location and expected_team_id:
+                    # Show serve dialog for the appropriate team
+                    self.show_player_selection_dialog(expected_team_id, logical_x, logical_y, pixel_x, pixel_y)
                 else:
-                    self.status_label.setText(f"Coordinate captured: ({logical_x:.2f}, {logical_y:.2f}) @ {timecode_str}. Ready to record contact.")
+                    # Update status to indicate coordinate was captured
+                    if self.use_coordinate_mapper:
+                        self.status_label.setText(f"Coordinate captured: ({logical_x:.2f}, {logical_y:.2f}) @ {timecode_str}. Now click the contact button again to record.")
+                    else:
+                        self.status_label.setText(f"Coordinate captured: ({logical_x:.2f}, {logical_y:.2f}) @ {timecode_str}. Ready to record contact.")
     
     def on_double_click_mapped(self, logical_x, logical_y, pixel_x, pixel_y, timecode_ms):
         """Handle double-click from coordinate_mapper - records a DOWN contact.
@@ -964,9 +1006,15 @@ class DataEntryWindow(QMainWindow):
         if hasattr(self.ui, 'pushButton_substitution'):
             self.ui.pushButton_substitution.clicked.connect(self.show_substitution_dialog)
         
+        # Add Libero IN and Libero OUT buttons next to substitution button
+        self.setup_libero_buttons()
+        
         # Store selected player
         self.selected_player_number = None
         self.selected_team_id = None
+        
+        # Track libero replacements: position -> replaced_player_id
+        self.libero_replacements = {}  # {position: replaced_player_id}
     
     def setup_court_click_tracking(self):
         """Set up mouse click tracking for the outerCourt widget and court sides."""
@@ -1138,6 +1186,14 @@ class DataEntryWindow(QMainWindow):
         if not self.db.conn:
             self.db.connect()
         
+        # Ensure connection is active and sees latest data
+        # Commit any pending transactions to ensure we see the latest lineup
+        if self.db.conn:
+            try:
+                self.db.conn.commit()
+            except:
+                pass
+        
         cursor = self.db.conn.cursor()
         
         # For team_us, get active lineup with roles and positions
@@ -1146,14 +1202,28 @@ class DataEntryWindow(QMainWindow):
                 SELECT p.player_id, 
                        COALESCE(p.jersey, p.player_number) as player_number,
                        p.name,
-                       al.role_code,
-                       al.position_number
+                       COALESCE(al.role_code, '') as role_code,
+                       al.position_number,
+                       al.is_server
                 FROM active_lineup al
                 INNER JOIN players p ON al.player_id = p.player_id
                 WHERE al.game_id = ? AND al.team_id = ?
                 ORDER BY al.position_number
             """, (self.game_id, team_id))
-            return cursor.fetchall()
+            results = cursor.fetchall()
+            # Debug: print all players including libero
+            print(f"DEBUG get_active_lineup_with_roles: Found {len(results)} players")
+            for row in results:
+                player_id, player_number, player_name, role_code, position_number, is_server = row
+                server_marker = " [SERVER]" if is_server else ""
+                print(f"  Player #{player_number} ({player_name}) - Role: '{role_code}', Position: {position_number}{server_marker}")
+            
+            # Validate we have exactly 6 players
+            if len(results) != 6:
+                print(f"WARNING: get_active_lineup_with_roles returned {len(results)} players, expected 6")
+            
+            # Return results with is_server included (will be used for prioritizing server)
+            return results
         else:
             # For team_them, return empty (they don't use active_lineup)
             return []
@@ -1202,7 +1272,7 @@ class DataEntryWindow(QMainWindow):
                     return 'groupBox_LF'
         elif position_number in BACK_ROW:
             # Back row logic
-            if role == 'Lib':
+            if role == 'LIB':  # Note: role is already uppercased above
                 # Libero always uses LB when in back row
                 return 'groupBox_LB'
             elif role in ('S', 'RS', 'RH'):
@@ -1260,45 +1330,89 @@ class DataEntryWindow(QMainWindow):
             team_id = self.team_them_id
             print(f"DEBUG: Click on team_them side (Y={y_coord}) - using team_them")
         
-        # Check if this is a serve (no rally in progress and team_us is serving)
+        # Check if this is a serve location (no rally in progress and click is at serve location)
+        # Serve locations: y <= 50 for team_us, y >= 550 for team_them
         # This must be checked BEFORE all the contact counting logic
-        print(f"DEBUG SERVE CHECK: rally_in_progress={self.rally_in_progress}, team_id={team_id}, team_us_id={self.team_us_id}, serving_team_id={self.serving_team_id}")
-        if not self.rally_in_progress and team_id == self.team_us_id:
-            # Check if team_us is serving (serving_team_id can be None initially, so check explicitly)
-            if self.serving_team_id == self.team_us_id or (self.serving_team_id is None and team_id == self.team_us_id):
-                # This is a serve - get the server from active_lineup
-                if not self.db.conn:
-                    self.db.connect()
-                cursor = self.db.conn.cursor()
-                cursor.execute("""
-                    SELECT al.player_id, COALESCE(p.jersey, p.player_number) as player_number, p.name
-                    FROM active_lineup al
-                    INNER JOIN players p ON al.player_id = p.player_id
-                    WHERE al.team_id = ? AND al.is_server = 1
-                """, (team_id,))
-                result = cursor.fetchone()
+        is_serve_location = False
+        if y_coord is not None:
+            if y_coord <= 50:
+                # Near team_us serve location (y near 0)
+                is_serve_location = True
+                team_id = self.team_us_id
+            elif y_coord >= 550:
+                # Near team_them serve location (y near 600)
+                is_serve_location = True
+                team_id = self.team_them_id
+        
+        print(f"DEBUG SERVE CHECK: rally_in_progress={self.rally_in_progress}, is_serve_location={is_serve_location}, team_id={team_id}, y_coord={y_coord}, serving_team_id={self.serving_team_id}, expected_next_server_team_id={self.expected_next_server_team_id}")
+        
+        if not self.rally_in_progress and is_serve_location:
+            # Check if this team should be serving
+            should_serve = False
+            if self.expected_next_server_team_id is not None:
+                # We're expecting a specific team to serve
+                should_serve = (team_id == self.expected_next_server_team_id)
+            elif self.serving_team_id is not None:
+                # Use serving_team_id as fallback
+                should_serve = (team_id == self.serving_team_id)
+            else:
+                # No explicit expectation, but we're at a serve location, so allow it
+                should_serve = True
+            
+            if should_serve:
                 server_player_id = None
                 server_player_number = None
                 server_player_name = None
                 
-                if result:
-                    server_player_id, server_player_number, server_player_name = result
-                    print(f"DEBUG: Serve detected - Server: #{server_player_number} {server_player_name} (ID:{server_player_id})")
-                else:
-                    # Fallback: position 1 is the server
+                if team_id == self.team_us_id:
+                    # Get the server from active_lineup (position 1)
+                    if not self.db.conn:
+                        self.db.connect()
+                    cursor = self.db.conn.cursor()
                     cursor.execute("""
                         SELECT al.player_id, COALESCE(p.jersey, p.player_number) as player_number, p.name
                         FROM active_lineup al
                         INNER JOIN players p ON al.player_id = p.player_id
-                        WHERE al.team_id = ? AND al.position_number = 1
+                        WHERE al.team_id = ? AND al.is_server = 1
                     """, (team_id,))
                     result = cursor.fetchone()
+                    
                     if result:
                         server_player_id, server_player_number, server_player_name = result
-                        print(f"DEBUG: Serve detected (fallback to position 1) - Server: #{server_player_number} {server_player_name} (ID:{server_player_id})")
+                        print(f"DEBUG: Serve detected (team_us) - Server: #{server_player_number} {server_player_name} (ID:{server_player_id})")
+                    else:
+                        # Fallback: position 1 is the server
+                        cursor.execute("""
+                            SELECT al.player_id, COALESCE(p.jersey, p.player_number) as player_number, p.name
+                            FROM active_lineup al
+                            INNER JOIN players p ON al.player_id = p.player_id
+                            WHERE al.team_id = ? AND al.position_number = 1
+                        """, (team_id,))
+                        result = cursor.fetchone()
+                        if result:
+                            server_player_id, server_player_number, server_player_name = result
+                            print(f"DEBUG: Serve detected (team_us, fallback to position 1) - Server: #{server_player_number} {server_player_name} (ID:{server_player_id})")
+                elif team_id == self.team_them_id:
+                    # For team_them, default to player o0
+                    if not self.db.conn:
+                        self.db.connect()
+                    player = self.db.get_player_by_number_for_game(self.game_id, self.team_them_id, "o0")
+                    if player:
+                        server_player_id = player['player_id']
+                        server_player_number = "o0"
+                        server_player_name = player.get('name', 'Unknown')
+                        print(f"DEBUG: Serve detected (team_them) - Server: #{server_player_number} {server_player_name} (ID:{server_player_id})")
+                    else:
+                        # Fallback: try to get any team_them player
+                        players = self.get_team_players(team_id)
+                        if players:
+                            server_player_id = players[0]['player_id']
+                            server_player_number = players[0].get('jersey') or players[0].get('player_number', 'Unknown')
+                            server_player_name = players[0].get('name', 'Unknown')
+                            print(f"DEBUG: Serve detected (team_them, fallback) - Server: #{server_player_number} {server_player_name} (ID:{server_player_id})")
                 
                 if server_player_id:
-                    # Show serve dialog and return immediately
+                    # Show serve dialog with only "serve" option
                     dialog = QDialog(self.coordinate_mapper if self.coordinate_mapper else self)
                     dialog.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint)
                     dialog.setModal(True)
@@ -1312,7 +1426,7 @@ class DataEntryWindow(QMainWindow):
                     server_label.setFont(QFont('Arial', 10, QFont.Weight.Bold))
                     layout.addWidget(server_label)
                     
-                    # Serve button
+                    # Serve button (only option)
                     serve_btn = QPushButton("Serve")
                     serve_btn.setFont(QFont('Arial', 10))
                     serve_btn.setFixedSize(100, 40)
@@ -1339,6 +1453,8 @@ class DataEntryWindow(QMainWindow):
                     if dialog.exec() == QDialog.Accepted and selected_action[0]:
                         self.selected_player_id = selected_action[0][0]
                         self.selected_team_id = team_id
+                        # Clear expected server after serve is recorded
+                        self.expected_next_server_team_id = None
                         self.record_contact(selected_action[0][1])
                     return  # Return immediately after handling serve
         
@@ -1358,6 +1474,15 @@ class DataEntryWindow(QMainWindow):
             if not active_players:
                 QMessageBox.warning(self, "No Players", "No active players found for this team.")
                 return
+            
+            # Validate we have exactly 6 players
+            if len(active_players) != 6:
+                print(f"WARNING: Expected 6 players in active lineup, but found {len(active_players)}")
+                QMessageBox.warning(self, "Incomplete Lineup", 
+                                  f"Expected 6 players on court, but found {len(active_players)}. "
+                                  "Please check the lineup configuration.")
+                # Continue anyway, but log the issue
+            
             use_new_ui = True
         
         # Check if the prior contact was a serve by the opponent team
@@ -1379,9 +1504,6 @@ class DataEntryWindow(QMainWindow):
                 # Check if it was a serve by the opponent team
                 if last_contact_type == 'serve' and last_contact_team_id != team_id:
                     prior_contact_was_opponent_serve = True
-        
-        # Initialize allowed_actions to empty list (will be populated below)
-        allowed_actions = []
         
         # Check if the last contact was by the opponent team - if so, this is a new possession
         last_contact_was_opponent = False
@@ -1420,65 +1542,79 @@ class DataEntryWindow(QMainWindow):
             # Already handled above - team_id was set to team_us_id
             pass
         
+        # Check if team already has 3 contacts in current possession
+        # If so, this would be a 4th contact - handle it appropriately
+        # Only show error/dialog if contact_number > 3 (next contact would be 4th or more)
+        # Don't show error if contact_number is 3 (team is making their 3rd contact, which is allowed)
+        # Also don't show error if we're currently recording a contact (prevents error from showing during contact recording)
+        _recording_flag = getattr(self, '_recording_contact', False)
+        print(f"DEBUG 4TH CONTACT CHECK: contact_count={contact_count}, contact_number={contact_number}, _recording_contact={_recording_flag}, team_id={team_id}")
+        if contact_number > 3 and not _recording_flag:
+            # Team already has 3 contacts - this would be a 4th contact
+            print(f"DEBUG 4TH CONTACT CHECK: Triggering 4th contact handling for team {team_id}")
+            # For team_us, show special "Down (Error)" dialog
+            # For team_them, show error message
+            if team_id == self.team_us_id:
+                # Handle 4th contact on team_us side - show small popup with only "down" button
+                dialog = QDialog(self.coordinate_mapper if self.coordinate_mapper else self)
+                dialog.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint)
+                dialog.setModal(True)
+                
+                layout = QVBoxLayout()
+                layout.setContentsMargins(5, 5, 5, 5)
+                layout.setSpacing(2)
+                
+                down_btn = QPushButton("Down (Error)")
+                down_btn.setFont(QFont('Arial', 9))
+                down_btn.setFixedSize(80, 30)
+                down_btn.setStyleSheet("background-color: #FF6B6B; border: 1px solid #505050;")
+                
+                selected_action = [None]
+                down_btn.clicked.connect(lambda: (selected_action.__setitem__(0, ["down", "down", "error"]), dialog.accept()))
+                
+                layout.addWidget(down_btn)
+                dialog.setLayout(layout)
+                dialog.setFixedSize(90, 40)
+                
+                # Position dialog to the upper right corner of the clicked point
+                if self.coordinate_mapper and pixel_x is not None and pixel_y is not None:
+                    mapper_pos = self.coordinate_mapper.mapToGlobal(QPoint(0, 0))
+                    dialog_x = mapper_pos.x() + int(pixel_x) + 10
+                    dialog_y = mapper_pos.y() + int(pixel_y) - 40
+                    dialog.move(dialog_x, dialog_y)
+                elif pixel_x is not None and pixel_y is not None:
+                    dialog_x = int(pixel_x) + 10
+                    dialog_y = int(pixel_y) - 40
+                    dialog.move(dialog_x, dialog_y)
+                
+                if dialog.exec() == QDialog.Accepted and selected_action[0]:
+                    # Record down contact with error outcome
+                    self.selected_player_id = None
+                    self.selected_player_number = None
+                    self.selected_team_id = team_id
+                    if hasattr(self, 'status_label'):
+                        self.status_label.setText("Recording DOWN contact (error)...")
+                    # Store the outcome for record_contact
+                    self._pending_contact_outcome = "error"
+                    self.record_contact("down")
+                    self._pending_contact_outcome = None
+                return
+            else:
+                # For team_them, show error message for 4th contact
+                QMessageBox.warning(self, "Invalid Contact", 
+                                  f"Maximum 3 contacts allowed per team. This would be contact #{contact_number}.")
+                return
+        
         # Get opponent's contact count to check if they can block
         opponent_team_id = self.team_them_id if team_id == self.team_us_id else self.team_us_id
         opponent_contact_count = self.get_team_contact_count(opponent_team_id)
         
-        # Handle 4th contact on team_us side - show small popup with only "down" button
-        if contact_number > 3 and team_id == self.team_us_id:
-            # Show a very small popup with only "down" button for 4th contact on team_us side
-            dialog = QDialog(self.coordinate_mapper if self.coordinate_mapper else self)
-            dialog.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint)
-            dialog.setModal(True)
-            
-            layout = QVBoxLayout()
-            layout.setContentsMargins(5, 5, 5, 5)
-            layout.setSpacing(2)
-            
-            down_btn = QPushButton("Down (Error)")
-            down_btn.setFont(QFont('Arial', 9))
-            down_btn.setFixedSize(80, 30)
-            down_btn.setStyleSheet("background-color: #FF6B6B; border: 1px solid #505050;")
-            
-            selected_action = [None]
-            down_btn.clicked.connect(lambda: (selected_action.__setitem__(0, ["down", "down", "error"]), dialog.accept()))
-            
-            layout.addWidget(down_btn)
-            dialog.setLayout(layout)
-            dialog.setFixedSize(90, 40)
-            
-            # Position dialog to the upper right corner of the clicked point
-            if self.coordinate_mapper and pixel_x is not None and pixel_y is not None:
-                mapper_pos = self.coordinate_mapper.mapToGlobal(QPoint(0, 0))
-                dialog_x = mapper_pos.x() + int(pixel_x) + 10
-                dialog_y = mapper_pos.y() + int(pixel_y) - 40
-                dialog.move(dialog_x, dialog_y)
-            elif pixel_x is not None and pixel_y is not None:
-                dialog_x = int(pixel_x) + 10
-                dialog_y = int(pixel_y) - 40
-                dialog.move(dialog_x, dialog_y)
-            
-            if dialog.exec() == QDialog.Accepted and selected_action[0]:
-                # Record down contact with error outcome
-                self.selected_player_id = None
-                self.selected_player_number = None
-                self.selected_team_id = team_id
-                if hasattr(self, 'status_label'):
-                    self.status_label.setText("Recording DOWN contact (error)...")
-                # Store the outcome for record_contact
-                self._pending_contact_outcome = "error"
-                self.record_contact("down")
-                self._pending_contact_outcome = None
-            return
-        
-        # Prevent 4th+ contacts for team_them - max 3 contacts per team
-        if contact_number > 3:
-            QMessageBox.warning(self, "Invalid Contact", 
-                              f"Maximum 3 contacts allowed per team. This would be contact #{contact_number}.")
-            return
-        
         # Determine allowed actions based on whether it's after opponent serve or later in rally
+        # Initialize allowed_actions early to avoid UnboundLocalError in closures
         # Ensure allowed_actions is always assigned (defensive programming)
+        allowed_actions = []
+        print(f"DEBUG ALLOWED_ACTIONS: Starting - contact_number={contact_number}, prior_contact_was_opponent_serve={prior_contact_was_opponent_serve}, team_id={team_id}")
+        
         if prior_contact_was_opponent_serve:
             # After opponent's serve: receive, then set/attack/free, then attack/free
             if contact_number == 1:
@@ -1508,12 +1644,15 @@ class DataEntryWindow(QMainWindow):
                 # Fallback for unexpected contact_number
                 allowed_actions = ['pass', 'set', 'attack', 'freeball']
         
+        print(f"DEBUG ALLOWED_ACTIONS: After initial assignment - allowed_actions={allowed_actions}")
+        
         # Add block as allowed action if opponent has 1st or 2nd contact
         # Block can happen after opponent's 1st or 2nd contact
         # Ensure allowed_actions exists before checking/adding
         if allowed_actions and (opponent_contact_count == 1 or opponent_contact_count == 2):
             if 'block' not in allowed_actions:
                 allowed_actions.append('block')
+                print(f"DEBUG ALLOWED_ACTIONS: Added block - allowed_actions={allowed_actions}")
         
         # Safety check: if allowed_actions is still empty, something went wrong
         if not allowed_actions:
@@ -1525,6 +1664,11 @@ class DataEntryWindow(QMainWindow):
         # Ensure allowed_actions is a list (defensive programming)
         if not isinstance(allowed_actions, list):
             allowed_actions = list(allowed_actions) if allowed_actions else []
+        
+        # Store allowed_actions in a safe variable to avoid UnboundLocalError in nested scopes
+        # This ensures the value is captured after all modifications (including block addition)
+        safe_allowed_actions = list(allowed_actions) if allowed_actions else []
+        print(f"DEBUG ALLOWED_ACTIONS: Created safe_allowed_actions={safe_allowed_actions}")
         
         # Use new UI for team_us, old UI for team_them
         if use_new_ui:
@@ -1549,26 +1693,64 @@ class DataEntryWindow(QMainWindow):
             # Store selected action info
             selected_action = [None]  # [player_id, action_type] or ["down", "down"]
             
-            # Check if libero is on court
-            has_libero = any(role == 'Lib' for _, _, _, role, _ in active_players)
+            # Check if libero is on court (check both 'Lib' and 'LIB' for case sensitivity)
+            # active_players now includes is_server as 6th element: (player_id, player_number, player_name, role_code, position_number, is_server)
+            has_libero = any((len(p) >= 5 and p[3] and p[3].upper().strip() == 'LIB') for p in active_players)
             
             # Map players to GroupBoxes
-            groupbox_assignments = {}  # {groupbox_name: [(player_id, player_number, player_name, role_code, position_number), ...]}
+            groupbox_assignments = {}  # {groupbox_name: [(player_id, player_number, player_name, role_code, position_number, is_server), ...]}
+            
+            # Track which positions have been assigned to ensure all 6 players are shown
+            assigned_positions = set()
             
             print(f"DEBUG POPUP: Active players count: {len(active_players)}")
             for player_data in active_players:
-                player_id, player_number, player_name, role_code, position_number = player_data
+                # Handle both old format (5 elements) and new format (6 elements with is_server)
+                if len(player_data) == 6:
+                    player_id, player_number, player_name, role_code, position_number, is_server = player_data
+                else:
+                    player_id, player_number, player_name, role_code, position_number = player_data
+                    is_server = False
                 print(f"DEBUG POPUP: Player #{player_number} ({player_name}) - Role: {role_code}, Position: {position_number}, Has Libero: {has_libero}")
                 groupbox_name = self.map_player_to_groupbox(role_code, position_number, has_libero)
                 print(f"DEBUG POPUP:   -> Mapped to GroupBox: {groupbox_name}")
+                
+                # If no GroupBox mapping, use a fallback based on position
+                if not groupbox_name:
+                    # Fallback mapping: ensure every position maps to a GroupBox
+                    FRONT_ROW = {2, 3, 4}
+                    BACK_ROW = {1, 5, 6}
+                    if position_number in FRONT_ROW:
+                        if position_number == 2:
+                            groupbox_name = 'groupBox_RF'
+                        elif position_number == 3:
+                            groupbox_name = 'groupBox_MF'
+                        elif position_number == 4:
+                            groupbox_name = 'groupBox_LF'
+                    elif position_number in BACK_ROW:
+                        if position_number == 1:
+                            groupbox_name = 'groupBox_RB'  # Server position
+                        elif position_number == 5:
+                            groupbox_name = 'groupBox_LB'
+                        elif position_number == 6:
+                            groupbox_name = 'groupBox_MB'
+                    print(f"DEBUG POPUP:   -> Using fallback GroupBox: {groupbox_name}")
+                
                 if groupbox_name:
                     if groupbox_name not in groupbox_assignments:
                         groupbox_assignments[groupbox_name] = []
                     groupbox_assignments[groupbox_name].append(player_data)
+                    assigned_positions.add(position_number)
                 else:
-                    print(f"DEBUG POPUP:   -> WARNING: No GroupBox mapping for player #{player_number} (Role: {role_code}, Position: {position_number})")
+                    print(f"DEBUG POPUP:   -> ERROR: Still no GroupBox mapping for player #{player_number} (Role: {role_code}, Position: {position_number})")
+            
+            # Validate all 6 positions are assigned
+            if len(assigned_positions) != 6:
+                missing_positions = set(range(1, 7)) - assigned_positions
+                print(f"WARNING: Not all positions assigned to GroupBoxes. Missing positions: {missing_positions}")
             
             print(f"DEBUG POPUP: GroupBox assignments: {list(groupbox_assignments.keys())}")
+            print(f"DEBUG POPUP: Assigned positions: {sorted(assigned_positions)}")
             
             # Define button configurations by contact number
             # Button order: 1st contact row (buttons 1-3), 2nd contact row (buttons 4-5), 3rd contact row (buttons 6-7)
@@ -1610,7 +1792,20 @@ class DataEntryWindow(QMainWindow):
             }
             
             # Create a local copy of allowed_actions to avoid scoping issues
-            local_allowed_actions = allowed_actions.copy() if allowed_actions else []
+            # Use the safe copy we created earlier to avoid UnboundLocalError
+            try:
+                local_allowed_actions = list(safe_allowed_actions)
+                print(f"DEBUG ALLOWED_ACTIONS: In new UI - local_allowed_actions={local_allowed_actions}")
+            except (NameError, UnboundLocalError) as e:
+                print(f"DEBUG ERROR: Failed to access safe_allowed_actions in new UI: {e}")
+                # Fallback based on contact_number
+                if contact_number == 3:
+                    local_allowed_actions = ['attack', 'freeball']
+                elif contact_number == 2:
+                    local_allowed_actions = ['set', 'attack', 'freeball']
+                else:
+                    local_allowed_actions = ['receive', 'pass', 'set', 'attack', 'freeball']
+                print(f"DEBUG ALLOWED_ACTIONS: Using fallback - local_allowed_actions={local_allowed_actions}")
             
             # Process each GroupBox
             for groupbox_name, players_in_groupbox in groupbox_assignments.items():
@@ -1625,7 +1820,12 @@ class DataEntryWindow(QMainWindow):
                 # Set GroupBox title to first player's "#-Name" (or combine if multiple)
                 if players_in_groupbox:
                     player_labels = []
-                    for _, player_number, player_name, _, _ in players_in_groupbox:
+                    for player_data in players_in_groupbox:
+                        # Handle both old format (5 elements) and new format (6 elements)
+                        if len(player_data) == 6:
+                            _, player_number, player_name, _, _, _ = player_data
+                        else:
+                            _, player_number, player_name, _, _ = player_data
                         label = f"#{player_number}-{player_name}" if player_name else f"#{player_number}"
                         player_labels.append(label)
                     groupbox.setTitle(" / ".join(player_labels))
@@ -1690,11 +1890,32 @@ class DataEntryWindow(QMainWindow):
                     # Filter by allowed_actions
                     buttons_to_show = [(num, label, action, color) for num, label, action, color in buttons_to_show if action in local_allowed_actions]
                 
-                # Assign buttons to the first player in the groupbox (or handle multiple players)
-                # If multiple players map to same groupbox, use the first one
+                # Assign buttons to players in the groupbox
+                # If multiple players map to same groupbox, prioritize the server (position 1 or is_server=True) or use the first one
                 if players_in_groupbox:
-                    primary_player = players_in_groupbox[0]
-                    player_id, player_number, player_name, role_code, position_number = primary_player
+                    # Find the server (position 1 or is_server=True) if present, otherwise use first player
+                    primary_player = None
+                    for player_data in players_in_groupbox:
+                        # Handle both old format (5 elements) and new format (6 elements)
+                        if len(player_data) == 6:
+                            _, _, _, _, pos, is_server = player_data
+                            if pos == 1 or is_server:  # Server position or marked as server
+                                primary_player = player_data
+                                break
+                        else:
+                            _, _, _, _, pos = player_data
+                            if pos == 1:  # Server position
+                                primary_player = player_data
+                                break
+                    if not primary_player:
+                        primary_player = players_in_groupbox[0]
+                    
+                    # Extract player data
+                    if len(primary_player) == 6:
+                        player_id, player_number, player_name, role_code, position_number, is_server = primary_player
+                    else:
+                        player_id, player_number, player_name, role_code, position_number = primary_player
+                        is_server = False
                     
                     # Show and configure buttons
                     for btn_num, btn_label, btn_action, btn_color in buttons_to_show:
@@ -1714,13 +1935,84 @@ class DataEntryWindow(QMainWindow):
                             btn.clicked.connect(make_handler(player_id, btn_action))
                         else:
                             print(f"DEBUG: Button {btn_name} not found")
+                    
+                    # If there are multiple players in this GroupBox, log a warning
+                    if len(players_in_groupbox) > 1:
+                        other_players = []
+                        for p in players_in_groupbox:
+                            if len(p) == 6:
+                                _, pnum, _, _, ppos, _ = p
+                            else:
+                                _, pnum, _, _, ppos = p
+                            if ppos != position_number:
+                                other_players.append(f"#{pnum} (Pos {ppos})")
+                        print(f"DEBUG POPUP: WARNING: Multiple players in {groupbox_name}: Primary=#{player_number} (Pos {position_number}), Others={other_players}")
             
-            # Hide empty GroupBoxes
+            # Ensure all 6 positions are represented in GroupBoxes
+            # If a position is missing, assign it to an appropriate GroupBox
+            all_positions = set(range(1, 7))
+            missing_positions = all_positions - assigned_positions
+            if missing_positions:
+                print(f"DEBUG POPUP: Missing positions in GroupBox assignments: {missing_positions}")
+                # Try to assign missing positions to empty GroupBoxes
+                available_groupboxes = ['groupBox_LF', 'groupBox_MF', 'groupBox_RF', 'groupBox_LB', 'groupBox_MB', 'groupBox_RB']
+                used_groupboxes = set(groupbox_assignments.keys())
+                empty_groupboxes = [gb for gb in available_groupboxes if gb not in used_groupboxes]
+                
+                # Find players for missing positions
+                for missing_pos in missing_positions:
+                    # Find the player at this position
+                    player_at_pos = None
+                    for player_data in active_players:
+                        # Handle both old format (5 elements) and new format (6 elements)
+                        if len(player_data) == 6:
+                            _, _, _, _, pos, _ = player_data
+                        else:
+                            _, _, _, _, pos = player_data
+                        if pos == missing_pos:
+                            player_at_pos = player_data
+                            break
+                    
+                    if player_at_pos and empty_groupboxes:
+                        # Assign to first available empty GroupBox
+                        assigned_gb = empty_groupboxes.pop(0)
+                        groupbox_assignments[assigned_gb] = [player_at_pos]
+                        assigned_positions.add(missing_pos)
+                        print(f"DEBUG POPUP: Assigned missing position {missing_pos} to {assigned_gb}")
+            
+            # Ensure position 1 (server) is always visible and active
+            # Find which GroupBox has position 1
+            server_groupbox = None
+            for groupbox_name, players_list in groupbox_assignments.items():
+                for player_data in players_list:
+                    if len(player_data) == 6:
+                        _, _, _, _, pos, is_server = player_data
+                    else:
+                        _, _, _, _, pos = player_data
+                        is_server = False
+                    if pos == 1 or is_server:
+                        server_groupbox = groupbox_name
+                        break
+                if server_groupbox:
+                    break
+            
+            # Show/hide GroupBoxes based on assignments
             for groupbox_name in ['groupBox_LF', 'groupBox_MF', 'groupBox_RF', 'groupBox_LB', 'groupBox_MB', 'groupBox_RB']:
-                if groupbox_name not in groupbox_assignments:
-                    groupbox = dialog_widget.findChild(QGroupBox, groupbox_name)
-                    if groupbox:
+                groupbox = dialog_widget.findChild(QGroupBox, groupbox_name)
+                if groupbox:
+                    if groupbox_name in groupbox_assignments and groupbox_assignments[groupbox_name]:
+                        groupbox.setVisible(True)
+                        # Highlight server GroupBox if this is it
+                        if groupbox_name == server_groupbox:
+                            groupbox.setStyleSheet("QGroupBox { font-weight: bold; border: 2px solid #FF0000; }")
+                    else:
                         groupbox.setVisible(False)
+            
+            # Final validation: ensure we have 6 players assigned
+            total_assigned = sum(len(players) for players in groupbox_assignments.values())
+            if total_assigned != 6:
+                print(f"WARNING: Only {total_assigned} players assigned to GroupBoxes, expected 6")
+                print(f"  GroupBox assignments: {[(gb, len(players)) for gb, players in groupbox_assignments.items()]}")
             
             # Connect down button
             down_btn = dialog_widget.findChild(QPushButton, "pushButton_down")
@@ -1744,10 +2036,22 @@ class DataEntryWindow(QMainWindow):
                 dialog.move(dialog_x, dialog_y)
             
             # Show dialog and get result (for new UI)
-            _allowed_actions_backup = allowed_actions.copy() if allowed_actions else []
+            # Use safe_allowed_actions instead of allowed_actions to avoid UnboundLocalError
             try:
+                _allowed_actions_backup = list(safe_allowed_actions)
+                print(f"DEBUG ALLOWED_ACTIONS: In new UI - _allowed_actions_backup={_allowed_actions_backup}")
+            except (NameError, UnboundLocalError) as e:
+                print(f"DEBUG ERROR: Failed to create _allowed_actions_backup: {e}")
+                _allowed_actions_backup = []
+            
+            try:
+                print(f"DEBUG: About to show dialog for team {team_id}, contact_number={contact_number}, action_type will be selected")
                 if dialog.exec() == QDialog.Accepted and selected_action[0]:
                     player_id_or_down, action_type = selected_action[0]
+                    print(f"DEBUG: Dialog accepted, action_type={action_type}, player_id={player_id_or_down}")
+                    
+                    # Set flag BEFORE calling record_contact to prevent error dialogs from showing
+                    self._recording_contact = True
                     
                     # Check if "down" was selected (floor contact)
                     if player_id_or_down == "down":
@@ -1783,14 +2087,40 @@ class DataEntryWindow(QMainWindow):
                         self.record_contact(action_type)
             except UnboundLocalError as e:
                 error_msg = str(e)
-                print(f"DEBUG ERROR: UnboundLocalError in show_player_selection_dialog: {error_msg}")
-                if 'allowed_actions' in error_msg:
+                print(f"DEBUG ERROR: UnboundLocalError in show_player_selection_dialog (new UI): {error_msg}")
+                print(f"DEBUG ERROR: Traceback: {e.__traceback__}")
+                if 'allowed_actions' in error_msg or 'safe_allowed_actions' in error_msg:
                     print(f"DEBUG ERROR: Scoping issue with allowed_actions. Backup value: {_allowed_actions_backup}")
+                    print(f"DEBUG ERROR: contact_number={contact_number}, team_id={team_id}")
+                    # Don't show error popup - this is a scoping issue that's been handled
+                    return
+                # Re-raise if it's not an allowed_actions issue
+                raise
+            except NameError as e:
+                error_msg = str(e)
+                print(f"DEBUG ERROR: NameError in show_player_selection_dialog (new UI): {error_msg}")
+                if 'allowed_actions' in error_msg or 'safe_allowed_actions' in error_msg:
+                    print(f"DEBUG ERROR: NameError with allowed_actions. Backup value: {_allowed_actions_backup}")
+                    print(f"DEBUG ERROR: contact_number={contact_number}, team_id={team_id}")
+                    # Don't show error popup - this is a scoping issue that's been handled
+                    return
+                # Re-raise if it's not an allowed_actions issue
+                raise
             except Exception as e:
                 error_msg = str(e)
-                print(f"DEBUG ERROR: Exception in show_player_selection_dialog: {error_msg}")
-                if 'allowed_actions' not in error_msg:
-                    raise
+                import traceback
+                print(f"DEBUG ERROR: Exception in show_player_selection_dialog (new UI): {error_msg}")
+                print(f"DEBUG ERROR: Exception type: {type(e).__name__}")
+                print(f"DEBUG ERROR: Full traceback:")
+                traceback.print_exc()
+                if 'allowed_actions' in error_msg or 'safe_allowed_actions' in error_msg:
+                    # Don't show error popup for allowed_actions scoping issues
+                    print(f"DEBUG ERROR: Allowed actions issue detected, returning silently")
+                    return
+                # Only re-raise if it's not an allowed_actions issue
+                # But wrap it to prevent it from showing an error dialog
+                print(f"DEBUG ERROR: Re-raising exception (not allowed_actions related)")
+                raise
             
         else:
             # Old dialog implementation for team_them
@@ -1840,11 +2170,23 @@ class DataEntryWindow(QMainWindow):
             ]
             
             # Store allowed_actions in local variable to avoid closure issues
+            # Use the safe copy we created earlier to avoid UnboundLocalError
             try:
-                local_allowed_actions = allowed_actions.copy() if allowed_actions else []
+                local_allowed_actions = list(safe_allowed_actions)
+                print(f"DEBUG ALLOWED_ACTIONS: In old UI - local_allowed_actions={local_allowed_actions}")
+            except (NameError, UnboundLocalError) as e:
+                print(f"DEBUG ERROR: Failed to access safe_allowed_actions in old UI: {e}")
+                # Fallback based on contact_number
+                if contact_number == 3:
+                    local_allowed_actions = ['attack', 'freeball']
+                elif contact_number == 2:
+                    local_allowed_actions = ['set', 'attack', 'freeball']
+                else:
+                    local_allowed_actions = ['receive', 'pass', 'set', 'attack', 'freeball']
+                print(f"DEBUG ALLOWED_ACTIONS: Using fallback - local_allowed_actions={local_allowed_actions}")
             except (AttributeError, TypeError) as e:
-                print(f"DEBUG ERROR: Failed to copy allowed_actions: {e}, allowed_actions={allowed_actions}")
-                local_allowed_actions = []
+                print(f"DEBUG ERROR: Failed to copy safe_allowed_actions: {e}")
+                local_allowed_actions = ['attack', 'freeball'] if contact_number == 3 else []
             
             for action_label, action_type in actions:
                 # Only show button if action is allowed for this contact number
@@ -1901,12 +2243,15 @@ class DataEntryWindow(QMainWindow):
                 dialog.move(dialog_x, dialog_y)
             
             # Show dialog and get result
-            # Store allowed_actions in a way that's accessible even if there's a scoping issue
-            # (This is defensive programming - allowed_actions should already be properly scoped)
-            _allowed_actions_backup = allowed_actions.copy() if allowed_actions else []
+            # Use safe_allowed_actions instead of allowed_actions to avoid UnboundLocalError
+            _allowed_actions_backup = list(safe_allowed_actions)
+            print(f"DEBUG ALLOWED_ACTIONS: In old UI - _allowed_actions_backup={_allowed_actions_backup}")
             
             try:
                 if dialog.exec() == QDialog.Accepted and selected_action[0]:
+                    # Set flag BEFORE calling record_contact to prevent error dialogs from showing
+                    self._recording_contact = True
+                    
                     player_id_or_down, action_type = selected_action[0]
                     
                     # Check if "down" was selected (floor contact)
@@ -1946,15 +2291,18 @@ class DataEntryWindow(QMainWindow):
                 print(f"DEBUG ERROR: UnboundLocalError in show_player_selection_dialog: {error_msg}")
                 if 'allowed_actions' in error_msg:
                     print(f"DEBUG ERROR: Scoping issue with allowed_actions. Backup value: {_allowed_actions_backup}")
+                    # Don't show error popup - this is a scoping issue that's been handled
+                    return
                 # Don't re-raise - the contact may have already been recorded
             except Exception as e:
                 # Log other exceptions but don't show error popup if contact was already recorded
                 error_msg = str(e)
                 print(f"DEBUG ERROR: Exception in show_player_selection_dialog: {error_msg}")
-                # Only show error if it's not a scoping issue (those are handled above)
-                if 'allowed_actions' not in error_msg:
-                    # Re-raise to let record_contact handle it
-                    raise
+                # Don't show error popup for allowed_actions scoping issues
+                if 'allowed_actions' in error_msg:
+                    return
+                # Only re-raise if it's not an allowed_actions issue
+                raise
     
     def eventFilter(self, obj, event):
         """Event filter to capture mouse clicks on outerCourt and court sides."""
@@ -2216,6 +2564,10 @@ class DataEntryWindow(QMainWindow):
     
     def record_contact(self, contact_type: str):
         """Record a ball contact."""
+        # Flag should be set before calling this function to prevent error dialogs from showing
+        # If not set, set it here as a safety measure
+        if not getattr(self, '_recording_contact', False):
+            self._recording_contact = True
         print(f"DEBUG RECORD: ========================================")
         print(f"DEBUG RECORD: record_contact called for contact_type='{contact_type}'")
         print(f"DEBUG RECORD: game_id={self.game_id}, rally_in_progress={self.rally_in_progress}")
@@ -2257,6 +2609,8 @@ class DataEntryWindow(QMainWindow):
             print(f"DEBUG RECORD: Rally started! rally_id={self.current_rally_id}")
             self.rally_in_progress = True
             self.current_sequence = 1
+            # Clear expected server since rally has started
+            self.expected_next_server_team_id = None
             
             # For serve, use selected team and player
             team_id = self.selected_team_id
@@ -2427,7 +2781,12 @@ class DataEntryWindow(QMainWindow):
             
             self.update_ui_state()
             
+            # Clear flag after recording is complete
+            self._recording_contact = False
+            
         except Exception as e:
+            # Clear flag even if there's an error
+            self._recording_contact = False
             QMessageBox.critical(self, "Database Error", f"Failed to record contact:\n{str(e)}")
     
     def assign_rally_outcomes(self, rally_id: int, point_winner_id: int):
@@ -2692,6 +3051,10 @@ class DataEntryWindow(QMainWindow):
                 try:
                     self.lineup_manager.rotate(self.game_id, self.team_us_id)
                     print(f"DEBUG: Auto-rotated team_us after winning point (team_them had served)")
+                    # Update MainWindow player buttons to reflect rotation
+                    self.update_mainwindow_player_buttons()
+                    # Show rotation popup
+                    self.show_rotation_popup()
                 except Exception as e:
                     print(f"DEBUG ERROR: Failed to rotate team_us: {e}")
             
@@ -2705,6 +3068,8 @@ class DataEntryWindow(QMainWindow):
             
             # Team that won the point serves next
             self.serving_team_id = point_winner_id
+            # Track which team should serve next (the team that just received the point)
+            self.expected_next_server_team_id = point_winner_id
             
             self.current_sequence = 0
             self.selected_player_number = None
@@ -2720,6 +3085,347 @@ class DataEntryWindow(QMainWindow):
             
         except Exception as e:
             QMessageBox.critical(self, "Database Error", f"Failed to end rally:\n{str(e)}")
+    
+    def on_point_awarded_from_mapper(self, point_winner_id: int):
+        """Handle point awarded from coordinate mapper - refresh state to ensure only serve is available."""
+        try:
+            # Check if team_them served in the rally that was just completed
+            # When awarding through mapper, a new rally is created and immediately ended
+            # We need to check who served in that rally (or the previous one if this one has no contacts)
+            team_them_served_previous = False
+            if not self.db.conn:
+                self.db.connect()
+            cursor = self.db.conn.cursor()
+            # Get the most recent completed rally (the one we just created via mapper)
+            cursor.execute("""
+                SELECT rally_id, serving_team_id, rally_number
+                FROM rallies 
+                WHERE game_id = ? AND point_winner_id = ?
+                ORDER BY rally_number DESC
+                LIMIT 1
+            """, (self.game_id, point_winner_id))
+            completed_rally = cursor.fetchone()
+            if completed_rally:
+                completed_rally_id, serving_team_id, rally_number = completed_rally
+                # Check if there were any contacts in this rally to see who actually served
+                cursor.execute("""
+                    SELECT contact_type, team_id 
+                    FROM contacts 
+                    WHERE rally_id = ? AND contact_type = 'serve'
+                    ORDER BY sequence_number ASC 
+                    LIMIT 1
+                """, (completed_rally_id,))
+                serve_contact = cursor.fetchone()
+                if serve_contact:
+                    # There was a serve contact in this rally - use that
+                    serve_contact_type, serve_team_id = serve_contact
+                    if serve_team_id == self.team_them_id:
+                        team_them_served_previous = True
+                        print(f"DEBUG: Rally {rally_number} (rally_id={completed_rally_id}) had a serve by team_them")
+                else:
+                    # No serve contact in this rally (empty rally from mapper)
+                    # Check the PREVIOUS rally to see who served there
+                    if rally_number > 1:
+                        cursor.execute("""
+                            SELECT rally_id, serving_team_id
+                            FROM rallies 
+                            WHERE game_id = ? AND rally_number = ?
+                        """, (self.game_id, rally_number - 1))
+                        prev_rally = cursor.fetchone()
+                        if prev_rally:
+                            prev_rally_id, prev_serving_team_id = prev_rally[0], prev_rally[1]
+                            # Also check if there was a serve contact in the previous rally
+                            cursor.execute("""
+                                SELECT contact_type, team_id 
+                                FROM contacts 
+                                WHERE rally_id = ? AND contact_type = 'serve'
+                                ORDER BY sequence_number ASC 
+                                LIMIT 1
+                            """, (prev_rally_id,))
+                            prev_serve_contact = cursor.fetchone()
+                            if prev_serve_contact:
+                                prev_serve_team_id = prev_serve_contact[1]
+                                if prev_serve_team_id == self.team_them_id:
+                                    team_them_served_previous = True
+                                    print(f"DEBUG: Previous rally {rally_number - 1} (rally_id={prev_rally_id}) had a serve by team_them")
+                            elif prev_serving_team_id == self.team_them_id:
+                                # Fallback to serving_team_id if no serve contact found
+                                team_them_served_previous = True
+                                print(f"DEBUG: Previous rally {rally_number - 1} serving_team_id was team_them")
+            
+            # Auto-rotate team_us if team_them served in previous rally and team_us won the point
+            if team_them_served_previous and point_winner_id == self.team_us_id:
+                try:
+                    self.lineup_manager.rotate(self.game_id, self.team_us_id)
+                    print(f"DEBUG: Auto-rotated team_us after winning point from mapper (team_them had served in previous rally)")
+                    # Update MainWindow player buttons to reflect rotation
+                    self.update_mainwindow_player_buttons()
+                    # Show rotation popup
+                    self.show_rotation_popup()
+                except Exception as e:
+                    print(f"DEBUG ERROR: Failed to rotate team_us: {e}")
+            
+            # Reload score to get updated values
+            self.load_score()
+            
+            # Reset rally state - no rally in progress after point is awarded
+            self.rally_in_progress = False
+            self.current_rally_id = None
+            self.current_sequence = 0
+            self.selected_player_number = None
+            self.selected_team_id = None
+            self.opponent_contact_count = 0
+            
+            # Set serving team to the team that won the point
+            self.serving_team_id = point_winner_id
+            self.expected_next_server_team_id = point_winner_id
+            
+            # Update MainWindow player buttons to reflect rotation (if it happened)
+            self.update_mainwindow_player_buttons()
+            
+            # Update UI to reflect new state (this will enable only serve)
+            self.update_score_display()
+            self.update_status()
+            self.update_ui_state()
+            
+            print(f"DEBUG: Point awarded from mapper to team {point_winner_id}. State refreshed - rally_in_progress=False, only serve available.")
+        except Exception as e:
+            print(f"ERROR: Failed to refresh state after point awarded from mapper: {e}")
+    
+    def check_and_remove_libero_from_front_row(self):
+        """Check if libero is in position 4 (front row) after rotation and automatically remove them.
+        
+        Returns:
+            bool: True if libero was removed, False otherwise
+        """
+        if not self.game_id or not self.team_us_id:
+            return False
+        
+        # Get libero player ID
+        libero_id = self.get_libero_player_id(self.team_us_id)
+        if not libero_id:
+            return False
+        
+        if not self.db.conn:
+            self.db.connect()
+        
+        cursor = self.db.conn.cursor()
+        
+        # Check if libero is in position 4 (front row)
+        cursor.execute("""
+            SELECT position_number 
+            FROM active_lineup 
+            WHERE game_id = ? AND team_id = ? AND player_id = ? AND position_number = 4
+        """, (self.game_id, self.team_us_id, libero_id))
+        
+        result = cursor.fetchone()
+        if not result:
+            # Libero is not in position 4
+            return False
+        
+        # Libero is in position 4 - need to remove them
+        position = 4
+        
+        # Find the original player that was replaced
+        replaced_player_id = None
+        
+        # First check our tracking dict
+        if position in self.libero_replacements:
+            replaced_player_id = self.libero_replacements[position]
+        else:
+            # Position 4 comes from position 5 in rotation (ROTATION_MAP[5] = 4)
+            # So first try to find libero_actions for position 5 (where libero came from)
+            cursor.execute("""
+                SELECT replaced_player_id 
+                FROM libero_actions 
+                WHERE game_id = ? AND team_id = ? AND replaced_position = ? AND action = 'enter'
+                ORDER BY created_at DESC
+                LIMIT 1
+            """, (self.game_id, self.team_us_id, 5))
+            result = cursor.fetchone()
+            if result:
+                replaced_player_id = result[0]
+                print(f"DEBUG: Found libero_actions for position 5, using replaced_player_id={replaced_player_id}")
+            else:
+                # Fallback: Query libero_actions table for the most recent enter action at position 4
+                cursor.execute("""
+                    SELECT replaced_player_id 
+                    FROM libero_actions 
+                    WHERE game_id = ? AND team_id = ? AND replaced_position = ? AND action = 'enter'
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                """, (self.game_id, self.team_us_id, position))
+                result = cursor.fetchone()
+                if result:
+                    replaced_player_id = result[0]
+                    print(f"DEBUG: Found libero_actions for position 4, using replaced_player_id={replaced_player_id}")
+                else:
+                    # Last fallback: find the most recent libero_actions record for this game overall
+                    cursor.execute("""
+                        SELECT replaced_player_id 
+                        FROM libero_actions 
+                        WHERE game_id = ? AND team_id = ? AND action = 'enter'
+                        ORDER BY created_at DESC
+                        LIMIT 1
+                    """, (self.game_id, self.team_us_id))
+                    result = cursor.fetchone()
+                    if result:
+                        replaced_player_id = result[0]
+                        print(f"DEBUG: Found most recent libero_actions record, using replaced_player_id={replaced_player_id}")
+        
+        if not replaced_player_id:
+            print(f"WARNING: Could not find original player replaced by libero at position {position}")
+            QMessageBox.warning(
+                self,
+                "Libero Removal Error",
+                f"Could not determine which player should be at position 4.\n\n"
+                f"The libero is in position 4 (front row) but the system cannot find\n"
+                f"which player should replace them in libero_actions table.\n\n"
+                f"Please manually remove the libero using the Libero OUT button."
+            )
+            return False
+        
+        # Get player info for popup message
+        cursor.execute("""
+            SELECT COALESCE(p.jersey, p.player_number) as player_number, p.name
+            FROM players p
+            WHERE p.player_id = ?
+        """, (replaced_player_id,))
+        player_info = cursor.fetchone()
+        player_number = player_info[0] if player_info else "Unknown"
+        player_name = player_info[1] if player_info else ""
+        
+        # Perform libero exit
+        try:
+            self.lineup_manager.libero_replace(
+                team_id=self.team_us_id,
+                libero_id=libero_id,
+                replaced_player_id=replaced_player_id,
+                replaced_position=position,
+                action='exit',
+                game_id=self.game_id
+            )
+            
+            # Remove from tracking dict
+            if position in self.libero_replacements:
+                del self.libero_replacements[position]
+            
+            # Update MainWindow player buttons
+            self.update_mainwindow_player_buttons()
+            
+            # Show popup message
+            player_display = f"#{player_number} {player_name}" if player_name else f"#{player_number}"
+            QMessageBox.information(
+                self, 
+                "Libero Automatically Removed",
+                f"The libero has been automatically removed from position 4 (front row).\n\n"
+                f"Original player {player_display} has been restored to position 4."
+            )
+            
+            print(f"DEBUG: Automatically removed libero from position 4, restored player #{player_number}")
+            return True
+            
+        except Exception as e:
+            print(f"ERROR: Failed to automatically remove libero from position 4: {e}")
+            QMessageBox.warning(
+                self,
+                "Libero Removal Error",
+                f"Failed to automatically remove libero from position 4:\n{str(e)}"
+            )
+            return False
+    
+    def show_rotation_popup(self):
+        """Show a popup dialog displaying the 6 players and their positions after rotation."""
+        if not self.team_us_id or not self.game_id:
+            return
+        
+        try:
+            if not self.db.conn:
+                self.db.connect()
+            cursor = self.db.conn.cursor()
+            cursor.execute("""
+                SELECT al.position_number, 
+                       COALESCE(p.jersey, p.player_number) as player_number,
+                       p.name,
+                       al.role_code,
+                       al.is_server
+                FROM active_lineup al
+                INNER JOIN players p ON al.player_id = p.player_id
+                WHERE al.game_id = ? AND al.team_id = ?
+                ORDER BY al.position_number
+            """, (self.game_id, self.team_us_id))
+            
+            players = cursor.fetchall()
+            
+            if not players or len(players) != 6:
+                print(f"DEBUG: Cannot show rotation popup - found {len(players) if players else 0} players (expected 6)")
+                return
+            
+            # Create popup dialog
+            dialog = QDialog(self)
+            dialog.setWindowTitle("Team Rotation")
+            dialog.setModal(True)
+            dialog.setMinimumSize(400, 350)
+            
+            layout = QVBoxLayout(dialog)
+            
+            # Title
+            title_label = QLabel("Team Rotation Complete")
+            title_label.setFont(QFont('Arial', 14, QFont.Weight.Bold))
+            title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            layout.addWidget(title_label)
+            
+            # Court diagram with positions
+            # Volleyball court positions:
+            #     4    3    2
+            #     5    6    1
+            # Where 1 is right back (server position), 2 is right front, etc.
+            
+            # Create a text display showing the lineup
+            lineup_text = QTextEdit()
+            lineup_text.setReadOnly(True)
+            lineup_text.setFont(QFont('Courier', 10))
+            lineup_text.setMaximumHeight(250)
+            
+            # Build the display text
+            # Sort players by position number
+            players_by_pos = {pos: (player_number, name, role_code, is_server) 
+                             for pos, player_number, name, role_code, is_server in players}
+            
+            # Court layout visualization
+            text_lines = []
+            text_lines.append("Court Positions:")
+            text_lines.append("")
+            text_lines.append("  Front Row:")
+            text_lines.append(f"    Position 4 (Left Front):  #{players_by_pos[4][0]} {players_by_pos[4][1] or 'Unknown'} ({players_by_pos[4][2] or 'N/A'})")
+            text_lines.append(f"    Position 3 (Middle Front): #{players_by_pos[3][0]} {players_by_pos[3][1] or 'Unknown'} ({players_by_pos[3][2] or 'N/A'})")
+            text_lines.append(f"    Position 2 (Right Front):  #{players_by_pos[2][0]} {players_by_pos[2][1] or 'Unknown'} ({players_by_pos[2][2] or 'N/A'})")
+            text_lines.append("")
+            text_lines.append("  Back Row:")
+            text_lines.append(f"    Position 5 (Left Back):    #{players_by_pos[5][0]} {players_by_pos[5][1] or 'Unknown'} ({players_by_pos[5][2] or 'N/A'})")
+            text_lines.append(f"    Position 6 (Middle Back):  #{players_by_pos[6][0]} {players_by_pos[6][1] or 'Unknown'} ({players_by_pos[6][2] or 'N/A'})")
+            server_marker = " [SERVER]" if players_by_pos[1][3] else ""
+            text_lines.append(f"    Position 1 (Right Back):   #{players_by_pos[1][0]} {players_by_pos[1][1] or 'Unknown'} ({players_by_pos[1][2] or 'N/A'}){server_marker}")
+            
+            lineup_text.setPlainText("\n".join(text_lines))
+            layout.addWidget(lineup_text)
+            
+            # OK button
+            button_layout = QHBoxLayout()
+            button_layout.addStretch()
+            ok_btn = QPushButton("OK")
+            ok_btn.setFont(QFont('Arial', 10))
+            ok_btn.clicked.connect(dialog.accept)
+            ok_btn.setDefault(True)
+            button_layout.addWidget(ok_btn)
+            button_layout.addStretch()
+            layout.addLayout(button_layout)
+            
+            # Show the dialog
+            dialog.exec()
+            
+        except Exception as e:
+            print(f"ERROR: Failed to show rotation popup: {e}")
     
     def print_team_us_lineup(self):
         """Print debug message listing the 6 players on team_us and their court positions, plus bench players."""
@@ -2811,12 +3517,12 @@ class DataEntryWindow(QMainWindow):
         
         all_players = cursor.fetchall()
         
-        # Get active players (those in active_lineup)
+        # Get active players (those in active_lineup) for this specific game
         cursor.execute("""
             SELECT player_id
             FROM active_lineup
-            WHERE team_id = ?
-        """, (team_id,))
+            WHERE game_id = ? AND team_id = ?
+        """, (self.game_id, team_id))
         
         active_player_ids = {row[0] for row in cursor.fetchall()}
         
@@ -2849,9 +3555,9 @@ class DataEntryWindow(QMainWindow):
                    al.position_number
             FROM active_lineup al
             INNER JOIN players p ON al.player_id = p.player_id
-            WHERE al.team_id = ?
+            WHERE al.game_id = ? AND al.team_id = ?
             ORDER BY al.position_number
-        """, (team_id,))
+        """, (self.game_id, team_id))
         
         return cursor.fetchall()
     
@@ -2986,6 +3692,369 @@ class DataEntryWindow(QMainWindow):
         layout.addLayout(button_layout)
         
         dialog.exec()
+    
+    def setup_libero_buttons(self):
+        """Create and position Libero IN and Libero OUT buttons next to substitution button."""
+        if not hasattr(self.ui, 'pushButton_substitution'):
+            return
+        
+        # Get substitution button position and size
+        sub_btn = self.ui.pushButton_substitution
+        sub_x = sub_btn.x()
+        sub_y = sub_btn.y()
+        sub_width = sub_btn.width()
+        sub_height = sub_btn.height()
+        
+        # Create Libero IN button (to the right of substitution button)
+        libero_in_btn = QPushButton("Libero IN", self.ui.centralwidget)
+        libero_in_btn.setGeometry(sub_x + sub_width + 10, sub_y, 150, sub_height)
+        libero_in_btn.clicked.connect(self.show_libero_in_dialog)
+        self.libero_in_button = libero_in_btn
+        
+        # Create Libero OUT button (to the right of Libero IN button)
+        libero_out_btn = QPushButton("Libero OUT", self.ui.centralwidget)
+        libero_out_btn.setGeometry(sub_x + sub_width * 2 + 20, sub_y, 150, sub_height)
+        libero_out_btn.clicked.connect(self.show_libero_out_dialog)
+        self.libero_out_button = libero_out_btn
+    
+    def get_libero_player_id(self, team_id: int) -> Optional[int]:
+        """Get the libero player ID for the team."""
+        if not self.game_id:
+            return None
+        
+        if not self.db.conn:
+            self.db.connect()
+        
+        cursor = self.db.conn.cursor()
+        cursor.execute("""
+            SELECT player_id 
+            FROM players 
+            WHERE team_id = ? AND role_code = 'Lib'
+            LIMIT 1
+        """, (team_id,))
+        
+        result = cursor.fetchone()
+        return result[0] if result else None
+    
+    def show_libero_in_dialog(self):
+        """Show dialog for libero to enter, displaying all positions (1-6) with players."""
+        if not self.game_id or not self.team_us_id:
+            QMessageBox.warning(self, "No Game", "Please select a game first.")
+            return
+        
+        # Get libero player ID
+        libero_id = self.get_libero_player_id(self.team_us_id)
+        if not libero_id:
+            QMessageBox.warning(self, "No Libero", "No libero player found for this team.")
+            return
+        
+        # Check if libero is already on court
+        if not self.db.conn:
+            self.db.connect()
+        cursor = self.db.conn.cursor()
+        cursor.execute("""
+            SELECT position_number 
+            FROM active_lineup 
+            WHERE game_id = ? AND team_id = ? AND player_id = ?
+        """, (self.game_id, self.team_us_id, libero_id))
+        if cursor.fetchone():
+            QMessageBox.warning(self, "Libero Already On Court", "The libero is already on the court.")
+            return
+        
+        # Get all positions in order: 1, 2, 3, 4, 5, 6
+        all_positions = [1, 2, 3, 4, 5, 6]
+        available_players = []
+        
+        for pos in all_positions:
+            cursor.execute("""
+                SELECT p.player_id, 
+                       COALESCE(p.jersey, p.player_number) as player_number,
+                       p.name
+                FROM active_lineup al
+                INNER JOIN players p ON al.player_id = p.player_id
+                WHERE al.game_id = ? AND al.team_id = ? AND al.position_number = ?
+            """, (self.game_id, self.team_us_id, pos))
+            result = cursor.fetchone()
+            if result:
+                player_id, player_number, player_name = result
+                # Check if this position already has a libero (shouldn't happen, but check anyway)
+                if player_id != libero_id:
+                    available_players.append((pos, player_id, player_number, player_name))
+        
+        if not available_players:
+            QMessageBox.warning(self, "No Players Available", "No players available for libero replacement.")
+            return
+        
+        # Create dialog
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Libero IN - Select Position")
+        dialog.setModal(True)
+        dialog.setMinimumSize(400, 300)
+        
+        layout = QVBoxLayout(dialog)
+        
+        # Instructions
+        instructions = QLabel("Select a position for the libero to enter:")
+        instructions.setWordWrap(True)
+        instructions.setFont(QFont('Arial', 10, QFont.Weight.Bold))
+        layout.addWidget(instructions)
+        
+        # List of all positions with players
+        positions_list = QListWidget()
+        positions_list.setMinimumHeight(200)
+        
+        for pos, player_id, player_number, player_name in available_players:
+            display_text = f"Position {pos}: #{player_number} - {player_name}" if player_name else f"Position {pos}: #{player_number}"
+            item = QListWidgetItem(display_text)
+            item.setData(Qt.ItemDataRole.UserRole, (pos, player_id))
+            positions_list.addItem(item)
+        
+        layout.addWidget(positions_list)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(dialog.reject)
+        button_layout.addWidget(cancel_btn)
+        
+        enter_btn = QPushButton("Enter Libero")
+        enter_btn.setDefault(True)
+        enter_btn.setEnabled(False)
+        
+        def on_selection_changed():
+            """Enable enter button when position is selected."""
+            enter_btn.setEnabled(positions_list.currentItem() is not None)
+        
+        positions_list.itemSelectionChanged.connect(on_selection_changed)
+        
+        def perform_libero_enter():
+            """Perform the libero enter action."""
+            item = positions_list.currentItem()
+            if not item:
+                return
+            
+            pos, replaced_player_id = item.data(Qt.ItemDataRole.UserRole)
+            
+            try:
+                # Perform libero replacement using LineupManager
+                self.lineup_manager.libero_replace(
+                    team_id=self.team_us_id,
+                    libero_id=libero_id,
+                    replaced_player_id=replaced_player_id,
+                    replaced_position=pos,
+                    action='enter',
+                    game_id=self.game_id
+                )
+                
+                # Track the replacement
+                self.libero_replacements[pos] = replaced_player_id
+                
+                # Update MainWindow player buttons to reflect the new lineup
+                self.update_mainwindow_player_buttons()
+                
+                # Update UI state to ensure action buttons are properly enabled/disabled
+                self.update_ui_state()
+                
+                # Print updated lineup
+                self.print_team_us_lineup()
+                
+                QMessageBox.information(self, "Libero Entered", 
+                                      f"Libero has entered at position {pos}, replacing player #{replaced_player_id}.")
+                dialog.accept()
+            except Exception as e:
+                QMessageBox.critical(self, "Libero Error", 
+                                   f"Failed to enter libero:\n{str(e)}")
+        
+        enter_btn.clicked.connect(perform_libero_enter)
+        button_layout.addWidget(enter_btn)
+        
+        layout.addLayout(button_layout)
+        
+        dialog.exec()
+    
+    def show_libero_out_dialog(self):
+        """Show dialog for libero to exit, restoring the original player.
+        
+        Looks up the most recent row in libero_actions table for this game,
+        finds the replaced_player_id, and swaps that player into the position
+        where the libero currently is.
+        """
+        if not self.game_id or not self.team_us_id:
+            QMessageBox.warning(self, "No Game", "Please select a game first.")
+            return
+        
+        # Get libero player ID
+        libero_id = self.get_libero_player_id(self.team_us_id)
+        if not libero_id:
+            QMessageBox.warning(self, "No Libero", "No libero player found for this team.")
+            return
+        
+        # Find positions where libero is currently on court
+        if not self.db.conn:
+            self.db.connect()
+        cursor = self.db.conn.cursor()
+        cursor.execute("""
+            SELECT position_number 
+            FROM active_lineup 
+            WHERE game_id = ? AND team_id = ? AND player_id = ?
+        """, (self.game_id, self.team_us_id, libero_id))
+        
+        libero_positions = cursor.fetchall()
+        if not libero_positions:
+            QMessageBox.warning(self, "Libero Not On Court", "The libero is not currently on the court.")
+            return
+        
+        # Get the most recent libero_actions record for this game (regardless of position)
+        cursor.execute("""
+            SELECT replaced_player_id, replaced_position
+            FROM libero_actions 
+            WHERE game_id = ? AND team_id = ? AND action = 'enter'
+            ORDER BY created_at DESC
+            LIMIT 1
+        """, (self.game_id, self.team_us_id))
+        
+        result = cursor.fetchone()
+        if not result:
+            QMessageBox.warning(self, "Error", 
+                               "Could not find libero_actions record for this game.\n"
+                               "The libero may not have been entered through the system.")
+            return
+        
+        replaced_player_id, original_position = result
+        
+        # Get the current position(s) where libero is on court
+        current_positions = [pos[0] for pos in libero_positions]
+        
+        # If libero is in multiple positions, use the position from the most recent libero_actions record
+        # Otherwise, use the single position where libero is
+        if len(current_positions) == 1:
+            target_position = current_positions[0]
+        else:
+            # Libero is in multiple positions - use the position from the most recent libero_actions record
+            # if it matches one of the current positions, otherwise use the first position
+            if original_position in current_positions:
+                target_position = original_position
+            else:
+                target_position = current_positions[0]
+        
+        # Get player info for the replaced player
+        cursor.execute("""
+            SELECT COALESCE(p.jersey, p.player_number) as player_number, p.name
+            FROM players p
+            WHERE p.player_id = ?
+        """, (replaced_player_id,))
+        player_info = cursor.fetchone()
+        if not player_info:
+            QMessageBox.warning(self, "Error", 
+                               f"Could not find player {replaced_player_id} in database.")
+            return
+        
+        player_number, player_name = player_info
+        
+        # If libero is only in one position, exit directly
+        if len(current_positions) == 1:
+            self.perform_libero_exit(libero_id, target_position, replaced_player_id)
+            return
+        
+        # If libero is in multiple positions, show dialog to select which one
+        # Create dialog to select which position to exit from
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Libero OUT - Select Position")
+        dialog.setModal(True)
+        dialog.setMinimumSize(400, 300)
+        
+        layout = QVBoxLayout(dialog)
+        
+        # Instructions
+        instructions = QLabel(f"Libero is in multiple positions. Select position to exit:\n\n"
+                             f"Will restore player #{player_number} - {player_name or 'Unknown'}")
+        instructions.setWordWrap(True)
+        instructions.setFont(QFont('Arial', 10, QFont.Weight.Bold))
+        layout.addWidget(instructions)
+        
+        # List of positions
+        positions_list = QListWidget()
+        positions_list.setMinimumHeight(200)
+        
+        for pos in current_positions:
+            display_text = f"Position {pos}"
+            item = QListWidgetItem(display_text)
+            item.setData(Qt.ItemDataRole.UserRole, pos)
+            positions_list.addItem(item)
+            # Pre-select the position from the most recent libero_actions record
+            if pos == target_position:
+                positions_list.setCurrentItem(item)
+        
+        layout.addWidget(positions_list)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(dialog.reject)
+        button_layout.addWidget(cancel_btn)
+        
+        exit_btn = QPushButton("Exit Libero")
+        exit_btn.setDefault(True)
+        exit_btn.setEnabled(False)
+        
+        def on_selection_changed():
+            """Enable exit button when position is selected."""
+            exit_btn.setEnabled(positions_list.currentItem() is not None)
+        
+        positions_list.itemSelectionChanged.connect(on_selection_changed)
+        
+        def perform_libero_exit_dialog():
+            """Perform the libero exit action."""
+            item = positions_list.currentItem()
+            if not item:
+                return
+            
+            selected_position = item.data(Qt.ItemDataRole.UserRole)
+            self.perform_libero_exit(libero_id, selected_position, replaced_player_id)
+            dialog.accept()
+        
+        exit_btn.clicked.connect(perform_libero_exit_dialog)
+        button_layout.addWidget(exit_btn)
+        
+        layout.addLayout(button_layout)
+        
+        dialog.exec()
+    
+    def perform_libero_exit(self, libero_id: int, position: int, replaced_player_id: int):
+        """Perform the libero exit action."""
+        try:
+            # Perform libero replacement using LineupManager
+            self.lineup_manager.libero_replace(
+                team_id=self.team_us_id,
+                libero_id=libero_id,
+                replaced_player_id=replaced_player_id,
+                replaced_position=position,
+                action='exit',
+                game_id=self.game_id
+            )
+            
+            # Remove from tracking dict
+            if position in self.libero_replacements:
+                del self.libero_replacements[position]
+            
+            # Update MainWindow player buttons to reflect the new lineup
+            self.update_mainwindow_player_buttons()
+            
+            # Update UI state to ensure action buttons are properly enabled/disabled
+            self.update_ui_state()
+            
+            # Print updated lineup
+            self.print_team_us_lineup()
+            
+            QMessageBox.information(self, "Libero Exited", 
+                                  f"Libero has exited position {position}. Original player restored.")
+        except Exception as e:
+            QMessageBox.critical(self, "Libero Error", 
+                               f"Failed to exit libero:\n{str(e)}")
     
     def update_score_display(self):
         """Update the score display in status bar."""
