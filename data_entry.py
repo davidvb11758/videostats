@@ -1408,28 +1408,115 @@ class DataEntryWindow(QMainWindow):
                             server_player_id, server_player_number, server_player_name = result
                             print(f"DEBUG: Serve detected (team_us, fallback to position 1) - Server: #{server_player_number} {server_player_name} (ID:{server_player_id})")
                 elif team_id == self.team_them_id:
-                    # For team_them, default to player o0
+                    # For team_them serves, always use player_id=33
+                    server_player_id = 33
                     if not self.db.conn:
                         self.db.connect()
-                    player = self.db.get_player_by_number_for_game(self.game_id, self.team_them_id, "o0")
-                    if player:
-                        server_player_id = player['player_id']
-                        server_player_number = "o0"
-                        server_player_name = player.get('name', 'Unknown')
+                    # Get player info for player_id=33
+                    cursor = self.db.conn.cursor()
+                    cursor.execute("""
+                        SELECT player_number, name, jersey
+                        FROM players
+                        WHERE player_id = ?
+                    """, (server_player_id,))
+                    result = cursor.fetchone()
+                    if result:
+                        server_player_number = result[0] or '33'
+                        server_player_name = result[1] or 'Unknown'
                         print(f"DEBUG: Serve detected (team_them) - Server: #{server_player_number} {server_player_name} (ID:{server_player_id})")
                     else:
-                        # Fallback: try to get any team_them player
-                        players = self.get_team_players(team_id)
-                        if players:
-                            server_player_id = players[0]['player_id']
-                            server_player_number = players[0].get('jersey') or players[0].get('player_number', 'Unknown')
-                            server_player_name = players[0].get('name', 'Unknown')
-                            print(f"DEBUG: Serve detected (team_them, fallback) - Server: #{server_player_number} {server_player_name} (ID:{server_player_id})")
+                        server_player_number = '33'
+                        server_player_name = 'Unknown'
+                        print(f"DEBUG: Serve detected (team_them) - Server: #{server_player_number} (ID:{server_player_id}) - player not found in database")
                 
-                if server_player_id:
-                    # Show serve dialog with only "serve" option
+                if server_player_id and team_id == self.team_them_id:
+                    # Show player-action popup for team_them serves using contact-popup1.ui
+                    # Load the new UI file
+                    ui_file = Path(__file__).parent / "contact-popup1.ui"
+                    loader = QUiLoader()
+                    dialog_widget = loader.load(str(ui_file))
+                    
+                    if not dialog_widget:
+                        QMessageBox.critical(self, "Error", "Failed to load contact popup UI file.")
+                        return
+                    
+                    # Create dialog and set widget
                     dialog = QDialog(self.coordinate_mapper if self.coordinate_mapper else self)
-                    dialog.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint)
+                    dialog.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+                    dialog.setModal(True)
+                    
+                    dialog_layout = QVBoxLayout(dialog)
+                    dialog_layout.setContentsMargins(0, 0, 0, 0)
+                    dialog_layout.addWidget(dialog_widget)
+                    
+                    # Store selected action info
+                    selected_action = [None]  # [player_id, action_type]
+                    
+                    # Hide all GroupBoxes first
+                    all_groupboxes = ['groupBox_LF', 'groupBox_MF', 'groupBox_RF', 'groupBox_LB', 'groupBox_MB', 'groupBox_RB']
+                    for gb_name in all_groupboxes:
+                        groupbox = dialog_widget.findChild(QGroupBox, gb_name)
+                        if groupbox:
+                            groupbox.setVisible(False)
+                    
+                    # Show only the first GroupBox (LF) with player 33
+                    groupbox = dialog_widget.findChild(QGroupBox, 'groupBox_LF')
+                    if groupbox:
+                        groupbox.setVisible(True)
+                        groupbox.setFixedWidth(66)
+                        # Set title to player info
+                        player_label = f"#{server_player_number}-{server_player_name}" if server_player_name else f"#{server_player_number}"
+                        groupbox.setTitle(player_label)
+                        
+                        # Hide all buttons first
+                        for btn_num in range(1, 8):
+                            btn_name = f"pushButton_LF_{btn_num}"
+                            btn = dialog_widget.findChild(QPushButton, btn_name)
+                            if btn:
+                                btn.setVisible(False)
+                                btn.setEnabled(False)
+                                btn.setText("")
+                        
+                        # Show only the "Serve" button (use button 1, but label it as "Serve")
+                        serve_btn = dialog_widget.findChild(QPushButton, "pushButton_LF_1")
+                        if serve_btn:
+                            serve_btn.setText("Serve")
+                            serve_btn.setFixedWidth(60)
+                            serve_btn.setStyleSheet("background-color: #E0FFFF; border: 1px solid #505050; padding: 1px 2px;")
+                            serve_btn.setVisible(True)
+                            serve_btn.setEnabled(True)
+                            
+                            # Connect button to player 33 and serve action
+                            serve_btn.clicked.connect(lambda: (selected_action.__setitem__(0, [server_player_id, "serve"]), dialog.accept()))
+                    
+                    # Position dialog 10 pixels above the clicked point using coordinate_mapper method
+                    if self.coordinate_mapper and pixel_x is not None and pixel_y is not None:
+                        self.coordinate_mapper.position_popup_near_click(dialog, pixel_x, pixel_y, offset_y=10)
+                        # Ensure coordinate_mapper window is raised and active so popup appears on top
+                        self.coordinate_mapper.raise_()
+                        self.coordinate_mapper.activateWindow()
+                    elif pixel_x is not None and pixel_y is not None:
+                        # Fallback: position relative to main window
+                        dialog_x = int(pixel_x) + 10
+                        dialog_y = int(pixel_y) - 80
+                        dialog.move(dialog_x, dialog_y)
+                    
+                    # Ensure dialog is raised and shown on top
+                    dialog.raise_()
+                    dialog.activateWindow()
+                    
+                    if dialog.exec() == QDialog.Accepted and selected_action[0]:
+                        self.selected_player_id = selected_action[0][0]
+                        self.selected_team_id = team_id
+                        # Clear expected server after serve is recorded
+                        self.expected_next_server_team_id = None
+                        self.record_contact(selected_action[0][1])
+                    return  # Return immediately after handling serve
+                
+                elif server_player_id:
+                    # Show serve dialog with only "serve" option (for team_us)
+                    dialog = QDialog(self.coordinate_mapper if self.coordinate_mapper else self)
+                    dialog.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
                     dialog.setModal(True)
                     
                     layout = QVBoxLayout()
@@ -1454,16 +1541,21 @@ class DataEntryWindow(QMainWindow):
                     dialog.setLayout(layout)
                     dialog.setFixedSize(120, 80)
                     
-                    # Position dialog to the upper right corner of the clicked point
+                    # Position dialog 10 pixels above the clicked point using coordinate_mapper method
                     if self.coordinate_mapper and pixel_x is not None and pixel_y is not None:
-                        mapper_pos = self.coordinate_mapper.mapToGlobal(QPoint(0, 0))
-                        dialog_x = mapper_pos.x() + int(pixel_x) + 10
-                        dialog_y = mapper_pos.y() + int(pixel_y) - 80
-                        dialog.move(dialog_x, dialog_y)
+                        self.coordinate_mapper.position_popup_near_click(dialog, pixel_x, pixel_y, offset_y=10)
+                        # Ensure coordinate_mapper window is raised and active so popup appears on top
+                        self.coordinate_mapper.raise_()
+                        self.coordinate_mapper.activateWindow()
                     elif pixel_x is not None and pixel_y is not None:
+                        # Fallback: position relative to main window
                         dialog_x = int(pixel_x) + 10
                         dialog_y = int(pixel_y) - 80
                         dialog.move(dialog_x, dialog_y)
+                    
+                    # Ensure dialog is raised and shown on top
+                    dialog.raise_()
+                    dialog.activateWindow()
                     
                     if dialog.exec() == QDialog.Accepted and selected_action[0]:
                         self.selected_player_id = selected_action[0][0]
@@ -1572,7 +1664,7 @@ class DataEntryWindow(QMainWindow):
             if team_id == self.team_us_id:
                 # Handle 4th contact on team_us side - show small popup with only "down" button
                 dialog = QDialog(self.coordinate_mapper if self.coordinate_mapper else self)
-                dialog.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint)
+                dialog.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
                 dialog.setModal(True)
                 
                 layout = QVBoxLayout()
@@ -1591,16 +1683,21 @@ class DataEntryWindow(QMainWindow):
                 dialog.setLayout(layout)
                 dialog.setFixedSize(90, 40)
                 
-                # Position dialog to the upper right corner of the clicked point
+                # Position dialog 10 pixels above the clicked point using coordinate_mapper method
                 if self.coordinate_mapper and pixel_x is not None and pixel_y is not None:
-                    mapper_pos = self.coordinate_mapper.mapToGlobal(QPoint(0, 0))
-                    dialog_x = mapper_pos.x() + int(pixel_x) + 10
-                    dialog_y = mapper_pos.y() + int(pixel_y) - 40
-                    dialog.move(dialog_x, dialog_y)
+                    self.coordinate_mapper.position_popup_near_click(dialog, pixel_x, pixel_y, offset_y=10)
+                    # Ensure coordinate_mapper window is raised and active so popup appears on top
+                    self.coordinate_mapper.raise_()
+                    self.coordinate_mapper.activateWindow()
                 elif pixel_x is not None and pixel_y is not None:
+                    # Fallback: position relative to main window
                     dialog_x = int(pixel_x) + 10
                     dialog_y = int(pixel_y) - 40
                     dialog.move(dialog_x, dialog_y)
+                
+                # Ensure dialog is raised and shown on top
+                dialog.raise_()
+                dialog.activateWindow()
                 
                 if dialog.exec() == QDialog.Accepted and selected_action[0]:
                     # Record down contact with error outcome
@@ -1698,7 +1795,7 @@ class DataEntryWindow(QMainWindow):
             
             # Create dialog and set widget
             dialog = QDialog(self.coordinate_mapper if self.coordinate_mapper else self)
-            dialog.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint)
+            dialog.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
             dialog.setModal(True)
             
             dialog_layout = QVBoxLayout(dialog)
@@ -2119,18 +2216,21 @@ class DataEntryWindow(QMainWindow):
             # Set dialog size - adjust for narrower GroupBoxes (66px each + 2px spacing = 70px per column, 3 columns = 210px + margins)
             dialog.setFixedSize(220, 280)
             
-            # Position dialog to the upper right corner of the clicked point
+            # Position dialog 10 pixels above the clicked point using coordinate_mapper method
             if self.coordinate_mapper and pixel_x is not None and pixel_y is not None:
-                mapper_pos = self.coordinate_mapper.mapToGlobal(QPoint(0, 0))
-                # Position to upper right: x = click + offset, y = click - dialog height
-                dialog_x = mapper_pos.x() + int(pixel_x) + 10  # 10 pixels to the right
-                dialog_y = mapper_pos.y() + int(pixel_y) - 280  # Above the click point
-                dialog.move(dialog_x, dialog_y)
+                self.coordinate_mapper.position_popup_near_click(dialog, pixel_x, pixel_y, offset_y=10)
+                # Ensure coordinate_mapper window is raised and active so popup appears on top
+                self.coordinate_mapper.raise_()
+                self.coordinate_mapper.activateWindow()
             elif pixel_x is not None and pixel_y is not None:
                 # Fallback: use logical coordinates for positioning
                 dialog_x = int(pixel_x) + 10
                 dialog_y = int(pixel_y) - 280
                 dialog.move(dialog_x, dialog_y)
+            
+            # Ensure dialog is raised and shown on top
+            dialog.raise_()
+            dialog.activateWindow()
             
             # Show dialog and get result (for new UI)
             # Use safe_allowed_actions instead of allowed_actions to avoid UnboundLocalError
@@ -2324,20 +2424,21 @@ class DataEntryWindow(QMainWindow):
             total_rows = len(players) + 1  # +1 for "down" button
             dialog.setFixedHeight(total_rows * 26 + 20)
             
-            # Position dialog to the right of the clicked point
-            # Use pixel coordinates if available (from coordinate mapper)
+            # Position dialog 10 pixels above the clicked point using coordinate_mapper method
             if self.coordinate_mapper and pixel_x is not None and pixel_y is not None:
-                # Get the coordinate mapper's global position
-                mapper_pos = self.coordinate_mapper.mapToGlobal(QPoint(0, 0))
-                # Position dialog to the right of the click point
-                dialog_x = mapper_pos.x() + int(pixel_x) + 20  # 20 pixels to the right
-                dialog_y = mapper_pos.y() + int(pixel_y) - 50  # Adjust to center on click
-                dialog.move(dialog_x, dialog_y)
+                self.coordinate_mapper.position_popup_near_click(dialog, pixel_x, pixel_y, offset_y=10)
+                # Ensure coordinate_mapper window is raised and active so popup appears on top
+                self.coordinate_mapper.raise_()
+                self.coordinate_mapper.activateWindow()
             elif pixel_x is not None and pixel_y is not None:
                 # Fallback: use logical coordinates for positioning
                 dialog_x = int(pixel_x) + 20
                 dialog_y = int(pixel_y) - 50
                 dialog.move(dialog_x, dialog_y)
+            
+            # Ensure dialog is raised and shown on top
+            dialog.raise_()
+            dialog.activateWindow()
             
             # Show dialog and get result
             # Use safe_allowed_actions instead of allowed_actions to avoid UnboundLocalError

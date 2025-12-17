@@ -8,12 +8,13 @@ import cv2
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGraphicsView, QGraphicsScene,
     QGraphicsEllipseItem, QGraphicsLineItem, QGraphicsTextItem, QApplication, QPushButton,
-    QFileDialog, QSlider, QComboBox
+    QFileDialog, QSlider, QComboBox, QMessageBox, QDialog, QListWidget, QListWidgetItem
 )
-from PySide6.QtCore import Qt, QPointF, QRectF, Signal, QUrl, QTimer
+from PySide6.QtCore import Qt, QPointF, QRectF, Signal, QUrl, QTimer, QPoint
 from PySide6.QtGui import QPen, QBrush, QColor, QFont, QPainter
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
+from lineup_manager import LineupManager
 
 
 class CoordinateMapper(QMainWindow):
@@ -51,13 +52,19 @@ class CoordinateMapper(QMainWindow):
             self._load_team_ids()
             self._load_score()
         
+        # Initialize LineupManager for substitutions and libero actions
+        self.lineup_manager = LineupManager(self.db) if self.db else None
+        
+        # Track libero replacements: position -> replaced_player_id
+        self.libero_replacements = {}  # {position: replaced_player_id}
+        
         # Fixed dimensions of the logical plane
         self.plane_width = 300
         self.plane_height = 600
         
         # Canvas/view dimensions
         self.canvas_width = 1500
-        self.canvas_height = 900
+        self.canvas_height = 600
         
         # Storage for clicks
         self.corner_points = []  # Will store 4 corners + 6 horizontal line points (10 total)
@@ -152,6 +159,27 @@ class CoordinateMapper(QMainWindow):
         self.award_point_them_btn.setEnabled(self.db is not None and self.game_id is not None)
         button_layout.addWidget(self.award_point_them_btn)
         
+        # Substitution and Libero buttons
+        button_layout.addSpacing(20)  # Add some space before substitution section
+        
+        self.substitution_btn = QPushButton("Substitution")
+        self.substitution_btn.setFont(QFont('Arial', 12))
+        self.substitution_btn.clicked.connect(self.show_substitution_dialog)
+        self.substitution_btn.setEnabled(self.db is not None and self.game_id is not None)
+        button_layout.addWidget(self.substitution_btn)
+        
+        self.libero_in_btn = QPushButton("Libero IN")
+        self.libero_in_btn.setFont(QFont('Arial', 12))
+        self.libero_in_btn.clicked.connect(self.show_libero_in_dialog)
+        self.libero_in_btn.setEnabled(self.db is not None and self.game_id is not None)
+        button_layout.addWidget(self.libero_in_btn)
+        
+        self.libero_out_btn = QPushButton("Libero OUT")
+        self.libero_out_btn.setFont(QFont('Arial', 12))
+        self.libero_out_btn.clicked.connect(self.show_libero_out_dialog)
+        self.libero_out_btn.setEnabled(self.db is not None and self.game_id is not None)
+        button_layout.addWidget(self.libero_out_btn)
+        
         button_layout.addStretch()  # Push buttons to the left
         layout.addLayout(button_layout)
         
@@ -167,7 +195,11 @@ class CoordinateMapper(QMainWindow):
         self.view = QGraphicsView(self.scene)
         self.view.setRenderHint(QPainter.RenderHint.Antialiasing)
         self.view.setMinimumSize(self.canvas_width, self.canvas_height)
-        self.view.setMaximumSize(self.canvas_width, self.canvas_height)
+        # Remove maximum size constraint to allow scrolling
+        self.view.setMaximumSize(16777215, 16777215)  # Qt's maximum size value
+        # Enable scrolling
+        self.view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         layout.addWidget(self.view)
         
         # Coordinate display label
@@ -455,8 +487,12 @@ class CoordinateMapper(QMainWindow):
         
         # Create and add video item to scene
         self.video_item = QGraphicsVideoItem()
+        # Initially set to canvas size, will be adjusted when video metadata is available
         self.video_item.setSize(QRectF(0, 0, self.canvas_width, self.canvas_height).size())
         self.scene.addItem(self.video_item)
+        
+        # Connect to nativeSizeChanged signal to adjust scene size when video size is known
+        self.video_item.nativeSizeChanged.connect(self._adjust_scene_to_video_size)
         
         # Set video item to be behind other graphics
         self.video_item.setZValue(-1)
@@ -485,12 +521,42 @@ class CoordinateMapper(QMainWindow):
         self.video_slider.setEnabled(True)
         self.speed_combo.setEnabled(True)
     
+    def _adjust_scene_to_video_size(self):
+        """Adjust scene and video item size to match actual video dimensions."""
+        if not self.video_item:
+            return
+        
+        # Get video size from the video item
+        video_size = self.video_item.nativeSize()
+        if video_size.isValid() and video_size.width() > 0 and video_size.height() > 0:
+            # Use the actual video dimensions
+            video_width = video_size.width()
+            video_height = video_size.height()
+            
+            # Update video item size to match actual video dimensions
+            self.video_item.setSize(QRectF(0, 0, video_width, video_height).size())
+            
+            # Update scene size to accommodate the full video
+            # Use the larger of canvas dimensions or video dimensions
+            scene_width = max(self.canvas_width, video_width)
+            scene_height = max(self.canvas_height, video_height)
+            self.scene.setSceneRect(0, 0, scene_width, scene_height)
+            
+            print(f"DEBUG: Video size: {video_width}x{video_height}, Scene size: {scene_width}x{scene_height}")
+        else:
+            # Fallback: if video size not available, ensure scene is at least canvas size
+            self.scene.setSceneRect(0, 0, self.canvas_width, self.canvas_height)
+    
     def on_media_status_changed(self, status):
         """Handle media status changes to enable controls when media is loaded."""
         from PySide6.QtMultimedia import QMediaPlayer
         if status == QMediaPlayer.MediaStatus.LoadedMedia or status == QMediaPlayer.MediaStatus.BufferedMedia:
             self.enable_video_controls()
             print(f"DEBUG: Media status changed to {status}, controls enabled")
+            
+            # Try to adjust scene and video item size to match actual video dimensions
+            # This will also be called by nativeSizeChanged signal when size becomes available
+            self._adjust_scene_to_video_size()
     
     def toggle_play_pause(self):
         """Toggle between play and pause."""
@@ -1095,6 +1161,59 @@ class CoordinateMapper(QMainWindow):
                 # Emit signal with mapped coordinates and timecode
                 self.coordinate_mapped.emit(logical_coords[0], logical_coords[1], x, y, timecode_ms)
     
+    def position_popup_near_click(self, dialog: QDialog, pixel_x: float, pixel_y: float, offset_y: int = 10):
+        """Position a popup dialog near the clicked location, ensuring it stays on screen.
+        
+        Args:
+            dialog: The dialog to position
+            pixel_x: X coordinate of the click in scene coordinates
+            pixel_y: Y coordinate of the click in scene coordinates
+            offset_y: Vertical offset above the click location (default: 10 pixels)
+        """
+        # Get the dialog size
+        dialog.adjustSize()  # Ensure dialog has its final size
+        dialog_width = dialog.width()
+        dialog_height = dialog.height()
+        
+        # Convert scene coordinates to global screen coordinates
+        # Convert scene coordinates to view coordinates
+        scene_point = QPointF(pixel_x, pixel_y)
+        view_point_f = self.view.mapFromScene(scene_point)
+        # Convert QPointF to QPoint explicitly
+        view_point = QPoint(int(view_point_f.x()), int(view_point_f.y()))
+        # Convert view coordinates to global screen coordinates
+        global_point = self.view.mapToGlobal(view_point)
+        
+        # Calculate initial position: 10 pixels above the click
+        dialog_x = global_point.x()
+        dialog_y = global_point.y() - dialog_height - offset_y
+        
+        # Get screen geometry to check boundaries
+        screen = self.screen().availableGeometry()
+        
+        # Check if dialog goes off the left edge
+        if dialog_x < screen.left():
+            dialog_x = screen.left() + 5  # 5 pixels margin from left edge
+        
+        # Check if dialog goes off the right edge
+        if dialog_x + dialog_width > screen.right():
+            dialog_x = screen.right() - dialog_width - 5  # 5 pixels margin from right edge
+        
+        # Check if dialog goes off the top edge
+        if dialog_y < screen.top():
+            # If it goes off top, position it below the click instead
+            dialog_y = global_point.y() + offset_y
+            # But make sure it doesn't go off bottom either
+            if dialog_y + dialog_height > screen.bottom():
+                dialog_y = screen.bottom() - dialog_height - 5
+        
+        # Check if dialog goes off the bottom edge
+        if dialog_y + dialog_height > screen.bottom():
+            dialog_y = screen.bottom() - dialog_height - 5
+        
+        # Move the dialog to the calculated position
+        dialog.move(int(dialog_x), int(dialog_y))
+    
     def clear_green_dots(self):
         """Clear all green dots and coordinate text from the canvas."""
         # Remove all graphics items (dots and text) but keep corner points and homography
@@ -1109,6 +1228,562 @@ class CoordinateMapper(QMainWindow):
         self.coord_label.setText("")
         
         print("DEBUG: Cleared all green dots and coordinate text from canvas")
+    
+    # ========== Substitution and Libero Methods ==========
+    
+    def get_bench_players(self, team_id: int):
+        """Get bench players (players in game_players but not in active_lineup).
+        
+        Args:
+            team_id: The team ID to get bench players for
+            
+        Returns:
+            List of (player_id, player_number, player_name) tuples
+        """
+        if not self.game_id:
+            return []
+        
+        if not self.db or not self.db.conn:
+            if self.db:
+                self.db.connect()
+            else:
+                return []
+        
+        cursor = self.db.conn.cursor()
+        
+        # Get all players in game_players for this team
+        cursor.execute("""
+            SELECT p.player_id, 
+                   COALESCE(p.jersey, p.player_number) as player_number,
+                   p.name
+            FROM players p
+            INNER JOIN game_players gp ON p.player_id = gp.player_id
+            WHERE gp.game_id = ? AND gp.team_id = ?
+            ORDER BY CASE 
+                WHEN CAST(COALESCE(p.jersey, p.player_number) AS INTEGER) IS NOT NULL 
+                THEN CAST(COALESCE(p.jersey, p.player_number) AS INTEGER)
+                ELSE 999
+            END,
+            COALESCE(p.jersey, p.player_number)
+        """, (self.game_id, team_id))
+        
+        all_players = cursor.fetchall()
+        
+        # Get active players (those in active_lineup) for this specific game
+        cursor.execute("""
+            SELECT player_id
+            FROM active_lineup
+            WHERE game_id = ? AND team_id = ?
+        """, (self.game_id, team_id))
+        
+        active_player_ids = {row[0] for row in cursor.fetchall()}
+        
+        # Filter to get bench players (not in active_lineup)
+        bench_players = [(pid, pnum, pname) for pid, pnum, pname in all_players if pid not in active_player_ids]
+        
+        return bench_players
+    
+    def get_active_players_with_positions(self, team_id: int):
+        """Get active players with their court positions.
+        
+        Args:
+            team_id: The team ID to get active players for
+            
+        Returns:
+            List of (player_id, player_number, player_name, position_number) tuples
+        """
+        if not self.game_id:
+            return []
+        
+        if not self.db or not self.db.conn:
+            if self.db:
+                self.db.connect()
+            else:
+                return []
+        
+        cursor = self.db.conn.cursor()
+        
+        cursor.execute("""
+            SELECT p.player_id, 
+                   COALESCE(p.jersey, p.player_number) as player_number,
+                   p.name,
+                   al.position_number
+            FROM active_lineup al
+            INNER JOIN players p ON al.player_id = p.player_id
+            WHERE al.game_id = ? AND al.team_id = ?
+            ORDER BY al.position_number
+        """, (self.game_id, team_id))
+        
+        return cursor.fetchall()
+    
+    def get_libero_player_id(self, team_id: int):
+        """Get the libero player ID for the team."""
+        if not self.game_id:
+            return None
+        
+        if not self.db or not self.db.conn:
+            if self.db:
+                self.db.connect()
+            else:
+                return None
+        
+        cursor = self.db.conn.cursor()
+        cursor.execute("""
+            SELECT player_id 
+            FROM players 
+            WHERE team_id = ? AND role_code = 'Lib'
+            LIMIT 1
+        """, (team_id,))
+        
+        result = cursor.fetchone()
+        return result[0] if result else None
+    
+    def show_substitution_dialog(self):
+        """Show dialog for player substitution."""
+        if not self.game_id or not self.team_us_id:
+            QMessageBox.warning(self, "No Game", "Please select a game first.")
+            return
+        
+        # Get bench players and active players
+        bench_players = self.get_bench_players(self.team_us_id)
+        active_players = self.get_active_players_with_positions(self.team_us_id)
+        
+        if not bench_players:
+            QMessageBox.information(self, "No Bench Players", "No bench players available for substitution.")
+            return
+        
+        if not active_players:
+            QMessageBox.information(self, "No Active Players", "No active players on court.")
+            return
+        
+        # Create substitution dialog
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Player Substitution")
+        dialog.setModal(True)
+        dialog.setMinimumSize(500, 400)
+        
+        layout = QVBoxLayout(dialog)
+        
+        # Instructions
+        instructions = QLabel("Select a bench player to enter and an active player to exit:")
+        instructions.setWordWrap(True)
+        layout.addWidget(instructions)
+        
+        # Two column layout for lists
+        lists_layout = QHBoxLayout()
+        
+        # Bench players list (left)
+        bench_label = QLabel("Bench Players:")
+        bench_label.setFont(QFont('Arial', 10, QFont.Weight.Bold))
+        bench_list = QListWidget()
+        bench_list.setMinimumWidth(200)
+        for player_id, player_number, player_name in bench_players:
+            display_text = f"#{player_number} - {player_name}" if player_name else f"#{player_number}"
+            item = QListWidgetItem(display_text)
+            item.setData(Qt.ItemDataRole.UserRole, player_id)
+            bench_list.addItem(item)
+        
+        bench_layout = QVBoxLayout()
+        bench_layout.addWidget(bench_label)
+        bench_layout.addWidget(bench_list)
+        lists_layout.addLayout(bench_layout)
+        
+        # Active players list (right)
+        active_label = QLabel("Active Players (on court):")
+        active_label.setFont(QFont('Arial', 10, QFont.Weight.Bold))
+        active_list = QListWidget()
+        active_list.setMinimumWidth(200)
+        for player_id, player_number, player_name, position_number in active_players:
+            display_text = f"#{player_number} - {player_name} (Pos {position_number})" if player_name else f"#{player_number} (Pos {position_number})"
+            item = QListWidgetItem(display_text)
+            item.setData(Qt.ItemDataRole.UserRole, player_id)
+            active_list.addItem(item)
+        
+        active_layout = QVBoxLayout()
+        active_layout.addWidget(active_label)
+        active_layout.addWidget(active_list)
+        lists_layout.addLayout(active_layout)
+        
+        layout.addLayout(lists_layout)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(dialog.reject)
+        button_layout.addWidget(cancel_btn)
+        
+        substitute_btn = QPushButton("Substitute")
+        substitute_btn.setDefault(True)
+        substitute_btn.setEnabled(False)  # Disabled until both are selected
+        
+        def on_selection_changed():
+            """Enable substitute button when both players are selected."""
+            bench_selected = bench_list.currentItem() is not None
+            active_selected = active_list.currentItem() is not None
+            substitute_btn.setEnabled(bench_selected and active_selected)
+        
+        bench_list.itemSelectionChanged.connect(on_selection_changed)
+        active_list.itemSelectionChanged.connect(on_selection_changed)
+        
+        def perform_substitution():
+            """Perform the substitution."""
+            bench_item = bench_list.currentItem()
+            active_item = active_list.currentItem()
+            
+            if not bench_item or not active_item:
+                return
+            
+            in_player_id = bench_item.data(Qt.ItemDataRole.UserRole)
+            out_player_id = active_item.data(Qt.ItemDataRole.UserRole)
+            
+            try:
+                if not self.lineup_manager:
+                    QMessageBox.critical(self, "Error", "LineupManager not initialized.")
+                    return
+                
+                # Perform substitution using LineupManager
+                self.lineup_manager.substitution(
+                    team_id=self.team_us_id,
+                    out_player_id=out_player_id,
+                    in_player_id=in_player_id,
+                    game_id=self.game_id
+                )
+                
+                QMessageBox.information(self, "Substitution Complete", 
+                                      "Player substitution completed successfully.")
+                dialog.accept()
+            except Exception as e:
+                QMessageBox.critical(self, "Substitution Error", 
+                                   f"Failed to perform substitution:\n{str(e)}")
+        
+        substitute_btn.clicked.connect(perform_substitution)
+        button_layout.addWidget(substitute_btn)
+        
+        layout.addLayout(button_layout)
+        
+        dialog.exec()
+    
+    def show_libero_in_dialog(self):
+        """Show dialog for libero to enter, displaying all positions (1-6) with players."""
+        if not self.game_id or not self.team_us_id:
+            QMessageBox.warning(self, "No Game", "Please select a game first.")
+            return
+        
+        # Get libero player ID
+        libero_id = self.get_libero_player_id(self.team_us_id)
+        if not libero_id:
+            QMessageBox.warning(self, "No Libero", "No libero player found for this team.")
+            return
+        
+        # Check if libero is already on court
+        if not self.db or not self.db.conn:
+            if self.db:
+                self.db.connect()
+            else:
+                QMessageBox.warning(self, "Error", "Database connection not available.")
+                return
+        
+        cursor = self.db.conn.cursor()
+        cursor.execute("""
+            SELECT position_number 
+            FROM active_lineup 
+            WHERE game_id = ? AND team_id = ? AND player_id = ?
+        """, (self.game_id, self.team_us_id, libero_id))
+        if cursor.fetchone():
+            QMessageBox.warning(self, "Libero Already On Court", "The libero is already on the court.")
+            return
+        
+        # Get all positions in order: 1, 2, 3, 4, 5, 6
+        all_positions = [1, 2, 3, 4, 5, 6]
+        available_players = []
+        
+        for pos in all_positions:
+            cursor.execute("""
+                SELECT p.player_id, 
+                       COALESCE(p.jersey, p.player_number) as player_number,
+                       p.name
+                FROM active_lineup al
+                INNER JOIN players p ON al.player_id = p.player_id
+                WHERE al.game_id = ? AND al.team_id = ? AND al.position_number = ?
+            """, (self.game_id, self.team_us_id, pos))
+            result = cursor.fetchone()
+            if result:
+                player_id, player_number, player_name = result
+                # Check if this position already has a libero (shouldn't happen, but check anyway)
+                if player_id != libero_id:
+                    available_players.append((pos, player_id, player_number, player_name))
+        
+        if not available_players:
+            QMessageBox.warning(self, "No Players Available", "No players available for libero replacement.")
+            return
+        
+        # Create dialog
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Libero IN - Select Position")
+        dialog.setModal(True)
+        dialog.setMinimumSize(400, 300)
+        
+        layout = QVBoxLayout(dialog)
+        
+        # Instructions
+        instructions = QLabel("Select a position for the libero to enter:")
+        instructions.setWordWrap(True)
+        instructions.setFont(QFont('Arial', 10, QFont.Weight.Bold))
+        layout.addWidget(instructions)
+        
+        # List of all positions with players
+        positions_list = QListWidget()
+        positions_list.setMinimumHeight(200)
+        
+        for pos, player_id, player_number, player_name in available_players:
+            display_text = f"Position {pos}: #{player_number} - {player_name}" if player_name else f"Position {pos}: #{player_number}"
+            item = QListWidgetItem(display_text)
+            item.setData(Qt.ItemDataRole.UserRole, (pos, player_id))
+            positions_list.addItem(item)
+        
+        layout.addWidget(positions_list)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(dialog.reject)
+        button_layout.addWidget(cancel_btn)
+        
+        enter_btn = QPushButton("Enter Libero")
+        enter_btn.setDefault(True)
+        enter_btn.setEnabled(False)
+        
+        def on_selection_changed():
+            """Enable enter button when position is selected."""
+            enter_btn.setEnabled(positions_list.currentItem() is not None)
+        
+        positions_list.itemSelectionChanged.connect(on_selection_changed)
+        
+        def perform_libero_enter():
+            """Perform the libero enter action."""
+            item = positions_list.currentItem()
+            if not item:
+                return
+            
+            pos, replaced_player_id = item.data(Qt.ItemDataRole.UserRole)
+            
+            try:
+                if not self.lineup_manager:
+                    QMessageBox.critical(self, "Error", "LineupManager not initialized.")
+                    return
+                
+                # Perform libero replacement using LineupManager
+                self.lineup_manager.libero_replace(
+                    team_id=self.team_us_id,
+                    libero_id=libero_id,
+                    replaced_player_id=replaced_player_id,
+                    replaced_position=pos,
+                    action='enter',
+                    game_id=self.game_id
+                )
+                
+                # Track the replacement
+                self.libero_replacements[pos] = replaced_player_id
+                
+                QMessageBox.information(self, "Libero Entered", 
+                                      f"Libero has entered at position {pos}, replacing player #{replaced_player_id}.")
+                dialog.accept()
+            except Exception as e:
+                QMessageBox.critical(self, "Libero Error", 
+                                   f"Failed to enter libero:\n{str(e)}")
+        
+        enter_btn.clicked.connect(perform_libero_enter)
+        button_layout.addWidget(enter_btn)
+        
+        layout.addLayout(button_layout)
+        
+        dialog.exec()
+    
+    def show_libero_out_dialog(self):
+        """Show dialog for libero to exit, restoring the original player.
+        
+        Looks up the most recent row in libero_actions table for this game,
+        finds the replaced_player_id, and swaps that player into the position
+        where the libero currently is.
+        """
+        if not self.game_id or not self.team_us_id:
+            QMessageBox.warning(self, "No Game", "Please select a game first.")
+            return
+        
+        # Get libero player ID
+        libero_id = self.get_libero_player_id(self.team_us_id)
+        if not libero_id:
+            QMessageBox.warning(self, "No Libero", "No libero player found for this team.")
+            return
+        
+        # Find positions where libero is currently on court
+        if not self.db or not self.db.conn:
+            if self.db:
+                self.db.connect()
+            else:
+                QMessageBox.warning(self, "Error", "Database connection not available.")
+                return
+        
+        cursor = self.db.conn.cursor()
+        cursor.execute("""
+            SELECT position_number 
+            FROM active_lineup 
+            WHERE game_id = ? AND team_id = ? AND player_id = ?
+        """, (self.game_id, self.team_us_id, libero_id))
+        
+        libero_positions = cursor.fetchall()
+        if not libero_positions:
+            QMessageBox.warning(self, "Libero Not On Court", "The libero is not currently on the court.")
+            return
+        
+        # Get the most recent libero_actions record for this game (regardless of position)
+        cursor.execute("""
+            SELECT replaced_player_id, replaced_position
+            FROM libero_actions 
+            WHERE game_id = ? AND team_id = ? AND action = 'enter'
+            ORDER BY created_at DESC
+            LIMIT 1
+        """, (self.game_id, self.team_us_id))
+        
+        result = cursor.fetchone()
+        if not result:
+            QMessageBox.warning(self, "Error", 
+                               "Could not find libero_actions record for this game.\n"
+                               "The libero may not have been entered through the system.")
+            return
+        
+        replaced_player_id, original_position = result
+        
+        # Get the current position(s) where libero is on court
+        current_positions = [pos[0] for pos in libero_positions]
+        
+        # If libero is in multiple positions, use the position from the most recent libero_actions record
+        # Otherwise, use the single position where libero is
+        if len(current_positions) == 1:
+            target_position = current_positions[0]
+        else:
+            # Libero is in multiple positions - use the position from the most recent libero_actions record
+            # if it matches one of the current positions, otherwise use the first position
+            if original_position in current_positions:
+                target_position = original_position
+            else:
+                target_position = current_positions[0]
+        
+        # Get player info for the replaced player
+        cursor.execute("""
+            SELECT COALESCE(p.jersey, p.player_number) as player_number, p.name
+            FROM players p
+            WHERE p.player_id = ?
+        """, (replaced_player_id,))
+        player_info = cursor.fetchone()
+        if not player_info:
+            QMessageBox.warning(self, "Error", 
+                               f"Could not find player {replaced_player_id} in database.")
+            return
+        
+        player_number, player_name = player_info
+        
+        # If libero is only in one position, exit directly
+        if len(current_positions) == 1:
+            self.perform_libero_exit(libero_id, target_position, replaced_player_id)
+            return
+        
+        # If libero is in multiple positions, show dialog to select which one
+        # Create dialog to select which position to exit from
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Libero OUT - Select Position")
+        dialog.setModal(True)
+        dialog.setMinimumSize(400, 300)
+        
+        layout = QVBoxLayout(dialog)
+        
+        # Instructions
+        instructions = QLabel(f"Libero is in multiple positions. Select position to exit:\n\n"
+                             f"Will restore player #{player_number} - {player_name or 'Unknown'}")
+        instructions.setWordWrap(True)
+        instructions.setFont(QFont('Arial', 10, QFont.Weight.Bold))
+        layout.addWidget(instructions)
+        
+        # List of positions
+        positions_list = QListWidget()
+        positions_list.setMinimumHeight(200)
+        
+        for pos in current_positions:
+            display_text = f"Position {pos}"
+            item = QListWidgetItem(display_text)
+            item.setData(Qt.ItemDataRole.UserRole, pos)
+            positions_list.addItem(item)
+            # Pre-select the position from the most recent libero_actions record
+            if pos == target_position:
+                positions_list.setCurrentItem(item)
+        
+        layout.addWidget(positions_list)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(dialog.reject)
+        button_layout.addWidget(cancel_btn)
+        
+        exit_btn = QPushButton("Exit Libero")
+        exit_btn.setDefault(True)
+        exit_btn.setEnabled(False)
+        
+        def on_selection_changed():
+            """Enable exit button when position is selected."""
+            exit_btn.setEnabled(positions_list.currentItem() is not None)
+        
+        positions_list.itemSelectionChanged.connect(on_selection_changed)
+        
+        def perform_libero_exit_dialog():
+            """Perform the libero exit action from dialog."""
+            item = positions_list.currentItem()
+            if not item:
+                return
+            
+            pos = item.data(Qt.ItemDataRole.UserRole)
+            self.perform_libero_exit(libero_id, pos, replaced_player_id)
+            dialog.accept()
+        
+        exit_btn.clicked.connect(perform_libero_exit_dialog)
+        button_layout.addWidget(exit_btn)
+        
+        layout.addLayout(button_layout)
+        
+        dialog.exec()
+    
+    def perform_libero_exit(self, libero_id: int, position: int, replaced_player_id: int):
+        """Perform the libero exit action."""
+        try:
+            if not self.lineup_manager:
+                QMessageBox.critical(self, "Error", "LineupManager not initialized.")
+                return
+            
+            # Perform libero replacement using LineupManager
+            self.lineup_manager.libero_replace(
+                team_id=self.team_us_id,
+                libero_id=libero_id,
+                replaced_player_id=replaced_player_id,
+                replaced_position=position,
+                action='exit',
+                game_id=self.game_id
+            )
+            
+            # Remove from tracking dict
+            if position in self.libero_replacements:
+                del self.libero_replacements[position]
+            
+            QMessageBox.information(self, "Libero Exited", 
+                                  f"Libero has exited position {position}. Original player restored.")
+        except Exception as e:
+            QMessageBox.critical(self, "Libero Error", 
+                               f"Failed to exit libero:\n{str(e)}")
     
     def _compute_homography(self):
         """Compute the homography matrix using OpenCV based on the 10 control points."""
