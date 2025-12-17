@@ -1228,6 +1228,36 @@ class DataEntryWindow(QMainWindow):
             # For team_them, return empty (they don't use active_lineup)
             return []
     
+    def map_player_to_groupbox_by_position(self, position_number: int):
+        """Map a player to a GroupBox based solely on court position.
+        
+        Args:
+            position_number: Court position (1-6)
+            
+        Returns:
+            GroupBox name (e.g., 'groupBox_LF') or None if no match
+        """
+        FRONT_ROW = {2, 3, 4}
+        BACK_ROW = {1, 5, 6}
+        
+        if position_number in FRONT_ROW:
+            if position_number == 2:
+                return 'groupBox_RF'
+            elif position_number == 3:
+                return 'groupBox_MF'
+            elif position_number == 4:
+                return 'groupBox_LF'
+        elif position_number in BACK_ROW:
+            # Back row position-based mapping: 5→LB, 6→MB, 1→RB
+            if position_number == 1:
+                return 'groupBox_RB'
+            elif position_number == 5:
+                return 'groupBox_LB'
+            elif position_number == 6:
+                return 'groupBox_MB'
+        
+        return None
+    
     def map_player_to_groupbox(self, role_code: str, position_number: int, has_libero: bool):
         """Map a player to a GroupBox based on role and position.
         
@@ -1263,13 +1293,8 @@ class DataEntryWindow(QMainWindow):
             elif role in ('RS', 'S', 'RH'):
                 return 'groupBox_RF'
             else:
-                # Fallback for unknown roles in front row: distribute evenly
-                if position_number == 2:
-                    return 'groupBox_RF'
-                elif position_number == 3:
-                    return 'groupBox_MF'
-                elif position_number == 4:
-                    return 'groupBox_LF'
+                # Fallback for unknown roles in front row: use position-based mapping
+                return self.map_player_to_groupbox_by_position(position_number)
         elif position_number in BACK_ROW:
             # Back row logic
             if role == 'LIB':  # Note: role is already uppercased above
@@ -1288,21 +1313,11 @@ class DataEntryWindow(QMainWindow):
                 # MH: always use MB when in back row (regardless of libero status)
                 return 'groupBox_MB'
             else:
-                # Fallback for unknown roles in back row: distribute evenly
-                if position_number == 1:
-                    return 'groupBox_RB'
-                elif position_number == 5:
-                    return 'groupBox_LB'
-                elif position_number == 6:
-                    return 'groupBox_MB'
+                # Fallback for unknown roles in back row: use position-based mapping
+                return self.map_player_to_groupbox_by_position(position_number)
         
-        # Final fallback: return a default based on position
-        if position_number in FRONT_ROW:
-            return 'groupBox_MF'  # Default to middle front
-        elif position_number in BACK_ROW:
-            return 'groupBox_MB'  # Default to middle back
-        
-        return None
+        # Final fallback: use position-based mapping
+        return self.map_player_to_groupbox_by_position(position_number)
     
     def show_player_selection_dialog(self, team_id: int, x_coord: float, y_coord: float, pixel_x: float = None, pixel_y: float = None):
         """Show a dialog to select a player from the specified team using the new UI layout.
@@ -1703,6 +1718,45 @@ class DataEntryWindow(QMainWindow):
             # Track which positions have been assigned to ensure all 6 players are shown
             assigned_positions = set()
             
+            # Track which positions are assigned to which GroupBoxes (to detect conflicts)
+            position_to_groupbox = {}  # {position_number: groupbox_name}
+            groupbox_to_positions = {}  # {groupbox_name: set of position_numbers}
+            
+            # First pass: Check for potential conflicts in both front and back row players with same role
+            # Count how many players have each role in each row
+            BACK_ROW = {1, 5, 6}
+            FRONT_ROW = {2, 3, 4}
+            back_row_roles = {}  # {role: [position_numbers]}
+            front_row_roles = {}  # {role: [position_numbers]}
+            for player_data in active_players:
+                if len(player_data) == 6:
+                    _, _, _, role_code, position_number, _ = player_data
+                else:
+                    _, _, _, role_code, position_number = player_data
+                role_upper = role_code.upper().strip() if role_code else 'OH'
+                if role_upper == 'RH':
+                    role_upper = 'RS'
+                
+                if position_number in BACK_ROW:
+                    if role_upper not in back_row_roles:
+                        back_row_roles[role_upper] = []
+                    back_row_roles[role_upper].append(position_number)
+                elif position_number in FRONT_ROW:
+                    if role_upper not in front_row_roles:
+                        front_row_roles[role_upper] = []
+                    front_row_roles[role_upper].append(position_number)
+            
+            # Identify roles that have multiple back row players - these will need position-based mapping
+            conflicting_back_row_roles = {role: positions for role, positions in back_row_roles.items() 
+                                        if len(positions) > 1 and role not in ('LIB',)}  # Libero is special case
+            
+            # Identify roles that have multiple front row players - these will need position-based mapping
+            conflicting_front_row_roles = {role: positions for role, positions in front_row_roles.items() 
+                                          if len(positions) > 1}
+            
+            print(f"DEBUG POPUP: Back row role conflicts: {conflicting_back_row_roles}")
+            print(f"DEBUG POPUP: Front row role conflicts: {conflicting_front_row_roles}")
+            
             print(f"DEBUG POPUP: Active players count: {len(active_players)}")
             for player_data in active_players:
                 # Handle both old format (5 elements) and new format (6 elements with is_server)
@@ -1712,31 +1766,65 @@ class DataEntryWindow(QMainWindow):
                     player_id, player_number, player_name, role_code, position_number = player_data
                     is_server = False
                 print(f"DEBUG POPUP: Player #{player_number} ({player_name}) - Role: {role_code}, Position: {position_number}, Has Libero: {has_libero}")
-                groupbox_name = self.map_player_to_groupbox(role_code, position_number, has_libero)
-                print(f"DEBUG POPUP:   -> Mapped to GroupBox: {groupbox_name}")
                 
-                # If no GroupBox mapping, use a fallback based on position
-                if not groupbox_name:
-                    # Fallback mapping: ensure every position maps to a GroupBox
-                    FRONT_ROW = {2, 3, 4}
-                    BACK_ROW = {1, 5, 6}
-                    if position_number in FRONT_ROW:
-                        if position_number == 2:
-                            groupbox_name = 'groupBox_RF'
-                        elif position_number == 3:
-                            groupbox_name = 'groupBox_MF'
-                        elif position_number == 4:
-                            groupbox_name = 'groupBox_LF'
-                    elif position_number in BACK_ROW:
-                        if position_number == 1:
-                            groupbox_name = 'groupBox_RB'  # Server position
-                        elif position_number == 5:
-                            groupbox_name = 'groupBox_LB'
-                        elif position_number == 6:
-                            groupbox_name = 'groupBox_MB'
-                    print(f"DEBUG POPUP:   -> Using fallback GroupBox: {groupbox_name}")
+                # Determine if we should use position-based mapping
+                use_position_based = False
+                role_upper = role_code.upper().strip() if role_code else 'OH'
+                if role_upper == 'RH':
+                    role_upper = 'RS'
+                
+                # For back row players with conflicting roles, use position-based mapping
+                if position_number in BACK_ROW:
+                    if role_upper in conflicting_back_row_roles and position_number in conflicting_back_row_roles[role_upper]:
+                        # This player is part of a conflicting role - use position-based mapping
+                        print(f"DEBUG POPUP:   -> Back row player with conflicting role {role_upper}, using position-based mapping")
+                        use_position_based = True
+                    else:
+                        # Try role-based mapping first
+                        role_based_groupbox = self.map_player_to_groupbox(role_code, position_number, has_libero)
+                        print(f"DEBUG POPUP:   -> Role-based mapping: {role_based_groupbox}")
+                        
+                        # Check if this GroupBox already has a DIFFERENT position assigned
+                        if role_based_groupbox and role_based_groupbox in groupbox_to_positions:
+                            existing_positions = groupbox_to_positions[role_based_groupbox]
+                            if position_number not in existing_positions and len(existing_positions) > 0:
+                                # Conflict: GroupBox already assigned to different position(s)
+                                print(f"DEBUG POPUP:   -> Conflict detected: GroupBox {role_based_groupbox} already assigned to position(s) {existing_positions}")
+                                use_position_based = True
+                elif position_number in FRONT_ROW:
+                    # Front row: check for conflicting roles first
+                    if role_upper in conflicting_front_row_roles and position_number in conflicting_front_row_roles[role_upper]:
+                        # This player is part of a conflicting role - use position-based mapping
+                        print(f"DEBUG POPUP:   -> Front row player with conflicting role {role_upper}, using position-based mapping")
+                        use_position_based = True
+                    else:
+                        # Try role-based mapping first
+                        role_based_groupbox = self.map_player_to_groupbox(role_code, position_number, has_libero)
+                        print(f"DEBUG POPUP:   -> Role-based mapping: {role_based_groupbox}")
+                        
+                        # Check if this GroupBox already has a DIFFERENT position assigned
+                        if role_based_groupbox and role_based_groupbox in groupbox_to_positions:
+                            existing_positions = groupbox_to_positions[role_based_groupbox]
+                            if position_number not in existing_positions and len(existing_positions) > 0:
+                                # Conflict: GroupBox already assigned to different position(s)
+                                print(f"DEBUG POPUP:   -> Conflict detected: GroupBox {role_based_groupbox} already assigned to position(s) {existing_positions}")
+                                use_position_based = True
+                
+                # Determine final GroupBox assignment
+                if use_position_based:
+                    groupbox_name = self.map_player_to_groupbox_by_position(position_number)
+                    print(f"DEBUG POPUP:   -> Using position-based mapping: {groupbox_name}")
+                else:
+                    # Use role-based mapping
+                    groupbox_name = self.map_player_to_groupbox(role_code, position_number, has_libero)
                 
                 if groupbox_name:
+                    # Track the assignment
+                    if groupbox_name not in groupbox_to_positions:
+                        groupbox_to_positions[groupbox_name] = set()
+                    groupbox_to_positions[groupbox_name].add(position_number)
+                    position_to_groupbox[position_number] = groupbox_name
+                    
                     if groupbox_name not in groupbox_assignments:
                         groupbox_assignments[groupbox_name] = []
                     groupbox_assignments[groupbox_name].append(player_data)
@@ -1949,17 +2037,13 @@ class DataEntryWindow(QMainWindow):
                         print(f"DEBUG POPUP: WARNING: Multiple players in {groupbox_name}: Primary=#{player_number} (Pos {position_number}), Others={other_players}")
             
             # Ensure all 6 positions are represented in GroupBoxes
-            # If a position is missing, assign it to an appropriate GroupBox
+            # If a position is missing, assign it using position-based mapping
             all_positions = set(range(1, 7))
             missing_positions = all_positions - assigned_positions
             if missing_positions:
                 print(f"DEBUG POPUP: Missing positions in GroupBox assignments: {missing_positions}")
-                # Try to assign missing positions to empty GroupBoxes
-                available_groupboxes = ['groupBox_LF', 'groupBox_MF', 'groupBox_RF', 'groupBox_LB', 'groupBox_MB', 'groupBox_RB']
-                used_groupboxes = set(groupbox_assignments.keys())
-                empty_groupboxes = [gb for gb in available_groupboxes if gb not in used_groupboxes]
                 
-                # Find players for missing positions
+                # Find players for missing positions and assign using position-based mapping
                 for missing_pos in missing_positions:
                     # Find the player at this position
                     player_at_pos = None
@@ -1973,12 +2057,25 @@ class DataEntryWindow(QMainWindow):
                             player_at_pos = player_data
                             break
                     
-                    if player_at_pos and empty_groupboxes:
-                        # Assign to first available empty GroupBox
-                        assigned_gb = empty_groupboxes.pop(0)
-                        groupbox_assignments[assigned_gb] = [player_at_pos]
-                        assigned_positions.add(missing_pos)
-                        print(f"DEBUG POPUP: Assigned missing position {missing_pos} to {assigned_gb}")
+                    if player_at_pos:
+                        # Use position-based mapping for missing positions
+                        assigned_gb = self.map_player_to_groupbox_by_position(missing_pos)
+                        if assigned_gb:
+                            # Check if the GroupBox is already assigned (shouldn't happen, but handle it)
+                            if assigned_gb not in groupbox_assignments:
+                                groupbox_assignments[assigned_gb] = []
+                            groupbox_assignments[assigned_gb].append(player_at_pos)
+                            assigned_positions.add(missing_pos)
+                            
+                            # Update tracking
+                            if assigned_gb not in groupbox_to_positions:
+                                groupbox_to_positions[assigned_gb] = set()
+                            groupbox_to_positions[assigned_gb].add(missing_pos)
+                            position_to_groupbox[missing_pos] = assigned_gb
+                            
+                            print(f"DEBUG POPUP: Assigned missing position {missing_pos} to {assigned_gb} (position-based)")
+                        else:
+                            print(f"DEBUG POPUP: ERROR: Could not map position {missing_pos} to GroupBox")
             
             # Ensure position 1 (server) is always visible and active
             # Find which GroupBox has position 1
