@@ -420,9 +420,9 @@ class DataEntryWindow(QMainWindow):
                 SELECT p.player_id, p.player_number, p.name, p.jersey
                 FROM active_lineup al
                 INNER JOIN players p ON al.player_id = p.player_id
-                WHERE al.team_id = ? 
+                WHERE al.game_id = ? AND al.team_id = ? 
                 AND (p.player_number = ? OR CAST(p.jersey AS TEXT) = ?)
-            """, (team_id, str(player_number), str(player_number)))
+            """, (self.game_id, team_id, str(player_number), str(player_number)))
             result = cursor.fetchone()
             if result:
                 player = {
@@ -1373,8 +1373,8 @@ class DataEntryWindow(QMainWindow):
                         SELECT al.player_id, COALESCE(p.jersey, p.player_number) as player_number, p.name
                         FROM active_lineup al
                         INNER JOIN players p ON al.player_id = p.player_id
-                        WHERE al.team_id = ? AND al.is_server = 1
-                    """, (team_id,))
+                        WHERE al.game_id = ? AND al.team_id = ? AND al.is_server = 1
+                    """, (self.game_id, team_id))
                     result = cursor.fetchone()
                     
                     if result:
@@ -1386,8 +1386,8 @@ class DataEntryWindow(QMainWindow):
                             SELECT al.player_id, COALESCE(p.jersey, p.player_number) as player_number, p.name
                             FROM active_lineup al
                             INNER JOIN players p ON al.player_id = p.player_id
-                            WHERE al.team_id = ? AND al.position_number = 1
-                        """, (team_id,))
+                            WHERE al.game_id = ? AND al.team_id = ? AND al.position_number = 1
+                        """, (self.game_id, team_id))
                         result = cursor.fetchone()
                         if result:
                             server_player_id, server_player_number, server_player_name = result
@@ -2448,9 +2448,9 @@ class DataEntryWindow(QMainWindow):
                 SELECT p.player_id, p.player_number, p.name, p.jersey
                 FROM active_lineup al
                 INNER JOIN players p ON al.player_id = p.player_id
-                WHERE al.team_id = ? 
+                WHERE al.game_id = ? AND al.team_id = ? 
                 AND (p.player_number = ? OR CAST(p.jersey AS TEXT) = ?)
-            """, (self.team_us_id, player_number_str, player_number_str))
+            """, (self.game_id, self.team_us_id, player_number_str, player_number_str))
             result = cursor.fetchone()
             if result:
                 player = {
@@ -2504,9 +2504,9 @@ class DataEntryWindow(QMainWindow):
                 SELECT p.player_id, p.player_number, p.name, p.jersey
                 FROM active_lineup al
                 INNER JOIN players p ON al.player_id = p.player_id
-                WHERE al.team_id = ? 
+                WHERE al.game_id = ? AND al.team_id = ? 
                 AND (p.player_number = ? OR CAST(p.jersey AS TEXT) = ?)
-            """, (self.team_us_id, player_number_str, player_number_str))
+            """, (self.game_id, self.team_us_id, player_number_str, player_number_str))
             result = cursor.fetchone()
             if result:
                 self.selected_player_id = result[0]
@@ -4121,9 +4121,9 @@ class DataEntryWindow(QMainWindow):
                    p.name
             FROM active_lineup al
             INNER JOIN players p ON al.player_id = p.player_id
-            WHERE al.team_id = ?
+            WHERE al.game_id = ? AND al.team_id = ?
             ORDER BY al.position_number
-        """, (self.team_us_id,))
+        """, (self.game_id, self.team_us_id))
         active_players = cursor.fetchall()
         
         if not active_players:
