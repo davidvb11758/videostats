@@ -342,7 +342,10 @@ class CoordinateMapper(QMainWindow):
             self.score_label.setText(f"Score: {self.score_us} - {self.score_them}")
     
     def award_point(self, team: str):
-        """Award a point to team_us or team_them by creating and immediately ending a rally.
+        """Award a point to team_us or team_them by updating the most recent rally.
+        
+        Does not create a new rally. Instead, finds the most recent rally (the one that
+        just ended or was created when "down" was clicked) and updates it with the point_winner_id.
         
         Args:
             team: 'us' to award point to team_us, 'them' to award point to team_them
@@ -368,36 +371,32 @@ class CoordinateMapper(QMainWindow):
             # Determine serving team (the team that won the point serves next)
             serving_team_id = point_winner_id
             
-            # Get next rally number
+            # Find the most recent rally (the one that just ended or was created when "down" was clicked)
             cursor = self.db.conn.cursor()
-            cursor.execute(
-                "SELECT MAX(rally_number) FROM rallies WHERE game_id = ?",
-                (self.game_id,)
-            )
+            cursor.execute("""
+                SELECT rally_id, rally_number, serving_team_id
+                FROM rallies 
+                WHERE game_id = ?
+                ORDER BY rally_id DESC
+                LIMIT 1
+            """, (self.game_id,))
             result = cursor.fetchone()
-            next_rally_number = (result[0] + 1) if result and result[0] else 1
             
-            # Check who served in the previous rally (if any) to determine if rotation is needed
-            # Get the previous rally number
-            previous_rally_number = next_rally_number - 1
+            if not result:
+                self.status_label.setText("Error: No rally found to update!")
+                return
+            
+            rally_id, rally_number, prev_serving_team_id = result
+            
+            # Check if team_them served in this rally to determine if rotation is needed
             team_them_served_previous = False
-            if previous_rally_number > 0:
-                cursor.execute("""
-                    SELECT serving_team_id 
-                    FROM rallies 
-                    WHERE game_id = ? AND rally_number = ?
-                """, (self.game_id, previous_rally_number))
-                prev_rally = cursor.fetchone()
-                if prev_rally:
-                    prev_serving_team_id = prev_rally[0]
-                    if prev_serving_team_id == self.team_them_id:
-                        team_them_served_previous = True
+            if prev_serving_team_id == self.team_them_id:
+                team_them_served_previous = True
             
-            # Create a rally
-            rally_id = self.db.start_rally(self.game_id, next_rally_number, serving_team_id)
-            
-            # Immediately end the rally with the point winner
-            self.db.end_rally(rally_id, point_winner_id)
+            # Update the rally with the point winner (don't create a new one)
+            # Use current time for rally_end_time since we don't have the "down" click timecode here
+            from datetime import datetime
+            self.db.end_rally(rally_id, point_winner_id, datetime.now())
             
             # Update local score
             if team == 'us':

@@ -28,6 +28,23 @@ def assign_rally_outcomes(db, rally_id: int, point_winner_id: int, team_us_id: i
     # Determine losing team
     losing_team_id = team_them_id if point_winner_id == team_us_id else team_us_id
     
+    # Find the last contact by each team (excluding 'down' contacts)
+    last_winning_team_contact = None
+    last_losing_team_contact = None
+    
+    for contact in contacts:
+        contact_type = contact[4]
+        team_id = contact[5]
+        
+        # Skip floor contacts ('down')
+        if contact_type == 'down':
+            continue
+        
+        if team_id == point_winner_id:
+            last_winning_team_contact = contact
+        elif team_id == losing_team_id:
+            last_losing_team_contact = contact
+    
     # Get the very last player contact (not floor contact)
     last_player_contact = None
     for contact in reversed(contacts):
@@ -38,18 +55,16 @@ def assign_rally_outcomes(db, rally_id: int, point_winner_id: int, team_us_id: i
     if not last_player_contact:
         return
     
-    contact_id = last_player_contact[0]
-    contact_type = last_player_contact[4]
-    team_id = last_player_contact[5]
+    # Mark the last losing team contact as error (if it exists)
+    if last_losing_team_contact:
+        losing_contact_id = last_losing_team_contact[0]
+        db.update_contact_outcome(losing_contact_id, 'error')
     
-    outcome = 'continue'  # Default
-    
-    # If the last contact was by the losing team, it's an error
-    if team_id == losing_team_id:
-        outcome = 'error'
-    
-    # If the last contact was by the winning team
-    elif team_id == point_winner_id:
+    # Process the last contact by the winning team
+    if last_winning_team_contact:
+        contact_id = last_winning_team_contact[0]
+        contact_type = last_winning_team_contact[4]
+        
         # Check if it's a serve (could be an ace)
         if contact_type == 'serve':
             opponent_contacts_after_serve = 0
@@ -58,27 +73,26 @@ def assign_rally_outcomes(db, rally_id: int, point_winner_id: int, team_us_id: i
                     opponent_contacts_after_serve += 1
             
             if opponent_contacts_after_serve <= 1:
-                outcome = 'ace'
+                db.update_contact_outcome(contact_id, 'ace')
         
         # Check if it's an attack (could be a kill)
         elif contact_type == 'attack':
-            outcome = 'kill'
+            db.update_contact_outcome(contact_id, 'kill')
         
         # Check if it's a block (could be a stuff)
         elif contact_type == 'block':
-            outcome = 'stuff'
-    
-    # Update the outcome for this contact
-    if outcome != 'continue':
-        db.update_contact_outcome(contact_id, outcome)
+            db.update_contact_outcome(contact_id, 'stuff')
     
     # Additional rules: Set outcomes for prior contacts based on subsequent errors
-    contacts = db.get_rally_contacts(rally_id)  # Refresh to get updated outcomes
+    # Refresh contacts to get updated outcomes - ensure we have the latest data
+    db.conn.commit()  # Ensure all previous updates are committed
+    contacts = db.get_rally_contacts(rally_id)
     
     for i, contact in enumerate(contacts):
         contact_id = contact[0]
         contact_type = contact[4]
-        current_outcome = contact[8]
+        contact_team_id = contact[5]
+        current_outcome = contact[8]  # outcome is at index 8
         
         # Rule 1: If this is a receive with error, find prior serve and mark it as ace
         if contact_type == 'receive' and current_outcome == 'error':
@@ -86,8 +100,10 @@ def assign_rally_outcomes(db, rally_id: int, point_winner_id: int, team_us_id: i
                 prior_contact = contacts[j]
                 prior_contact_id = prior_contact[0]
                 prior_contact_type = prior_contact[4]
+                prior_contact_team_id = prior_contact[5]
                 
-                if prior_contact_type == 'serve':
+                # Only mark serve as ace if it was by the winning team
+                if prior_contact_type == 'serve' and prior_contact_team_id == point_winner_id:
                     db.update_contact_outcome(prior_contact_id, 'ace')
                     break
         
@@ -97,8 +113,10 @@ def assign_rally_outcomes(db, rally_id: int, point_winner_id: int, team_us_id: i
                 prior_contact = contacts[j]
                 prior_contact_id = prior_contact[0]
                 prior_contact_type = prior_contact[4]
+                prior_contact_team_id = prior_contact[5]
                 
-                if prior_contact_type in ['attack', 'freeball', 'block']:
+                # Only mark as kill if the prior contact was by the winning team
+                if prior_contact_type in ['attack', 'freeball', 'block'] and prior_contact_team_id == point_winner_id:
                     db.update_contact_outcome(prior_contact_id, 'kill')
                     break
         

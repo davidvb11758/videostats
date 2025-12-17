@@ -262,6 +262,8 @@ class DataEntryWindow(QMainWindow):
         self.last_clicked_y = None
         self.last_clicked_side = None  # 'A' or 'B' for courtSide_A or courtSide_B
         self.last_clicked_timecode = None  # Video timecode in milliseconds
+        self.down_click_timecode = None  # Video timecode when "down" was clicked (for rally_end_time)
+        self.down_click_datetime = None  # Datetime when "down" was clicked (for rally_end_time)
         
         # Team 1 side selection
         self.team_1_side = None  # 'A' or 'B'
@@ -592,14 +594,30 @@ class DataEntryWindow(QMainWindow):
         
         When double-clicking on team_them_id's side (opponent side), records "down" 
         with coordinates but does NOT automatically assign it to a player-action.
+        Creates a rally if one doesn't exist.
         """
         if not self.game_id:
             self.status_label.setText("No game selected - cannot record DOWN contact")
             return
         
+        # If no rally in progress, create one when "down" is clicked
         if not self.rally_in_progress:
-            self.status_label.setText("No rally in progress - cannot record DOWN contact")
-            return
+            # Determine serving team - use the team that should serve next, or default to team_us
+            serving_team_id = self.serving_team_id if self.serving_team_id else self.team_us_id
+            
+            # Start new rally
+            if not self.db.conn:
+                self.db.connect()
+            
+            print(f"DEBUG: Creating rally for DOWN contact - game_id={self.game_id}, rally_number={self.current_rally_number}, serving_team_id={serving_team_id}")
+            self.current_rally_id = self.db.start_rally(
+                game_id=self.game_id,
+                rally_number=self.current_rally_number,
+                serving_team_id=serving_team_id
+            )
+            print(f"DEBUG: Rally created! rally_id={self.current_rally_id}")
+            self.rally_in_progress = True
+            self.current_sequence = 1
         
         # Handle double-clicks on both sides
         # Y > 300 is opponent side (team_them), Y <= 300 is our side (team_us)
@@ -613,10 +631,13 @@ class DataEntryWindow(QMainWindow):
             losing_team_id = self.team_them_id
             print(f"DEBUG: on_double_click_mapped - DOWN contact at x={logical_x}, y={logical_y}, timecode={timecode_ms}ms (opponent side)")
         
-        # Store the coordinates
+        # Store the coordinates and timecode
         self.last_clicked_x = logical_x
         self.last_clicked_y = logical_y
         self.last_clicked_timecode = timecode_ms
+        # Store timecode and datetime for rally_end_time when point is awarded
+        self.down_click_timecode = timecode_ms
+        self.down_click_datetime = datetime.now()
         
         # Set up for DOWN contact
         self.selected_team_id = losing_team_id
@@ -3162,14 +3183,55 @@ class DataEntryWindow(QMainWindow):
                     break  # Only mark the immediate prior player contact
     
     def end_rally(self, point_winner_id: int):
-        """End the current rally and award point. Records floor contact if coordinates are available."""
+        """End the current rally and award point. Records floor contact if coordinates are available.
+        
+        If no rally is in progress, finds the most recent rally without a point_winner_id
+        (created when 'down' was clicked) and updates it.
+        """
         if not self.game_id:
             QMessageBox.warning(self, "No Game Selected", "Please select a game first!")
             return
         
-        if not self.rally_in_progress:
-            QMessageBox.warning(self, "No Rally", "No rally in progress!")
-            return
+        # Determine which rally to update - find the most recent rally (the one that just ended)
+        rally_id_to_update = None
+        
+        if not self.db.conn:
+            self.db.connect()
+        cursor = self.db.conn.cursor()
+        
+        if self.rally_in_progress and self.current_rally_id:
+            # Use the current rally if one is in progress
+            rally_id_to_update = self.current_rally_id
+        else:
+            # Find the most recent rally (the one that just ended or was created when "down" was clicked)
+            # First try to find one without a point_winner_id (created when "down" was clicked)
+            cursor.execute("""
+                SELECT rally_id 
+                FROM rallies 
+                WHERE game_id = ? AND point_winner_id IS NULL
+                ORDER BY rally_id DESC
+                LIMIT 1
+            """, (self.game_id,))
+            result = cursor.fetchone()
+            if result:
+                rally_id_to_update = result[0]
+                print(f"DEBUG: Found rally {rally_id_to_update} without point_winner_id to update")
+            else:
+                # If no incomplete rally, find the most recent rally overall (the one that just ended)
+                cursor.execute("""
+                    SELECT rally_id 
+                    FROM rallies 
+                    WHERE game_id = ?
+                    ORDER BY rally_id DESC
+                    LIMIT 1
+                """, (self.game_id,))
+                result = cursor.fetchone()
+                if result:
+                    rally_id_to_update = result[0]
+                    print(f"DEBUG: Found most recent rally {rally_id_to_update} to update with point_winner_id")
+                else:
+                    QMessageBox.warning(self, "No Rally", "No rally found to update!")
+                    return
         
         try:
             # Before ending the rally, record a floor contact if coordinates are available
@@ -3181,7 +3243,7 @@ class DataEntryWindow(QMainWindow):
                 # Get the next sequence number for this rally
                 if not self.db.conn:
                     self.db.connect()
-                next_sequence = self.db.get_current_rally_sequence(self.current_rally_id)
+                next_sequence = self.db.get_current_rally_sequence(rally_id_to_update)
                 
                 # Convert coordinates to integers if they are floats (from coordinate mapper)
                 x_coord = int(round(self.last_clicked_x))
@@ -3191,7 +3253,7 @@ class DataEntryWindow(QMainWindow):
                 # Record floor contact (no player_id, but has coordinates)
                 # Use contact_type "down" to indicate the ball hit the floor
                 self.db.add_contact(
-                    rally_id=self.current_rally_id,
+                    rally_id=rally_id_to_update,
                     sequence_number=next_sequence,
                     contact_type="down",  # Contact type "down" indicates ball hit the floor
                     team_id=losing_team_id,
@@ -3208,16 +3270,21 @@ class DataEntryWindow(QMainWindow):
                 self.last_clicked_x = None
                 self.last_clicked_timecode = None
                 self.last_clicked_y = None
+                # Note: Keep down_click_timecode until rally is ended
                 
                 # Clear the coordinate display
                 if hasattr(self.ui, 'tempXYcoord'):
                     self.ui.tempXYcoord.setText("")
             
             # Determine and assign outcomes to contacts in this rally
-            self.assign_rally_outcomes(self.current_rally_id, point_winner_id)
+            self.assign_rally_outcomes(rally_id_to_update, point_winner_id)
             
-            # End rally in database
-            self.db.end_rally(self.current_rally_id, point_winner_id)
+            # Use the datetime from when "down" was clicked for rally_end_time
+            # If not available (shouldn't happen if down was clicked), use current time
+            rally_end_datetime = self.down_click_datetime if self.down_click_datetime is not None else datetime.now()
+            
+            # End rally in database with the datetime from when "down" was clicked
+            self.db.end_rally(rally_id_to_update, point_winner_id, rally_end_datetime)
             
             # Update score
             if point_winner_id == self.team_us_id:
@@ -3227,7 +3294,7 @@ class DataEntryWindow(QMainWindow):
             
             # Check if team_them served (first contact in rally was a serve by team_them)
             team_them_served = False
-            if self.current_rally_id:
+            if rally_id_to_update:
                 if not self.db.conn:
                     self.db.connect()
                 cursor = self.db.conn.cursor()
@@ -3237,7 +3304,7 @@ class DataEntryWindow(QMainWindow):
                     WHERE rally_id = ? 
                     ORDER BY sequence_number ASC 
                     LIMIT 1
-                """, (self.current_rally_id,))
+                """, (rally_id_to_update,))
                 first_contact = cursor.fetchone()
                 if first_contact:
                     first_contact_type, first_contact_team_id = first_contact
@@ -3263,6 +3330,9 @@ class DataEntryWindow(QMainWindow):
             self.rally_in_progress = False
             self.current_rally_id = None
             self.current_rally_number += 1
+            # Clear the stored down click timecode and datetime
+            self.down_click_timecode = None
+            self.down_click_datetime = None
             
             # Team that won the point serves next
             self.serving_team_id = point_winner_id

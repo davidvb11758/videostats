@@ -1004,16 +1004,23 @@ class VideoStatsDB:
         self.conn.commit()
         return cursor.lastrowid
     
-    def end_rally(self, rally_id: int, point_winner_id: int):
-        """End a rally and record the point winner."""
+    def end_rally(self, rally_id: int, point_winner_id: int, rally_end_time: Optional[datetime] = None):
+        """End a rally and record the point winner.
+        
+        Args:
+            rally_id: The rally ID to update
+            point_winner_id: The team that won the point
+            rally_end_time: Optional datetime for rally_end_time. If None, uses current time.
+        """
         if not self.conn:
             self.connect()
         cursor = self.conn.cursor()
+        end_time = rally_end_time if rally_end_time is not None else datetime.now()
         cursor.execute(
             """UPDATE rallies 
                SET point_winner_id = ?, rally_end_time = ?
                WHERE rally_id = ?""",
-            (point_winner_id, datetime.now(), rally_id)
+            (point_winner_id, end_time, rally_id)
         )
         self.conn.commit()
     
