@@ -7,8 +7,11 @@ It will apply all the current outcome rules:
 - Kill: Attack that wins the point (or attack/freeball/block followed by pass error)
 - Stuff: Block that wins the point (prior contact marked as error)
 - Error: Contact by losing team that causes them to lose
+- Assist: Set followed by attack/freeball with kill outcome (by same team)
 - Down: Floor contacts
 - Continue: All other contacts
+
+Note: Contacts with outcome_manual = 1 will not be updated.
 """
 
 import sqlite3
@@ -86,7 +89,18 @@ def assign_rally_outcomes(db, rally_id: int, point_winner_id: int, team_us_id: i
     # Additional rules: Set outcomes for prior contacts based on subsequent errors
     # Refresh contacts to get updated outcomes - ensure we have the latest data
     db.conn.commit()  # Ensure all previous updates are committed
-    contacts = db.get_rally_contacts(rally_id)
+    
+    # Get contacts with outcome_manual field for assist assignment
+    cursor = db.conn.cursor()
+    cursor.execute("""
+        SELECT contact_id, rally_id, sequence_number, player_id, contact_type, 
+               team_id, x, y, outcome, timestamp,
+               COALESCE(outcome_manual, 0) as outcome_manual
+        FROM contacts 
+        WHERE rally_id = ?
+        ORDER BY sequence_number
+    """, (rally_id,))
+    contacts = cursor.fetchall()
     
     for i, contact in enumerate(contacts):
         contact_id = contact[0]
@@ -134,6 +148,37 @@ def assign_rally_outcomes(db, rally_id: int, point_winner_id: int, team_us_id: i
                 # Mark the prior contact as error
                 db.update_contact_outcome(prior_contact_id, 'error')
                 break
+        
+        # Rule 4: If this is a set, check if next contact by same team is attack/freeball with kill outcome
+        elif contact_type == 'set':
+            set_contact_id = contact_id
+            set_team_id = contact_team_id
+            outcome_manual = contact[10] if len(contact) > 10 else 0  # outcome_manual is at index 10
+            
+            # Skip if outcome_manual = 1 (manually set, don't override)
+            if outcome_manual == 1:
+                continue
+            
+            # Look forward for the next contact by the same team
+            for j in range(i + 1, len(contacts)):
+                next_contact = contacts[j]
+                next_contact_type = next_contact[4]
+                next_contact_team_id = next_contact[5]
+                next_contact_outcome = next_contact[8]  # outcome is at index 8
+                
+                # Skip 'down' contacts
+                if next_contact_type == 'down':
+                    continue
+                
+                # Check if next contact is by the same team and is attack/freeball with kill outcome
+                if next_contact_team_id == set_team_id:
+                    if next_contact_type in ['attack', 'freeball'] and next_contact_outcome == 'kill':
+                        # Mark the set as assist
+                        db.update_contact_outcome(set_contact_id, 'assist')
+                        break
+                else:
+                    # Different team contacted the ball, stop looking
+                    break
 
 
 if __name__ == "__main__":
@@ -159,14 +204,16 @@ if __name__ == "__main__":
     print(f"Found {len(rallies)} completed rallies to process\n")
 
     # Reset all outcomes to 'continue' first (except 'down' which stays as 'down')
+    # Also preserve outcomes where outcome_manual = 1
     print("Step 1: Resetting all outcomes to default...")
     cursor.execute("""
         UPDATE contacts 
         SET outcome = 'continue'
-        WHERE outcome != 'down'
+        WHERE outcome != 'down' 
+          AND COALESCE(outcome_manual, 0) = 0
     """)
     db.conn.commit()
-    print(f"  Reset {cursor.rowcount} contacts to 'continue'\n")
+    print(f"  Reset {cursor.rowcount} contacts to 'continue' (preserved manually set outcomes)\n")
 
     # Now process each rally
     print("Step 2: Re-processing each rally with outcome logic...")
@@ -174,6 +221,7 @@ if __name__ == "__main__":
     aces_assigned = 0
     kills_assigned = 0
     errors_assigned = 0
+    assists_assigned = 0
 
     for rally_id, point_winner_id, team_us_id, team_them_id in rallies:
         # Count outcomes before
@@ -185,6 +233,9 @@ if __name__ == "__main__":
         
         cursor.execute("SELECT COUNT(*) FROM contacts WHERE rally_id = ? AND outcome = 'error'", (rally_id,))
         errors_before = cursor.fetchone()[0]
+        
+        cursor.execute("SELECT COUNT(*) FROM contacts WHERE rally_id = ? AND outcome = 'assist'", (rally_id,))
+        assists_before = cursor.fetchone()[0]
         
         # Process the rally
         assign_rally_outcomes(db, rally_id, point_winner_id, team_us_id, team_them_id)
@@ -199,11 +250,15 @@ if __name__ == "__main__":
         cursor.execute("SELECT COUNT(*) FROM contacts WHERE rally_id = ? AND outcome = 'error'", (rally_id,))
         errors_after = cursor.fetchone()[0]
         
+        cursor.execute("SELECT COUNT(*) FROM contacts WHERE rally_id = ? AND outcome = 'assist'", (rally_id,))
+        assists_after = cursor.fetchone()[0]
+        
         # Track changes
-        if aces_after > aces_before or kills_after > kills_before or errors_after > errors_before:
+        if aces_after > aces_before or kills_after > kills_before or errors_after > errors_before or assists_after > assists_before:
             aces_assigned += (aces_after - aces_before)
             kills_assigned += (kills_after - kills_before)
             errors_assigned += (errors_after - errors_before)
+            assists_assigned += (assists_after - assists_before)
         
         processed += 1
         if processed % 10 == 0:
@@ -218,6 +273,7 @@ if __name__ == "__main__":
     print(f"Aces assigned: {aces_assigned}")
     print(f"Kills assigned: {kills_assigned}")
     print(f"Errors assigned: {errors_assigned}")
+    print(f"Assists assigned: {assists_assigned}")
 
     # Show outcome distribution
     cursor.execute("""

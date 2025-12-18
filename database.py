@@ -787,6 +787,20 @@ class VideoStatsDB:
             except Exception as e:
                 print(f"Failed to add homography_matrix column: {e}")
         
+        # Add scroll offset columns to games table if they don't exist
+        scroll_columns = ['scroll_offset_x', 'scroll_offset_y', 'video_offset_x', 'video_offset_y',
+                         'video_width', 'video_height', 'scene_width', 'scene_height']
+        for col in scroll_columns:
+            col_type = 'REAL' if col in ['video_width', 'video_height', 'scene_width', 'scene_height'] else 'INTEGER'
+            if col not in columns:
+                print(f"Adding {col} column to games table...")
+                try:
+                    cursor.execute(f"ALTER TABLE games ADD COLUMN {col} {col_type} DEFAULT 0")
+                    self.conn.commit()
+                    print(f"{col} column added successfully!")
+                except Exception as e:
+                    print(f"Failed to add {col} column: {e}")
+        
         # The game_players table will be created automatically if it doesn't exist
         # No migration needed as it's a new table
         
@@ -1275,6 +1289,16 @@ class VideoStatsDB:
             self.connect()
         cursor = self.conn.cursor()
         
+        # Get scroll offsets (default to 0 if not provided)
+        scroll_offset_x = court_points.get('scroll_offset_x', 0)
+        scroll_offset_y = court_points.get('scroll_offset_y', 0)
+        video_offset_x = court_points.get('video_offset_x', 0)
+        video_offset_y = court_points.get('video_offset_y', 0)
+        video_width = court_points.get('video_width', 0)
+        video_height = court_points.get('video_height', 0)
+        scene_width = court_points.get('scene_width', 0)
+        scene_height = court_points.get('scene_height', 0)
+        
         # Convert QPointF or tuple to x, y values
         def get_xy(point):
             if hasattr(point, 'x') and hasattr(point, 'y'):
@@ -1315,12 +1339,22 @@ class VideoStatsDB:
                 court_y200_right_x = ?, court_y200_right_y = ?,
                 court_y400_left_x = ?, court_y400_left_y = ?,
                 court_y400_right_x = ?, court_y400_right_y = ?,
-                homography_matrix = ?
+                homography_matrix = ?,
+                scroll_offset_x = ?,
+                scroll_offset_y = ?,
+                video_offset_x = ?,
+                video_offset_y = ?,
+                video_width = ?,
+                video_height = ?,
+                scene_width = ?,
+                scene_height = ?
             WHERE game_id = ?
         """, (tl_x, tl_y, tr_x, tr_y, bl_x, bl_y, br_x, br_y, ct_x, ct_y, cb_x, cb_y,
               y200l_x, y200l_y, y200r_x, y200r_y, y400l_x, y400l_y, y400r_x, y400r_y,
-              homography_json, game_id))
+              homography_json, scroll_offset_x, scroll_offset_y, video_offset_x, video_offset_y,
+              video_width, video_height, scene_width, scene_height, game_id))
         self.conn.commit()
+        print(f"DEBUG: Court boundaries saved for game {game_id} with scroll offsets X:{scroll_offset_x}, Y:{scroll_offset_y}")
     
     def get_game_court_boundaries(self, game_id: int) -> Optional[dict]:
         """Get court boundary coordinates for a game.
@@ -1345,7 +1379,11 @@ class VideoStatsDB:
                    court_y200_right_x, court_y200_right_y,
                    court_y400_left_x, court_y400_left_y,
                    court_y400_right_x, court_y400_right_y,
-                   homography_matrix
+                   homography_matrix,
+                   scroll_offset_x, scroll_offset_y,
+                   video_offset_x, video_offset_y,
+                   video_width, video_height,
+                   scene_width, scene_height
             FROM games WHERE game_id = ?
         """, (game_id,))
         result = cursor.fetchone()
@@ -1364,6 +1402,16 @@ class VideoStatsDB:
             except Exception as e:
                 print(f"Warning: Failed to deserialize homography matrix: {e}")
         
+        # Get scroll offsets and dimensions (default to 0 if not present or None)
+        scroll_offset_x = result[21] if len(result) > 21 and result[21] is not None else 0
+        scroll_offset_y = result[22] if len(result) > 22 and result[22] is not None else 0
+        video_offset_x = result[23] if len(result) > 23 and result[23] is not None else 0
+        video_offset_y = result[24] if len(result) > 24 and result[24] is not None else 0
+        video_width = result[25] if len(result) > 25 and result[25] is not None else 0
+        video_height = result[26] if len(result) > 26 and result[26] is not None else 0
+        scene_width = result[27] if len(result) > 27 and result[27] is not None else 0
+        scene_height = result[28] if len(result) > 28 and result[28] is not None else 0
+        
         # Return as tuples - the calling code will convert to QPointF
         return {
             'corner_tl': (result[0], result[1]),
@@ -1376,7 +1424,15 @@ class VideoStatsDB:
             'y200_right': (result[14], result[15]) if result[14] is not None else None,
             'y400_left': (result[16], result[17]) if result[16] is not None else None,
             'y400_right': (result[18], result[19]) if result[18] is not None else None,
-            'homography_matrix': homography_matrix
+            'homography_matrix': homography_matrix,
+            'scroll_offset_x': scroll_offset_x,
+            'scroll_offset_y': scroll_offset_y,
+            'video_offset_x': video_offset_x,
+            'video_offset_y': video_offset_y,
+            'video_width': video_width,
+            'video_height': video_height,
+            'scene_width': scene_width,
+            'scene_height': scene_height
         }
     
     def delete_game(self, game_id: int) -> dict:

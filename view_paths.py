@@ -736,11 +736,12 @@ class ContactEditDialog(QDialog):
         self.coordinate_mapper = temp_mapper
     
     def on_video_loaded_for_coords(self, status):
-        """Handle video loaded event to draw coordinate dots."""
+        """Handle video loaded event to draw coordinate dots and court boundaries."""
         if status == QMediaPlayer.MediaStatus.LoadedMedia:
             # Use QTimer to ensure video is fully rendered before drawing
             from PySide6.QtCore import QTimer
             QTimer.singleShot(100, self.draw_coordinate_dots)
+            QTimer.singleShot(100, self.draw_court_boundaries)
             try:
                 self.media_player.mediaStatusChanged.disconnect(self.on_video_loaded_for_coords)
             except (TypeError, RuntimeError):
@@ -903,6 +904,145 @@ class ContactEditDialog(QDialog):
         arrow_path.addPolygon(arrowhead)
         arrow_item = self.video_scene.addPath(arrow_path, QPen(color, 1), QBrush(color))
         return arrow_item
+    
+    def draw_court_boundaries(self):
+        """Draw court boundary corners and lines on the video overlay."""
+        if not self.db.conn:
+            self.db.connect()
+        
+        # Get court boundaries from database
+        court_boundaries = self.db.get_game_court_boundaries(self.game_id)
+        if not court_boundaries:
+            print("DEBUG: No court boundaries found to draw")
+            return
+        
+        # Get the 4 corners
+        corner_bl = court_boundaries.get('corner_bl')
+        corner_br = court_boundaries.get('corner_br')
+        corner_tr = court_boundaries.get('corner_tr')
+        corner_tl = court_boundaries.get('corner_tl')
+        
+        if not all([corner_bl, corner_br, corner_tr, corner_tl]):
+            print("DEBUG: Missing corner points, cannot draw court boundaries")
+            return
+        
+        # Get scroll offsets and dimensions (default to 0 if not present)
+        scroll_offset_x = court_boundaries.get('scroll_offset_x', 0)
+        scroll_offset_y = court_boundaries.get('scroll_offset_y', 0)
+        video_offset_x = court_boundaries.get('video_offset_x', 0)
+        video_offset_y = court_boundaries.get('video_offset_y', 0)
+        source_video_width = court_boundaries.get('video_width', 0)
+        source_video_height = court_boundaries.get('video_height', 0)
+        source_scene_width = court_boundaries.get('scene_width', 0)
+        source_scene_height = court_boundaries.get('scene_height', 0)
+        
+        # Target video scene size in view_paths
+        target_scene_width = 1200.0
+        target_scene_height = 666.0
+        
+        # Calculate scaling factors
+        # Use actual video dimensions if available, otherwise fall back to scene dimensions
+        if source_video_width > 0 and source_video_height > 0:
+            # Scale based on video dimensions (more accurate)
+            scale_x = target_scene_width / source_video_width
+            scale_y = target_scene_height / source_video_height
+            print(f"DEBUG: Using video dimensions for scaling: {source_video_width}x{source_video_height}")
+        elif source_scene_width > 0 and source_scene_height > 0:
+            # Fall back to scene dimensions
+            scale_x = target_scene_width / source_scene_width
+            scale_y = target_scene_height / source_scene_height
+            print(f"DEBUG: Using scene dimensions for scaling: {source_scene_width}x{source_scene_height}")
+        else:
+            # Final fallback to canvas dimensions (1500x600)
+            scale_x = target_scene_width / 1500.0
+            scale_y = target_scene_height / 600.0
+            print(f"DEBUG: Using fallback canvas dimensions for scaling")
+        
+        # Corner coordinates are stored in scene coordinates from coordinate_mapper
+        # mapToScene converts viewport coordinates to scene coordinates automatically
+        # So the scroll offset is already accounted for in the scene coordinates
+        # However, we need to convert from source scene coordinates to target scene coordinates
+        
+        # First, convert to coordinates relative to video (subtract video position)
+        # Then scale to target scene size
+        bl_x = (corner_bl[0] - video_offset_x) * scale_x
+        bl_y = (corner_bl[1] - video_offset_y) * scale_y
+        br_x = (corner_br[0] - video_offset_x) * scale_x
+        br_y = (corner_br[1] - video_offset_y) * scale_y
+        tr_x = (corner_tr[0] - video_offset_x) * scale_x
+        tr_y = (corner_tr[1] - video_offset_y) * scale_y
+        tl_x = (corner_tl[0] - video_offset_x) * scale_x
+        tl_y = (corner_tl[1] - video_offset_y) * scale_y
+        
+        # Draw 4 corners as circles
+        corner_radius = 5
+        corner_pen = QPen(QColor(255, 0, 0), 2)  # Red pen, 2px width
+        corner_brush = QBrush(QColor(255, 0, 0, 180))  # Red with transparency
+        
+        # Bottom-left corner
+        self.corner_bl_item = self.video_scene.addEllipse(
+            bl_x - corner_radius, bl_y - corner_radius,
+            corner_radius * 2, corner_radius * 2,
+            corner_pen, corner_brush
+        )
+        self.corner_bl_item.setZValue(100)  # Draw on top of video
+        
+        # Bottom-right corner
+        self.corner_br_item = self.video_scene.addEllipse(
+            br_x - corner_radius, br_y - corner_radius,
+            corner_radius * 2, corner_radius * 2,
+            corner_pen, corner_brush
+        )
+        self.corner_br_item.setZValue(100)
+        
+        # Top-right corner
+        self.corner_tr_item = self.video_scene.addEllipse(
+            tr_x - corner_radius, tr_y - corner_radius,
+            corner_radius * 2, corner_radius * 2,
+            corner_pen, corner_brush
+        )
+        self.corner_tr_item.setZValue(100)
+        
+        # Top-left corner
+        self.corner_tl_item = self.video_scene.addEllipse(
+            tl_x - corner_radius, tl_y - corner_radius,
+            corner_radius * 2, corner_radius * 2,
+            corner_pen, corner_brush
+        )
+        self.corner_tl_item.setZValue(100)
+        
+        # Draw 4 boundary lines connecting the corners
+        line_pen = QPen(QColor(0, 255, 0), 2)  # Green pen, 2px width
+        line_pen.setStyle(Qt.PenStyle.DashLine)  # Dashed line
+        
+        # Bottom line: BL -> BR
+        self.boundary_bottom_item = self.video_scene.addLine(
+            bl_x, bl_y, br_x, br_y, line_pen
+        )
+        self.boundary_bottom_item.setZValue(99)  # Just below corners
+        
+        # Right line: BR -> TR
+        self.boundary_right_item = self.video_scene.addLine(
+            br_x, br_y, tr_x, tr_y, line_pen
+        )
+        self.boundary_right_item.setZValue(99)
+        
+        # Top line: TR -> TL
+        self.boundary_top_item = self.video_scene.addLine(
+            tr_x, tr_y, tl_x, tl_y, line_pen
+        )
+        self.boundary_top_item.setZValue(99)
+        
+        # Left line: TL -> BL
+        self.boundary_left_item = self.video_scene.addLine(
+            tl_x, tl_y, bl_x, bl_y, line_pen
+        )
+        self.boundary_left_item.setZValue(99)
+        
+        print(f"DEBUG: Court boundaries scaling - scale_x: {scale_x:.4f}, scale_y: {scale_y:.4f}")
+        print(f"DEBUG: Scroll offsets X:{scroll_offset_x}, Y:{scroll_offset_y}, Video offsets X:{video_offset_x}, Y:{video_offset_y}")
+        print(f"DEBUG: Source video: {source_video_width}x{source_video_height}, Scene: {source_scene_width}x{source_scene_height}")
+        print(f"DEBUG: Court boundaries drawn - BL:({bl_x:.1f},{bl_y:.1f}), BR:({br_x:.1f},{br_y:.1f}), TR:({tr_x:.1f},{tr_y:.1f}), TL:({tl_x:.1f},{tl_y:.1f})")
     
     def load_players(self, layout):
         """Load players for this game and create buttons."""

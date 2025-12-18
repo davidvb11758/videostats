@@ -639,6 +639,21 @@ class CoordinateMapper(QMainWindow):
             self.status_label.setText("Error: Court boundaries not fully defined!")
             return
         
+        # Capture scroll bar values at the time boundaries are stored
+        h_scroll_value = self.view.horizontalScrollBar().value()
+        v_scroll_value = self.view.verticalScrollBar().value()
+        
+        # Also capture video item position (should be 0,0 but check to be sure)
+        video_x = self.video_item.pos().x() if self.video_item else 0
+        video_y = self.video_item.pos().y() if self.video_item else 0
+        
+        # Capture actual video dimensions and scene size
+        video_width = self.video_item.nativeSize().width() if (self.video_item and self.video_item.nativeSize().isValid()) else 0
+        video_height = self.video_item.nativeSize().height() if (self.video_item and self.video_item.nativeSize().isValid()) else 0
+        scene_rect = self.scene.sceneRect()
+        scene_width = scene_rect.width()
+        scene_height = scene_rect.height()
+        
         # Map corner_points indices to database field names
         # corner_points order: [BL, BR, TR, TL, ML, MR, Y200L, Y200R, Y400L, Y400R]
         # Database expects: corner_tl, corner_tr, corner_bl, corner_br, centerline_top, centerline_bottom
@@ -653,7 +668,17 @@ class CoordinateMapper(QMainWindow):
             'y200_left': tuple(self.corner_points[6]),  # Y200L (left point of Y=200 line)
             'y200_right': tuple(self.corner_points[7]),  # Y200R (right point of Y=200 line)
             'y400_left': tuple(self.corner_points[8]),  # Y400L (left point of Y=400 line)
-            'y400_right': tuple(self.corner_points[9])  # Y400R (right point of Y=400 line)
+            'y400_right': tuple(self.corner_points[9]),  # Y400R (right point of Y=400 line)
+            # Store scroll offsets
+            'scroll_offset_x': h_scroll_value,
+            'scroll_offset_y': v_scroll_value,
+            'video_offset_x': video_x,
+            'video_offset_y': video_y,
+            # Store video and scene dimensions for proper scaling
+            'video_width': video_width,
+            'video_height': video_height,
+            'scene_width': scene_width,
+            'scene_height': scene_height
         }
         
         # Save to database if db and game_id are available
@@ -661,6 +686,10 @@ class CoordinateMapper(QMainWindow):
             try:
                 # Debug: Print the game_id being used
                 print(f"DEBUG: Storing court boundaries for game_id = {self.game_id}")
+                print(f"DEBUG: Scroll offsets - X: {h_scroll_value}, Y: {v_scroll_value}")
+                print(f"DEBUG: Video offsets - X: {video_x}, Y: {video_y}")
+                print(f"DEBUG: Video dimensions - W: {video_width}, H: {video_height}")
+                print(f"DEBUG: Scene dimensions - W: {scene_width}, H: {scene_height}")
                 # Save homography matrix along with court boundaries
                 self.db.save_game_court_boundaries(self.game_id, court_points_dict, self.homography_matrix)
                 
