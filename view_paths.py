@@ -2060,7 +2060,9 @@ class ContactPathViewer(QMainWindow):
             'kill': 'kill',
             'stuff': 'stuff',
             'error': 'error',
-            'down': 'down'
+            'down': 'down',
+            'assist': 'assist',
+            'fault': 'fault'
         }
         
         for outcome_key, outcome_value in outcome_mapping.items():
@@ -2263,7 +2265,9 @@ class ContactPathViewer(QMainWindow):
             'kill': 'kill',
             'stuff': 'stuff',
             'error': 'error',
-            'down': 'down'
+            'down': 'down',
+            'assist': 'assist',
+            'fault': 'fault'
         }
         
         for outcome_key, outcome_value in outcome_mapping.items():
@@ -2844,13 +2848,16 @@ class ContactPathViewer(QMainWindow):
             
             # Determine dot color and line color based on outcome
             # kill = green, continue = medium gray, error = red, ace = bright green, down = dark gray, stuff = blue dot/green line
+            # assist = blue-green (positive outcome), fault = orange (negative outcome)
             outcome_colors = {
                 'kill': QColor(0, 200, 0),        # Green
                 'ace': QColor(0, 255, 0),         # Bright green
                 'stuff': QColor(0, 150, 255),     # Bright blue (dot)
                 'error': QColor(255, 0, 0),       # Red
                 'continue': QColor(128, 128, 128), # Medium gray
-                'down': QColor(64, 64, 64)        # Dark gray
+                'down': QColor(64, 64, 64),       # Dark gray
+                'assist': QColor(0, 200, 200),    # Cyan/blue-green (positive outcome)
+                'fault': QColor(255, 165, 0)      # Orange (negative outcome, similar to error)
             }
             
             # Get color based on outcome (default to medium gray if outcome not recognized)

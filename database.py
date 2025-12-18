@@ -144,6 +144,8 @@ class VideoStatsDB:
                 timecode INTEGER,
                 outcome TEXT DEFAULT 'continue' CHECK(outcome IN ('continue', 'ace', 'kill', 'error', 'down', 'stuff', 'assist', 'fault')),
                 rating INTEGER,
+                outcome_manual INTEGER DEFAULT 0,
+                rating_manual INTEGER DEFAULT 0,
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (rally_id) REFERENCES rallies(rally_id),
@@ -554,6 +556,8 @@ class VideoStatsDB:
                             x INTEGER,
                             y INTEGER,
                             timecode INTEGER,
+                            outcome_manual INTEGER DEFAULT 0,
+                            rating_manual INTEGER DEFAULT 0,
                             timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                             FOREIGN KEY (rally_id) REFERENCES rallies(rally_id),
@@ -569,6 +573,8 @@ class VideoStatsDB:
                     has_x = 'x' in old_columns
                     has_y = 'y' in old_columns
                     has_timecode = 'timecode' in old_columns
+                    has_outcome_manual = 'outcome_manual' in old_columns
+                    has_rating_manual = 'rating_manual' in old_columns
                     
                     # Build SELECT statement based on which columns exist
                     select_cols = "contact_id, rally_id, sequence_number, player_id, "
@@ -586,6 +592,14 @@ class VideoStatsDB:
                         select_cols += ", timecode"
                     else:
                         select_cols += ", NULL as timecode"
+                    if has_outcome_manual:
+                        select_cols += ", outcome_manual"
+                    else:
+                        select_cols += ", 0 as outcome_manual"
+                    if has_rating_manual:
+                        select_cols += ", rating_manual"
+                    else:
+                        select_cols += ", 0 as rating_manual"
                     select_cols += ", timestamp, created_at"
                     
                     cursor.execute(f"""
@@ -664,7 +678,28 @@ class VideoStatsDB:
                 print("outcome column added successfully!")
             except Exception as e:
                 print(f"Failed to add outcome column: {e}")
-        else:
+        
+        # Add outcome_manual and rating_manual columns to contacts table if they don't exist
+        cursor.execute("PRAGMA table_info(contacts)")
+        columns = [row[1] for row in cursor.fetchall()]
+        if 'outcome_manual' not in columns:
+            print("Adding outcome_manual column to contacts table...")
+            try:
+                cursor.execute("ALTER TABLE contacts ADD COLUMN outcome_manual INTEGER DEFAULT 0")
+                self.conn.commit()
+                print("outcome_manual column added successfully!")
+            except Exception as e:
+                print(f"Failed to add outcome_manual column: {e}")
+        if 'rating_manual' not in columns:
+            print("Adding rating_manual column to contacts table...")
+            try:
+                cursor.execute("ALTER TABLE contacts ADD COLUMN rating_manual INTEGER DEFAULT 0")
+                self.conn.commit()
+                print("rating_manual column added successfully!")
+            except Exception as e:
+                print(f"Failed to add rating_manual column: {e}")
+        
+        if 'outcome' in columns:
             # Check if the outcome column has the old constraint (without 'stuff', 'assist', or 'fault')
             cursor.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='contacts'")
             result = cursor.fetchone()
@@ -695,6 +730,8 @@ class VideoStatsDB:
                                 timecode INTEGER,
                                 outcome TEXT DEFAULT 'continue' CHECK(outcome IN ('continue', 'ace', 'kill', 'error', 'down', 'stuff', 'assist', 'fault')),
                                 rating INTEGER,
+                                outcome_manual INTEGER DEFAULT 0,
+                                rating_manual INTEGER DEFAULT 0,
                                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                                 FOREIGN KEY (rally_id) REFERENCES rallies(rally_id),
@@ -703,16 +740,26 @@ class VideoStatsDB:
                             )
                         """)
                         
-                        # Copy data - check if rating column exists in old table
+                        # Copy data - check if rating and manual columns exist in old table
                         cursor.execute("PRAGMA table_info(contacts)")
                         old_columns = [row[1] for row in cursor.fetchall()]
                         has_rating = 'rating' in old_columns
+                        has_outcome_manual = 'outcome_manual' in old_columns
+                        has_rating_manual = 'rating_manual' in old_columns
                         
                         select_cols = "contact_id, rally_id, sequence_number, player_id, contact_type, team_id, x, y, timecode, outcome"
                         if has_rating:
                             select_cols += ", rating"
                         else:
                             select_cols += ", NULL as rating"
+                        if has_outcome_manual:
+                            select_cols += ", outcome_manual"
+                        else:
+                            select_cols += ", 0 as outcome_manual"
+                        if has_rating_manual:
+                            select_cols += ", rating_manual"
+                        else:
+                            select_cols += ", 0 as rating_manual"
                         select_cols += ", timestamp, created_at"
                         
                         cursor.execute(f"""

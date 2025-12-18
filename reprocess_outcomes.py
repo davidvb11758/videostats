@@ -15,6 +15,7 @@ Note: Contacts with outcome_manual = 1 will not be updated.
 """
 
 import sqlite3
+import argparse
 from database import VideoStatsDB
 
 def assign_rally_outcomes(db, rally_id: int, point_winner_id: int, team_us_id: int, team_them_id: int):
@@ -182,36 +183,71 @@ def assign_rally_outcomes(db, rally_id: int, point_winner_id: int, team_us_id: i
 
 
 if __name__ == "__main__":
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(description='Re-process completed rallies to apply correct outcome logic')
+    parser.add_argument('--game-id', type=int, help='Process only rallies from this specific game ID')
+    args = parser.parse_args()
+    
+    game_id = args.game_id
+    
     # Main processing
     db = VideoStatsDB()
     db.connect()
 
+    # Validate game_id if provided
+    if game_id is not None:
+        cursor = db.conn.cursor()
+        cursor.execute("SELECT game_id FROM games WHERE game_id = ?", (game_id,))
+        if not cursor.fetchone():
+            print(f"Error: Game ID {game_id} does not exist in the database.")
+            db.close()
+            exit(1)
+
     # Get all completed rallies (those with a point_winner_id)
     cursor = db.conn.cursor()
-    cursor.execute("""
+    query = """
         SELECT r.rally_id, r.point_winner_id, g.team_us_id, g.team_them_id
         FROM rallies r
         INNER JOIN games g ON r.game_id = g.game_id
         WHERE r.point_winner_id IS NOT NULL
-        ORDER BY r.rally_id
-    """)
-
+    """
+    if game_id is not None:
+        query += " AND r.game_id = ?"
+    query += " ORDER BY r.rally_id"
+    
+    if game_id is not None:
+        cursor.execute(query, (game_id,))
+    else:
+        cursor.execute(query)
+    
     rallies = cursor.fetchall()
 
     print(f"\n{'='*80}")
-    print(f"RE-PROCESSING ALL COMPLETED RALLIES")
+    if game_id is not None:
+        print(f"RE-PROCESSING COMPLETED RALLIES FOR GAME {game_id}")
+    else:
+        print(f"RE-PROCESSING ALL COMPLETED RALLIES")
     print(f"{'='*80}")
     print(f"Found {len(rallies)} completed rallies to process\n")
 
     # Reset all outcomes to 'continue' first (except 'down' which stays as 'down')
     # Also preserve outcomes where outcome_manual = 1
     print("Step 1: Resetting all outcomes to default...")
-    cursor.execute("""
-        UPDATE contacts 
-        SET outcome = 'continue'
-        WHERE outcome != 'down' 
-          AND COALESCE(outcome_manual, 0) = 0
-    """)
+    if game_id is not None:
+        cursor.execute("""
+            UPDATE contacts 
+            SET outcome = 'continue'
+            WHERE rally_id IN (SELECT rally_id FROM rallies WHERE game_id = ?)
+              AND outcome != 'down' 
+              AND COALESCE(outcome_manual, 0) = 0
+        """, (game_id,))
+    else:
+        cursor.execute("""
+            UPDATE contacts 
+            SET outcome = 'continue'
+            WHERE outcome != 'down' 
+              AND COALESCE(outcome_manual, 0) = 0
+        """)
     db.conn.commit()
     print(f"  Reset {cursor.rowcount} contacts to 'continue' (preserved manually set outcomes)\n")
 
@@ -276,20 +312,35 @@ if __name__ == "__main__":
     print(f"Assists assigned: {assists_assigned}")
 
     # Show outcome distribution
-    cursor.execute("""
-        SELECT outcome, COUNT(*) as count
-        FROM contacts
-        GROUP BY outcome
-        ORDER BY count DESC
-    """)
+    if game_id is not None:
+        cursor.execute("""
+            SELECT outcome, COUNT(*) as count
+            FROM contacts c
+            INNER JOIN rallies r ON c.rally_id = r.rally_id
+            WHERE r.game_id = ?
+            GROUP BY outcome
+            ORDER BY count DESC
+        """, (game_id,))
+    else:
+        cursor.execute("""
+            SELECT outcome, COUNT(*) as count
+            FROM contacts
+            GROUP BY outcome
+            ORDER BY count DESC
+        """)
     outcome_counts = cursor.fetchall()
 
     print(f"\nFinal outcome distribution:")
+    if game_id is not None:
+        print(f"  (for game {game_id} only)")
     for outcome, count in outcome_counts:
         print(f"  {outcome:10s}: {count:4d}")
 
     print(f"\n{'='*80}")
-    print("✓ ALL RALLIES RE-PROCESSED SUCCESSFULLY!")
+    if game_id is not None:
+        print(f"✓ ALL RALLIES FOR GAME {game_id} RE-PROCESSED SUCCESSFULLY!")
+    else:
+        print("✓ ALL RALLIES RE-PROCESSED SUCCESSFULLY!")
     print(f"{'='*80}\n")
 
     db.close()
