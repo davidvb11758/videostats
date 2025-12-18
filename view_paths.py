@@ -410,14 +410,47 @@ class ContactEditDialog(QDialog):
                     self.parent_dialog.update_arrow()
                     
                     # Update logical coordinates using the center of the dot
-                    # Need to scale from our canvas (1200x666) back to coordinate_mapper canvas (1800x1000)
+                    # Need to convert from view_paths scene coordinates back to coordinate_mapper scene coordinates
                     dot_center_x = new_x + dot_rect.width() / 2
                     dot_center_y = new_y + dot_rect.height() / 2
-                    # Scale back to coordinate_mapper canvas coordinates
-                    scale_x = 1800.0 / 1200.0  # 1.5
-                    scale_y = 1000.0 / 666.0   # ~1.5
-                    scaled_x = dot_center_x * scale_x
-                    scaled_y = dot_center_y * scale_y
+                    
+                    # Get court boundaries to access video dimensions and offsets
+                    court_boundaries = self.parent_dialog.db.get_game_court_boundaries(self.parent_dialog.game_id)
+                    if court_boundaries:
+                        video_offset_x = court_boundaries.get('video_offset_x', 0)
+                        video_offset_y = court_boundaries.get('video_offset_y', 0)
+                        source_video_width = court_boundaries.get('video_width', 0)
+                        source_video_height = court_boundaries.get('video_height', 0)
+                        source_scene_width = court_boundaries.get('scene_width', 0)
+                        source_scene_height = court_boundaries.get('scene_height', 0)
+                        
+                        # Target video scene size in view_paths
+                        target_scene_width = 1200.0
+                        target_scene_height = 666.0
+                        
+                        # Calculate inverse scaling factors (opposite of what we use for drawing)
+                        if source_video_width > 0 and source_video_height > 0:
+                            inv_scale_x = source_video_width / target_scene_width
+                            inv_scale_y = source_video_height / target_scene_height
+                        elif source_scene_width > 0 and source_scene_height > 0:
+                            inv_scale_x = source_scene_width / target_scene_width
+                            inv_scale_y = source_scene_height / target_scene_height
+                        else:
+                            # Fallback to canvas dimensions (1500x600)
+                            inv_scale_x = 1500.0 / target_scene_width
+                            inv_scale_y = 600.0 / target_scene_height
+                        
+                        # Convert back to coordinate_mapper scene coordinates
+                        # First scale, then add video offset
+                        scaled_x = dot_center_x * inv_scale_x + video_offset_x
+                        scaled_y = dot_center_y * inv_scale_y + video_offset_y
+                    else:
+                        # Fallback to old method if court boundaries not available
+                        scale_x = 1800.0 / 1200.0
+                        scale_y = 1000.0 / 666.0
+                        scaled_x = dot_center_x * scale_x
+                        scaled_y = dot_center_y * scale_y
+                    
                     dot_type = self.parent_dialog.dragging_dot.data(Qt.ItemDataRole.UserRole)
                     if self.parent_dialog.coordinate_mapper:
                         logical_coords = self.parent_dialog.coordinate_mapper.map_point_to_logical(scaled_x, scaled_y)
@@ -773,11 +806,38 @@ class ContactEditDialog(QDialog):
         
         # Map logical coordinates to video pixel coordinates
         # We need the inverse of the homography to map from logical to pixel
-        # The homography matrix was computed for coordinate_mapper canvas (1800x1000)
-        # We need to scale it for our canvas (1200x666)
-        # Scale factor: 1200/1800 = 0.6667 for width, 666/1000 = 0.666 for height
         import cv2
         import numpy as np
+        
+        # Get court boundaries to access video dimensions and offsets
+        court_boundaries = self.db.get_game_court_boundaries(self.game_id)
+        if not court_boundaries:
+            print("Warning: Court boundaries not available for coordinate mapping")
+            return
+        
+        # Get video dimensions and offsets (same as draw_court_boundaries)
+        video_offset_x = court_boundaries.get('video_offset_x', 0)
+        video_offset_y = court_boundaries.get('video_offset_y', 0)
+        source_video_width = court_boundaries.get('video_width', 0)
+        source_video_height = court_boundaries.get('video_height', 0)
+        source_scene_width = court_boundaries.get('scene_width', 0)
+        source_scene_height = court_boundaries.get('scene_height', 0)
+        
+        # Target video scene size in view_paths
+        target_scene_width = 1200.0
+        target_scene_height = 666.0
+        
+        # Calculate scaling factors (same logic as draw_court_boundaries)
+        if source_video_width > 0 and source_video_height > 0:
+            scale_x = target_scene_width / source_video_width
+            scale_y = target_scene_height / source_video_height
+        elif source_scene_width > 0 and source_scene_height > 0:
+            scale_x = target_scene_width / source_scene_width
+            scale_y = target_scene_height / source_scene_height
+        else:
+            # Fallback to canvas dimensions (1500x600)
+            scale_x = target_scene_width / 1500.0
+            scale_y = target_scene_height / 600.0
         
         try:
             # Get inverse homography
@@ -786,19 +846,16 @@ class ContactEditDialog(QDialog):
             print("Warning: Could not invert homography matrix")
             return
         
-        # Scale factor: coordinate_mapper uses 1800x1000, we use 1200x666
-        scale_x = 1200.0 / 1800.0  # 0.6667
-        scale_y = 666.0 / 1000.0   # 0.666
-        
         # Map source coordinates (logical to pixel)
         if self.source_x is not None and self.source_y is not None:
             try:
                 logical_point = np.array([self.source_x, self.source_y, 1.0], dtype=np.float32).reshape(3, 1)
                 pixel_point = inv_homography @ logical_point
                 pixel_point /= pixel_point[2]
-                # Apply scaling factor to convert from coordinate_mapper canvas to our canvas
-                source_px = int(pixel_point[0][0] * scale_x)
-                source_py = int(pixel_point[1][0] * scale_y)
+                # Convert from coordinate_mapper scene coordinates to view_paths scene coordinates
+                # First adjust for video offset, then scale
+                source_px = int((pixel_point[0][0] - video_offset_x) * scale_x)
+                source_py = int((pixel_point[1][0] - video_offset_y) * scale_y)
                 
                 # Draw source dot (green)
                 # Create ellipse at (0,0) and use setPos to position it
@@ -825,9 +882,10 @@ class ContactEditDialog(QDialog):
                 logical_point = np.array([self.dest_x, self.dest_y, 1.0], dtype=np.float32).reshape(3, 1)
                 pixel_point = inv_homography @ logical_point
                 pixel_point /= pixel_point[2]
-                # Apply scaling factor to convert from coordinate_mapper canvas to our canvas
-                dest_px = int(pixel_point[0][0] * scale_x)
-                dest_py = int(pixel_point[1][0] * scale_y)
+                # Convert from coordinate_mapper scene coordinates to view_paths scene coordinates
+                # First adjust for video offset, then scale
+                dest_px = int((pixel_point[0][0] - video_offset_x) * scale_x)
+                dest_py = int((pixel_point[1][0] - video_offset_y) * scale_y)
                 
                 # Draw destination dot (blue)
                 # Create ellipse at (0,0) and use setPos to position it
