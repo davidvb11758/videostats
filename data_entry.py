@@ -1683,26 +1683,33 @@ class DataEntryWindow(QMainWindow):
             # For team_us, show special "Down (Error)" dialog
             # For team_them, show error message
             if team_id == self.team_us_id:
-                # Handle 4th contact on team_us side - show small popup with only "down" button
+                # Handle 4th contact on team_us side - show small popup with "down" and "fault" buttons
                 dialog = QDialog(self.coordinate_mapper if self.coordinate_mapper else self)
                 dialog.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
                 dialog.setModal(True)
                 
-                layout = QVBoxLayout()
+                layout = QHBoxLayout()
                 layout.setContentsMargins(5, 5, 5, 5)
                 layout.setSpacing(2)
                 
                 down_btn = QPushButton("Down (Error)")
-                down_btn.setFont(QFont('Arial', 9))
-                down_btn.setFixedSize(80, 30)
+                down_btn.setFont(QFont('Arial', 8))
+                down_btn.setFixedHeight(22)
                 down_btn.setStyleSheet("background-color: #FF6B6B; border: 1px solid #505050;")
+                
+                fault_btn = QPushButton("fault")
+                fault_btn.setFont(QFont('Arial', 8))
+                fault_btn.setFixedHeight(22)
+                fault_btn.setStyleSheet("border: 1px solid #505050;")
                 
                 selected_action = [None]
                 down_btn.clicked.connect(lambda: (selected_action.__setitem__(0, ["down", "down", "error"]), dialog.accept()))
+                fault_btn.clicked.connect(lambda: (selected_action.__setitem__(0, ["fault", "fault"]), dialog.accept()))
                 
                 layout.addWidget(down_btn)
+                layout.addWidget(fault_btn)
                 dialog.setLayout(layout)
-                dialog.setFixedSize(90, 40)
+                dialog.setFixedSize(160, 35)
                 
                 # Position dialog 10 pixels above the clicked point using coordinate_mapper method
                 if self.coordinate_mapper and pixel_x is not None and pixel_y is not None:
@@ -1721,16 +1728,58 @@ class DataEntryWindow(QMainWindow):
                 dialog.activateWindow()
                 
                 if dialog.exec() == QDialog.Accepted and selected_action[0]:
-                    # Record down contact with error outcome
-                    self.selected_player_id = None
-                    self.selected_player_number = None
-                    self.selected_team_id = team_id
-                    if hasattr(self, 'status_label'):
-                        self.status_label.setText("Recording DOWN contact (error)...")
-                    # Store the outcome for record_contact
-                    self._pending_contact_outcome = "error"
-                    self.record_contact("down")
-                    self._pending_contact_outcome = None
+                    action_result = selected_action[0]
+                    action_type = action_result[0] if len(action_result) > 0 else None
+                    player_id_or_down = action_result[1] if len(action_result) > 1 else None
+                    
+                    # Check if "fault" was selected (mark prior contact as fault)
+                    if player_id_or_down == "fault":
+                        # Mark the prior team_us contact (3rd contact) as fault
+                        if not self.db.conn:
+                            self.db.connect()
+                        cursor = self.db.conn.cursor()
+                        # Find the last contact by team_us in the current rally
+                        if self.rally_in_progress and self.current_rally_id:
+                            cursor.execute("""
+                                SELECT contact_id, sequence_number, player_id, contact_type
+                                FROM contacts
+                                WHERE rally_id = ? AND team_id = ?
+                                ORDER BY sequence_number DESC
+                                LIMIT 1
+                            """, (self.current_rally_id, self.team_us_id))
+                            result = cursor.fetchone()
+                            if result:
+                                contact_id, seq_num, player_id, contact_type = result
+                                # Update the outcome to fault
+                                self.db.update_contact_outcome(contact_id, "fault")
+                                # Get player info for status
+                                cursor.execute("SELECT player_number, name FROM players WHERE player_id = ?", (player_id,))
+                                player_info = cursor.fetchone()
+                                if player_info:
+                                    player_number, player_name = player_info
+                                    player_display = f"#{player_number} {player_name}" if player_name else f"#{player_number}"
+                                    if hasattr(self, 'status_label'):
+                                        self.status_label.setText(f"Marked {player_display} {contact_type} as fault")
+                                else:
+                                    if hasattr(self, 'status_label'):
+                                        self.status_label.setText(f"Marked contact {contact_id} as fault")
+                            else:
+                                if hasattr(self, 'status_label'):
+                                    self.status_label.setText("No prior contact found to mark as fault")
+                        else:
+                            if hasattr(self, 'status_label'):
+                                self.status_label.setText("No rally in progress to mark fault")
+                    else:
+                        # Record down contact with error outcome
+                        self.selected_player_id = None
+                        self.selected_player_number = None
+                        self.selected_team_id = team_id
+                        if hasattr(self, 'status_label'):
+                            self.status_label.setText("Recording DOWN contact (error)...")
+                        # Store the outcome for record_contact
+                        self._pending_contact_outcome = "error"
+                        self.record_contact("down")
+                        self._pending_contact_outcome = None
                 return
             else:
                 # For team_them, show error message for 4th contact
@@ -4970,7 +5019,9 @@ class DataEntryWindow(QMainWindow):
                             allowed_actions.append('block')
                     elif next_contact_number == 3:
                         allowed_actions = ['attack', 'freeball']
-                    # No 4th+ contact allowed
+                    else:
+                        # No 4th+ contact allowed
+                        allowed_actions = []
                 else:
                     # Default: allow all except serve
                     allowed_actions = ['receive', 'pass', 'set', 'attack', 'block', 'freeball']
