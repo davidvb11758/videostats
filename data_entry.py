@@ -1816,7 +1816,8 @@ class DataEntryWindow(QMainWindow):
             
             # Create dialog and set widget
             dialog = QDialog(self.coordinate_mapper if self.coordinate_mapper else self)
-            dialog.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+            # Use Dialog window type instead of Popup to prevent auto-closing
+            dialog.setWindowFlags(Qt.Dialog | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
             dialog.setModal(True)
             
             dialog_layout = QVBoxLayout(dialog)
@@ -2014,145 +2015,158 @@ class DataEntryWindow(QMainWindow):
                 print(f"DEBUG ALLOWED_ACTIONS: Using fallback - local_allowed_actions={local_allowed_actions}")
             
             # Process each GroupBox
-            for groupbox_name, players_in_groupbox in groupbox_assignments.items():
-                groupbox = dialog_widget.findChild(QGroupBox, groupbox_name)
-                if not groupbox:
-                    print(f"DEBUG: GroupBox {groupbox_name} not found in UI")
-                    continue
-                
-                # Set GroupBox width to 66px
-                groupbox.setFixedWidth(66)
-                
-                # Set GroupBox title to first player's "#-Name" (or combine if multiple)
-                if players_in_groupbox:
-                    player_labels = []
-                    for player_data in players_in_groupbox:
-                        # Handle both old format (5 elements) and new format (6 elements)
-                        if len(player_data) == 6:
-                            _, player_number, player_name, _, _, _ = player_data
-                        else:
-                            _, player_number, player_name, _, _ = player_data
-                        label = f"#{player_number}-{player_name}" if player_name else f"#{player_number}"
-                        player_labels.append(label)
-                    groupbox.setTitle(" / ".join(player_labels))
-                
-                # Get buttons for this GroupBox
-                # Button naming: pushButton_{LF|MF|RF|LB|MB|RB}_{1-7}
-                position_prefix = groupbox_name.replace('groupBox_', '')
-                
-                # Hide all buttons first
-                for btn_num in range(1, 8):
-                    btn_name = f"pushButton_{position_prefix}_{btn_num}"
-                    btn = dialog_widget.findChild(QPushButton, btn_name)
-                    if btn:
-                        btn.setVisible(False)
-                        btn.setEnabled(False)
-                        btn.setText("")
-                
-                # Determine which buttons to show based on contact_number
-                buttons_to_show = []
-                
-                if contact_number == 1:
-                    # 1st contact buttons: buttons 1, 2, 3
-                    if prior_contact_was_opponent_serve:
-                        # Recv, Attack, Block
-                        buttons_to_show = [
-                            (1, 'Recv', 'receive', '#DDA0DD'),
-                            (2, 'Attack', 'attack', '#E0FFFF'),
-                            (3, 'Block', 'block', '#BFFF00')
-                        ]
-                    else:
-                        # Dig, Attack, Block
-                        buttons_to_show = [
-                            (1, 'Dig', 'pass', '#DDA0DD'),
-                            (2, 'Attack', 'attack', '#E0FFFF'),
-                            (3, 'Block', 'block', '#BFFF00')
-                        ]
-                    # Filter by allowed_actions
-                    buttons_to_show = [(num, label, action, color) for num, label, action, color in buttons_to_show if action in local_allowed_actions]
-                elif contact_number == 2:
-                    # 2nd contact buttons: buttons 4, 5, 6 (add Attack for team_us)
-                    if team_id == self.team_us_id:
-                        # For team_us, add Attack to 2nd contact
-                        buttons_to_show = [
-                            (4, 'Set', 'set', '#ADD8E6'),
-                            (5, 'Free', 'freeball', '#90EE90'),
-                            (6, 'Attack', 'attack', '#E0FFFF')
-                        ]
-                    else:
-                        # For team_them, only Set and Free
-                        buttons_to_show = [
-                            (4, 'Set', 'set', '#ADD8E6'),
-                            (5, 'Free', 'freeball', '#90EE90')
-                        ]
-                    # Filter by allowed_actions
-                    buttons_to_show = [(num, label, action, color) for num, label, action, color in buttons_to_show if action in local_allowed_actions]
-                elif contact_number == 3:
-                    # 3rd contact buttons: buttons 6, 7
-                    buttons_to_show = [
-                        (6, 'Attack', 'attack', '#E0FFFF'),
-                        (7, 'Free', 'freeball', '#90EE90')
-                    ]
-                    # Filter by allowed_actions
-                    buttons_to_show = [(num, label, action, color) for num, label, action, color in buttons_to_show if action in local_allowed_actions]
-                
-                # Assign buttons to players in the groupbox
-                # If multiple players map to same groupbox, prioritize the server (position 1 or is_server=True) or use the first one
-                if players_in_groupbox:
-                    # Find the server (position 1 or is_server=True) if present, otherwise use first player
-                    primary_player = None
-                    for player_data in players_in_groupbox:
-                        # Handle both old format (5 elements) and new format (6 elements)
-                        if len(player_data) == 6:
-                            _, _, _, _, pos, is_server = player_data
-                            if pos == 1 or is_server:  # Server position or marked as server
-                                primary_player = player_data
-                                break
-                        else:
-                            _, _, _, _, pos = player_data
-                            if pos == 1:  # Server position
-                                primary_player = player_data
-                                break
-                    if not primary_player:
-                        primary_player = players_in_groupbox[0]
+            # Wrap in try-except to prevent exceptions from closing dialog
+            try:
+                for groupbox_name, players_in_groupbox in groupbox_assignments.items():
+                    groupbox = dialog_widget.findChild(QGroupBox, groupbox_name)
+                    if not groupbox:
+                        print(f"DEBUG: GroupBox {groupbox_name} not found in UI")
+                        continue
                     
-                    # Extract player data
-                    if len(primary_player) == 6:
-                        player_id, player_number, player_name, role_code, position_number, is_server = primary_player
-                    else:
-                        player_id, player_number, player_name, role_code, position_number = primary_player
-                        is_server = False
+                    # Set GroupBox width to 66px
+                    groupbox.setFixedWidth(66)
                     
-                    # Show and configure buttons
-                    for btn_num, btn_label, btn_action, btn_color in buttons_to_show:
+                    # Set GroupBox title to first player's "#-Name" (or combine if multiple)
+                    if players_in_groupbox:
+                        player_labels = []
+                        for player_data in players_in_groupbox:
+                            # Handle both old format (5 elements) and new format (6 elements)
+                            if len(player_data) == 6:
+                                _, player_number, player_name, _, _, _ = player_data
+                            else:
+                                _, player_number, player_name, _, _ = player_data
+                            label = f"#{player_number}-{player_name}" if player_name else f"#{player_number}"
+                            player_labels.append(label)
+                        groupbox.setTitle(" / ".join(player_labels))
+                    
+                    # Get buttons for this GroupBox
+                    # Button naming: pushButton_{LF|MF|RF|LB|MB|RB}_{1-7}
+                    position_prefix = groupbox_name.replace('groupBox_', '')
+                    
+                    # Hide all buttons first
+                    for btn_num in range(1, 8):
                         btn_name = f"pushButton_{position_prefix}_{btn_num}"
                         btn = dialog_widget.findChild(QPushButton, btn_name)
                         if btn:
-                            btn.setText(btn_label)
-                            # Set button width to 60px
-                            btn.setFixedWidth(60)
-                            btn.setStyleSheet(f"background-color: {btn_color}; border: 1px solid #505050; padding: 1px 2px;")
-                            btn.setVisible(True)
-                            btn.setEnabled(True)
-                            
-                            # Connect button to player and action
-                            def make_handler(pid, atype):
-                                return lambda: (selected_action.__setitem__(0, [pid, atype]), dialog.accept())
-                            btn.clicked.connect(make_handler(player_id, btn_action))
-                        else:
-                            print(f"DEBUG: Button {btn_name} not found")
+                            btn.setVisible(False)
+                            btn.setEnabled(False)
+                            btn.setText("")
                     
-                    # If there are multiple players in this GroupBox, log a warning
-                    if len(players_in_groupbox) > 1:
-                        other_players = []
-                        for p in players_in_groupbox:
-                            if len(p) == 6:
-                                _, pnum, _, _, ppos, _ = p
+                    # Determine which buttons to show based on contact_number
+                    buttons_to_show = []
+                    
+                    if contact_number == 1:
+                        # 1st contact buttons: buttons 1, 2, 3
+                        if prior_contact_was_opponent_serve:
+                            # Recv, Attack, Block
+                            buttons_to_show = [
+                                (1, 'Recv', 'receive', '#DDA0DD'),
+                                (2, 'Attack', 'attack', '#E0FFFF'),
+                                (3, 'Block', 'block', '#BFFF00')
+                            ]
+                        else:
+                            # Dig, Attack, Block
+                            buttons_to_show = [
+                                (1, 'Dig', 'pass', '#DDA0DD'),
+                                (2, 'Attack', 'attack', '#E0FFFF'),
+                                (3, 'Block', 'block', '#BFFF00')
+                            ]
+                        # Filter by allowed_actions
+                        buttons_to_show = [(num, label, action, color) for num, label, action, color in buttons_to_show if action in local_allowed_actions]
+                    elif contact_number == 2:
+                        # 2nd contact buttons: buttons 4, 5, 6 (add Attack for team_us)
+                        if team_id == self.team_us_id:
+                            # For team_us, add Attack to 2nd contact
+                            buttons_to_show = [
+                                (4, 'Set', 'set', '#ADD8E6'),
+                                (5, 'Free', 'freeball', '#90EE90'),
+                                (6, 'Attack', 'attack', '#E0FFFF')
+                            ]
+                        else:
+                            # For team_them, only Set and Free
+                            buttons_to_show = [
+                                (4, 'Set', 'set', '#ADD8E6'),
+                                (5, 'Free', 'freeball', '#90EE90')
+                            ]
+                        # Filter by allowed_actions
+                        buttons_to_show = [(num, label, action, color) for num, label, action, color in buttons_to_show if action in local_allowed_actions]
+                    elif contact_number == 3:
+                        # 3rd contact buttons: buttons 6, 7
+                        buttons_to_show = [
+                            (6, 'Attack', 'attack', '#E0FFFF'),
+                            (7, 'Free', 'freeball', '#90EE90')
+                        ]
+                        # Filter by allowed_actions
+                        buttons_to_show = [(num, label, action, color) for num, label, action, color in buttons_to_show if action in local_allowed_actions]
+                    
+                    # Assign buttons to players in the groupbox
+                    # If multiple players map to same groupbox, prioritize the server (position 1 or is_server=True) or use the first one
+                    if players_in_groupbox:
+                        # Find the server (position 1 or is_server=True) if present, otherwise use first player
+                        primary_player = None
+                        for player_data in players_in_groupbox:
+                            # Handle both old format (5 elements) and new format (6 elements)
+                            if len(player_data) == 6:
+                                _, _, _, _, pos, is_server = player_data
+                                if pos == 1 or is_server:  # Server position or marked as server
+                                    primary_player = player_data
+                                    break
                             else:
-                                _, pnum, _, _, ppos = p
-                            if ppos != position_number:
-                                other_players.append(f"#{pnum} (Pos {ppos})")
-                        print(f"DEBUG POPUP: WARNING: Multiple players in {groupbox_name}: Primary=#{player_number} (Pos {position_number}), Others={other_players}")
+                                _, _, _, _, pos = player_data
+                                if pos == 1:  # Server position
+                                    primary_player = player_data
+                                    break
+                        if not primary_player:
+                            primary_player = players_in_groupbox[0]
+                        
+                        # Extract player data
+                        if len(primary_player) == 6:
+                            player_id, player_number, player_name, role_code, position_number, is_server = primary_player
+                        else:
+                            player_id, player_number, player_name, role_code, position_number = primary_player
+                            is_server = False
+                        
+                        # Show and configure buttons
+                        buttons_connected = 0
+                        for btn_num, btn_label, btn_action, btn_color in buttons_to_show:
+                            btn_name = f"pushButton_{position_prefix}_{btn_num}"
+                            btn = dialog_widget.findChild(QPushButton, btn_name)
+                            if btn:
+                                btn.setText(btn_label)
+                                # Set button width to 60px
+                                btn.setFixedWidth(60)
+                                btn.setStyleSheet(f"background-color: {btn_color}; border: 1px solid #505050; padding: 1px 2px;")
+                                btn.setVisible(True)
+                                btn.setEnabled(True)
+                                
+                                # Connect button to player and action
+                                def make_handler(pid, atype):
+                                    return lambda: (selected_action.__setitem__(0, [pid, atype]), dialog.accept())
+                                btn.clicked.connect(make_handler(player_id, btn_action))
+                                buttons_connected += 1
+                                print(f"DEBUG BUTTON: Connected button {btn_name} ({btn_label}) for player {player_id}")
+                            else:
+                                print(f"DEBUG BUTTON: Button {btn_name} not found")
+                        if buttons_connected == 0:
+                            print(f"DEBUG WARNING: No buttons connected for GroupBox {groupbox_name}, buttons_to_show={buttons_to_show}")
+                        
+                        # If there are multiple players in this GroupBox, log a warning
+                        if len(players_in_groupbox) > 1:
+                            other_players = []
+                            for p in players_in_groupbox:
+                                if len(p) == 6:
+                                    _, pnum, _, _, ppos, _ = p
+                                else:
+                                    _, pnum, _, _, ppos = p
+                                if ppos != position_number:
+                                    other_players.append(f"#{pnum} (Pos {ppos})")
+                            print(f"DEBUG POPUP: WARNING: Multiple players in {groupbox_name}: Primary=#{player_number} (Pos {position_number}), Others={other_players}")
+            except Exception as e:
+                print(f"DEBUG ERROR: Exception during GroupBox processing: {e}")
+                import traceback
+                traceback.print_exc()
+                # Continue anyway - dialog should still work
+                # Don't return here - let the dialog try to show anyway
             
             # Ensure all 6 positions are represented in GroupBoxes
             # If a position is missing, assign it using position-based mapping
@@ -2229,10 +2243,61 @@ class DataEntryWindow(QMainWindow):
                 print(f"WARNING: Only {total_assigned} players assigned to GroupBoxes, expected 6")
                 print(f"  GroupBox assignments: {[(gb, len(players)) for gb, players in groupbox_assignments.items()]}")
             
-            # Connect down button
-            down_btn = dialog_widget.findChild(QPushButton, "pushButton_down")
-            if down_btn:
-                down_btn.clicked.connect(lambda: (selected_action.__setitem__(0, ["down", "down"]), dialog.accept()))
+            # Connect down button and add fault button (only for team_us)
+            # Wrap in try-except to prevent exceptions from breaking dialog
+            try:
+                down_btn = dialog_widget.findChild(QPushButton, "pushButton_down")
+                if down_btn:
+                    down_btn.clicked.connect(lambda: (selected_action.__setitem__(0, ["down", "down"]), dialog.accept()))
+                    # Make down button smaller
+                    down_btn.setFixedHeight(22)
+                    down_btn.setFont(QFont('Arial', 8))
+                    
+                    # Add fault button next to down button (only for team_us)
+                    if team_id == self.team_us_id:
+                        # Get the parent widget and layout of down button
+                        parent_widget = down_btn.parentWidget()
+                        if parent_widget:
+                            parent_layout = parent_widget.layout()
+                            if parent_layout:
+                                # Check if parent layout is horizontal - if so, add directly
+                                if isinstance(parent_layout, QHBoxLayout):
+                                    # Create fault button and add to horizontal layout
+                                    fault_btn = QPushButton("fault")
+                                    fault_btn.setFont(QFont('Arial', 8))
+                                    fault_btn.setFixedHeight(22)
+                                    fault_btn.setVisible(True)
+                                    fault_btn.clicked.connect(lambda: (selected_action.__setitem__(0, ["fault", "fault"]), dialog.accept()))
+                                    parent_layout.addWidget(fault_btn)
+                                else:
+                                    # Parent layout is vertical - wrap down button and fault button in a horizontal layout
+                                    # Get the index of down button in its layout
+                                    layout_index = parent_layout.indexOf(down_btn)
+                                    if layout_index >= 0:
+                                        # Remove down button from layout temporarily
+                                        parent_layout.removeWidget(down_btn)
+                                        # Create horizontal container layout
+                                        hbox = QHBoxLayout()
+                                        hbox.setContentsMargins(0, 0, 0, 0)
+                                        hbox.setSpacing(2)
+                                        hbox.addWidget(down_btn)
+                                        # Create and add fault button
+                                        fault_btn = QPushButton("fault")
+                                        fault_btn.setFont(QFont('Arial', 8))
+                                        fault_btn.setFixedHeight(22)
+                                        fault_btn.setVisible(True)
+                                        fault_btn.clicked.connect(lambda: (selected_action.__setitem__(0, ["fault", "fault"]), dialog.accept()))
+                                        hbox.addWidget(fault_btn)
+                                        # Create container widget
+                                        container = QWidget()
+                                        container.setLayout(hbox)
+                                        # Insert container at the same position
+                                        parent_layout.insertWidget(layout_index, container)
+            except Exception as e:
+                print(f"DEBUG ERROR: Exception during down/fault button setup: {e}")
+                import traceback
+                traceback.print_exc()
+                # Continue anyway - dialog should still work
             
             # Set dialog size - adjust for narrower GroupBoxes (66px each + 2px spacing = 70px per column, 3 columns = 210px + margins)
             dialog.setFixedSize(220, 280)
@@ -2253,6 +2318,19 @@ class DataEntryWindow(QMainWindow):
             dialog.raise_()
             dialog.activateWindow()
             
+            # Debug: Count total buttons connected
+            total_buttons = 0
+            for gb_name in ['groupBox_LF', 'groupBox_MF', 'groupBox_RF', 'groupBox_LB', 'groupBox_MB', 'groupBox_RB']:
+                gb = dialog_widget.findChild(QGroupBox, gb_name)
+                if gb and gb.isVisible():
+                    for btn_num in range(1, 8):
+                        prefix = gb_name.replace('groupBox_', '')
+                        btn_name = f"pushButton_{prefix}_{btn_num}"
+                        btn = dialog_widget.findChild(QPushButton, btn_name)
+                        if btn and btn.isVisible() and btn.isEnabled():
+                            total_buttons += 1
+            print(f"DEBUG: Total visible/enabled buttons before showing dialog: {total_buttons}")
+            
             # Show dialog and get result (for new UI)
             # Use safe_allowed_actions instead of allowed_actions to avoid UnboundLocalError
             try:
@@ -2264,15 +2342,57 @@ class DataEntryWindow(QMainWindow):
             
             try:
                 print(f"DEBUG: About to show dialog for team {team_id}, contact_number={contact_number}, action_type will be selected")
-                if dialog.exec() == QDialog.Accepted and selected_action[0]:
+                print(f"DEBUG: Dialog setup complete, showing dialog...")
+                dialog_result = dialog.exec()
+                print(f"DEBUG: Dialog returned with result: {dialog_result}, selected_action={selected_action[0]}")
+                if dialog_result == QDialog.Accepted and selected_action[0]:
                     player_id_or_down, action_type = selected_action[0]
                     print(f"DEBUG: Dialog accepted, action_type={action_type}, player_id={player_id_or_down}")
                     
                     # Set flag BEFORE calling record_contact to prevent error dialogs from showing
                     self._recording_contact = True
                     
+                    # Check if "fault" was selected (mark prior contact as fault)
+                    if player_id_or_down == "fault":
+                        # Mark the prior team_us contact as fault
+                        if not self.db.conn:
+                            self.db.connect()
+                        cursor = self.db.conn.cursor()
+                        # Find the last contact by team_us in the current rally
+                        if self.rally_in_progress and self.current_rally_id:
+                            cursor.execute("""
+                                SELECT contact_id, sequence_number, player_id, contact_type
+                                FROM contacts
+                                WHERE rally_id = ? AND team_id = ?
+                                ORDER BY sequence_number DESC
+                                LIMIT 1
+                            """, (self.current_rally_id, self.team_us_id))
+                            result = cursor.fetchone()
+                            if result:
+                                contact_id, seq_num, player_id, contact_type = result
+                                # Update the outcome to fault
+                                self.db.update_contact_outcome(contact_id, "fault")
+                                # Get player info for status
+                                cursor.execute("SELECT player_number, name FROM players WHERE player_id = ?", (player_id,))
+                                player_info = cursor.fetchone()
+                                if player_info:
+                                    player_number, player_name = player_info
+                                    player_display = f"#{player_number} {player_name}" if player_name else f"#{player_number}"
+                                    if hasattr(self, 'status_label'):
+                                        self.status_label.setText(f"Marked {player_display} {contact_type} as fault")
+                                else:
+                                    if hasattr(self, 'status_label'):
+                                        self.status_label.setText(f"Marked contact {contact_id} as fault")
+                            else:
+                                if hasattr(self, 'status_label'):
+                                    self.status_label.setText("No prior contact found to mark as fault")
+                        else:
+                            if hasattr(self, 'status_label'):
+                                self.status_label.setText("No rally in progress to mark fault")
+                        # Clear flag after handling fault
+                        self._recording_contact = False
                     # Check if "down" was selected (floor contact)
-                    if player_id_or_down == "down":
+                    elif player_id_or_down == "down":
                         self.selected_player_id = None
                         self.selected_player_number = None
                         self.selected_team_id = team_id
@@ -2429,20 +2549,31 @@ class DataEntryWindow(QMainWindow):
             
                 main_layout.addLayout(row_layout)
             
-            # Add "down" button at the bottom for floor contact
-            down_layout = QHBoxLayout()
+            # Add "down" and "fault" buttons at the bottom
+            bottom_layout = QHBoxLayout()
+            # Down button (smaller)
             down_btn = QPushButton("down (floor contact)")
-            down_btn.setFont(QFont('Arial', 9))
+            down_btn.setFont(QFont('Arial', 8))
+            down_btn.setFixedHeight(22)
             down_btn.clicked.connect(lambda: (selected_action.__setitem__(0, ["down", "down"]), dialog.accept()))
-            down_layout.addWidget(down_btn)
-            main_layout.addLayout(down_layout)
+            bottom_layout.addWidget(down_btn)
+            
+            # Fault button (only for team_us)
+            if team_id == self.team_us_id:
+                fault_btn = QPushButton("fault")
+                fault_btn.setFont(QFont('Arial', 8))
+                fault_btn.setFixedHeight(22)
+                fault_btn.clicked.connect(lambda: (selected_action.__setitem__(0, ["fault", "fault"]), dialog.accept()))
+                bottom_layout.addWidget(fault_btn)
+            
+            main_layout.addLayout(bottom_layout)
             
             dialog.setLayout(main_layout)
             
             # Set size - compact width for player name + buttons, tall enough for all players
             dialog.setFixedWidth(320)
             # Calculate height: each row is ~26px, plus padding
-            total_rows = len(players) + 1  # +1 for "down" button
+            total_rows = len(players) + 1  # +1 for bottom buttons (down/fault)
             dialog.setFixedHeight(total_rows * 26 + 20)
             
             # Position dialog 10 pixels above the clicked point using coordinate_mapper method
@@ -2473,8 +2604,43 @@ class DataEntryWindow(QMainWindow):
                     
                     player_id_or_down, action_type = selected_action[0]
                     
+                    # Check if "fault" was selected (mark prior contact as fault)
+                    if player_id_or_down == "fault":
+                        # Mark the prior team_us contact as fault
+                        if not self.db.conn:
+                            self.db.connect()
+                        cursor = self.db.conn.cursor()
+                        # Find the last contact by team_us in the current rally
+                        if self.rally_in_progress and self.current_rally_id:
+                            cursor.execute("""
+                                SELECT contact_id, sequence_number, player_id, contact_type
+                                FROM contacts
+                                WHERE rally_id = ? AND team_id = ?
+                                ORDER BY sequence_number DESC
+                                LIMIT 1
+                            """, (self.current_rally_id, self.team_us_id))
+                            result = cursor.fetchone()
+                            if result:
+                                contact_id, seq_num, player_id, contact_type = result
+                                # Update the outcome to fault
+                                self.db.update_contact_outcome(contact_id, "fault")
+                                # Get player info for status
+                                cursor.execute("SELECT player_number, name FROM players WHERE player_id = ?", (player_id,))
+                                player_info = cursor.fetchone()
+                                if player_info:
+                                    player_number, player_name = player_info
+                                    player_display = f"#{player_number} {player_name}" if player_name else f"#{player_number}"
+                                    self.status_label.setText(f"Marked {player_display} {contact_type} as fault")
+                                else:
+                                    self.status_label.setText(f"Marked contact {contact_id} as fault")
+                            else:
+                                self.status_label.setText("No prior contact found to mark as fault")
+                        else:
+                            self.status_label.setText("No rally in progress to mark fault")
+                        # Clear flag after handling fault
+                        self._recording_contact = False
                     # Check if "down" was selected (floor contact)
-                    if player_id_or_down == "down":
+                    elif player_id_or_down == "down":
                         # Record floor contact
                         self.selected_player_id = None
                         self.selected_player_number = None
@@ -3008,6 +3174,182 @@ class DataEntryWindow(QMainWindow):
             self._recording_contact = False
             QMessageBox.critical(self, "Database Error", f"Failed to record contact:\n{str(e)}")
     
+    def undo_last_contact(self):
+        """Remove the most recent contact from the database and restore state.
+        
+        Returns:
+            Tuple (player_name, player_number, contact_type) for popup display, or None if failed/no contact
+        """
+        if not self.game_id:
+            return None
+        
+        if not self.db.conn:
+            self.db.connect()
+        
+        cursor = self.db.conn.cursor()
+        
+        # Find the rally to undo from
+        rally_id_to_use = None
+        if self.rally_in_progress and self.current_rally_id:
+            rally_id_to_use = self.current_rally_id
+        else:
+            # Find the most recent rally (may be ended or incomplete)
+            cursor.execute("""
+                SELECT rally_id 
+                FROM rallies 
+                WHERE game_id = ?
+                ORDER BY rally_id DESC
+                LIMIT 1
+            """, (self.game_id,))
+            result = cursor.fetchone()
+            if result:
+                rally_id_to_use = result[0]
+        
+        if not rally_id_to_use:
+            return None
+        
+        # Get the last contact in this rally
+        last_contact = self.db.get_last_contact(rally_id_to_use)
+        if not last_contact:
+            return None
+        
+        contact_id = last_contact[0]
+        rally_id = last_contact[1]
+        sequence_number = last_contact[2]
+        player_id = last_contact[3]
+        contact_type = last_contact[4]
+        team_id = last_contact[5]
+        outcome = last_contact[8]
+        
+        # Get player info for popup message
+        player_name = None
+        player_number = None
+        if player_id is not None:
+            cursor.execute("SELECT name, player_number FROM players WHERE player_id = ?", (player_id,))
+            player_result = cursor.fetchone()
+            if player_result:
+                player_name = player_result[0]
+                player_number = player_result[1]
+        
+        # Handle special case: If this is a "down" contact, check if previous contact was a block
+        # and revert the block's outcome from "stuff" back to "continue"
+        if contact_type == "down" and sequence_number > 1:
+            cursor.execute("""
+                SELECT contact_id, contact_type
+                FROM contacts
+                WHERE rally_id = ? AND sequence_number < ?
+                ORDER BY sequence_number DESC
+                LIMIT 1
+            """, (rally_id, sequence_number))
+            prev_result = cursor.fetchone()
+            if prev_result:
+                prev_contact_id, prev_contact_type = prev_result
+                if prev_contact_type == "block":
+                    # Revert block's outcome from "stuff" back to "continue"
+                    self.db.update_contact_outcome(prev_contact_id, "continue")
+                    print(f"DEBUG: Reverted block contact {prev_contact_id} outcome from 'stuff' back to 'continue'")
+        
+        # Handle outcome reversals for cascaded outcomes
+        # If this contact was a "receive" with error, check if prior serve was marked as "ace"
+        if contact_type == "receive" and outcome == "error" and sequence_number > 1:
+            cursor.execute("""
+                SELECT contact_id, contact_type, outcome
+                FROM contacts
+                WHERE rally_id = ? AND sequence_number < ? AND contact_type = 'serve'
+                ORDER BY sequence_number DESC
+                LIMIT 1
+            """, (rally_id, sequence_number))
+            prev_serve = cursor.fetchone()
+            if prev_serve and prev_serve[2] == "ace":
+                self.db.update_contact_outcome(prev_serve[0], "continue")
+        
+        # If this contact was a "pass" with error, check if prior attack/freeball/block was marked as "kill"
+        if contact_type == "pass" and outcome == "error" and sequence_number > 1:
+            cursor.execute("""
+                SELECT contact_id, contact_type, outcome
+                FROM contacts
+                WHERE rally_id = ? AND sequence_number < ? 
+                AND contact_type IN ('attack', 'freeball', 'block')
+                ORDER BY sequence_number DESC
+                LIMIT 1
+            """, (rally_id, sequence_number))
+            prev_attack = cursor.fetchone()
+            if prev_attack and prev_attack[2] == "kill":
+                self.db.update_contact_outcome(prev_attack[0], "continue")
+        
+        # Delete the contact
+        success = self.db.delete_contact(contact_id)
+        if not success:
+            print(f"ERROR: Failed to delete contact {contact_id}")
+            return None
+        
+        print(f"DEBUG: Deleted contact {contact_id} ({contact_type})")
+        
+        # Check if rally was ended (has point_winner_id)
+        cursor.execute("SELECT point_winner_id FROM rallies WHERE rally_id = ?", (rally_id,))
+        rally_result = cursor.fetchone()
+        rally_was_ended = False
+        if rally_result and rally_result[0] is not None:
+            rally_was_ended = True
+            # Un-end the rally
+            self.db.unend_rally(rally_id)
+            print(f"DEBUG: Un-ended rally {rally_id}")
+            # Reload score from database
+            self.load_score()
+        
+        # Restore state variables
+        if sequence_number == 1:
+            # This was the first contact (serve) - rally should be reset
+            if self.rally_in_progress and self.current_rally_id == rally_id:
+                self.rally_in_progress = False
+                self.current_rally_id = None
+                self.current_sequence = 0
+        else:
+            # Update current_sequence
+            if self.rally_in_progress and self.current_rally_id == rally_id:
+                self.current_sequence = self.db.get_current_rally_sequence(self.current_rally_id) - 1
+                if self.current_sequence < 1:
+                    self.current_sequence = 0
+                    self.rally_in_progress = False
+                    self.current_rally_id = None
+            else:
+                # Rally was ended, but we un-ended it, so restore rally_in_progress
+                if rally_id_to_use == rally_id:
+                    self.current_rally_id = rally_id
+                    self.rally_in_progress = True
+                    self.current_sequence = self.db.get_current_rally_sequence(rally_id) - 1
+                    if self.current_sequence < 1:
+                        self.current_sequence = 0
+        
+        # Restore opponent_contact_count
+        # If undone contact was by team_us, recalculate opponent_contact_count
+        if team_id == self.team_us_id:
+            # Count opponent contacts after the last remaining team_us contact
+            if self.current_rally_id:
+                cursor.execute("""
+                    SELECT MAX(sequence_number) as last_team_us_seq
+                    FROM contacts
+                    WHERE rally_id = ? AND team_id = ?
+                """, (self.current_rally_id, self.team_us_id))
+                result = cursor.fetchone()
+                if result and result[0]:
+                    last_team_us_seq = result[0]
+                    cursor.execute("""
+                        SELECT COUNT(*) 
+                        FROM contacts
+                        WHERE rally_id = ? AND team_id = ? AND sequence_number > ?
+                    """, (self.current_rally_id, self.team_them_id, last_team_us_seq))
+                    count_result = cursor.fetchone()
+                    self.opponent_contact_count = count_result[0] if count_result else 0
+                else:
+                    self.opponent_contact_count = 0
+        
+        # Update UI
+        self.update_ui_state()
+        
+        # Return player info for popup display
+        return (player_name, player_number, contact_type)
+    
     def assign_rally_outcomes(self, rally_id: int, point_winner_id: int):
         """Determine and assign outcomes to contacts in a rally based on rules.
         
@@ -3086,6 +3428,12 @@ class DataEntryWindow(QMainWindow):
         contact_id = last_player_contact[0]
         contact_type = last_player_contact[4]
         team_id = last_player_contact[5]
+        current_outcome = last_player_contact[8]  # Get existing outcome
+        
+        # Preserve "fault" outcome - don't overwrite manually set faults
+        if current_outcome == 'fault':
+            print(f"DEBUG: Contact {contact_id} ({contact_type}) already has outcome 'fault' - preserving it")
+            return  # Exit early to preserve the fault outcome
         
         outcome = 'continue'  # Default
         
@@ -3126,8 +3474,11 @@ class DataEntryWindow(QMainWindow):
                 print(f"DEBUG: Contact {contact_id} (block) assigned outcome 'stuff' (winning block)")
         
         # Update the outcome for this contact
-        if outcome != 'continue':
+        # Only update if outcome is not 'continue' AND current outcome is not 'fault'
+        if outcome != 'continue' and current_outcome != 'fault':
             self.db.update_contact_outcome(contact_id, outcome)
+        elif current_outcome == 'fault':
+            print(f"DEBUG: Preserving 'fault' outcome for contact {contact_id}")
         
         # Additional rules: Set outcomes for prior contacts based on subsequent errors
         # Rule 1: If receive has error, mark prior serve as ace
@@ -3144,6 +3495,11 @@ class DataEntryWindow(QMainWindow):
                     prior_contact = contacts[j]
                     prior_contact_id = prior_contact[0]
                     prior_contact_type = prior_contact[4]
+                    prior_outcome = prior_contact[8]  # Get prior contact's outcome
+                    
+                    # Skip if prior contact already has "fault" outcome
+                    if prior_outcome == 'fault':
+                        continue
                     
                     if prior_contact_type == 'serve':
                         # Mark this serve as an ace
@@ -3158,6 +3514,11 @@ class DataEntryWindow(QMainWindow):
                     prior_contact = contacts[j]
                     prior_contact_id = prior_contact[0]
                     prior_contact_type = prior_contact[4]
+                    prior_outcome = prior_contact[8]  # Get prior contact's outcome
+                    
+                    # Skip if prior contact already has "fault" outcome
+                    if prior_outcome == 'fault':
+                        continue
                     
                     if prior_contact_type in ['attack', 'freeball', 'block']:
                         # Mark this attack/freeball/block as a kill

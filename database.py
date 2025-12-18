@@ -21,6 +21,8 @@ class VideoStatsDB:
         """Connect to the database."""
         self.conn = sqlite3.connect(self.db_path)
         self.conn.row_factory = sqlite3.Row
+        # Ensure constraints are up to date on every connection
+        self.add_constraints_to_existing_tables()
         return self.conn
     
     def close(self):
@@ -135,12 +137,12 @@ class VideoStatsDB:
                 rally_id INTEGER NOT NULL,
                 sequence_number INTEGER NOT NULL,
                 player_id INTEGER,
-                contact_type TEXT NOT NULL CHECK(contact_type IN ('serve', 'pass', 'set', 'attack', 'block', 'receive', 'freeball', 'down', 'net', 'fault')),
+                contact_type TEXT NOT NULL CHECK(contact_type IN ('serve', 'pass', 'set', 'attack', 'block', 'receive', 'freeball', 'down', 'net')),
                 team_id INTEGER NOT NULL,
                 x INTEGER,
                 y INTEGER,
                 timecode INTEGER,
-                outcome TEXT DEFAULT 'continue' CHECK(outcome IN ('continue', 'ace', 'kill', 'error', 'down', 'stuff', 'assist')),
+                outcome TEXT DEFAULT 'continue' CHECK(outcome IN ('continue', 'ace', 'kill', 'error', 'down', 'stuff', 'assist', 'fault')),
                 rating INTEGER,
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -537,7 +539,7 @@ class VideoStatsDB:
         if result and result[0]:
             # Check if it has the old constraint with 'opp' or missing 'receive'/'freeball'/'down'
             sql = result[0]
-            if "'opp'" in sql or "'receive'" not in sql or "'freeball'" not in sql or "'down'" not in sql or "'net'" not in sql or "'fault'" not in sql:
+            if "'opp'" in sql or "'receive'" not in sql or "'freeball'" not in sql or "'down'" not in sql or "'net'" not in sql:
                 print("Migrating contact_type constraint in contacts table...")
                 try:
                     # Create new table with updated constraint
@@ -547,7 +549,7 @@ class VideoStatsDB:
                             rally_id INTEGER NOT NULL,
                             sequence_number INTEGER NOT NULL,
                             player_id INTEGER,
-                            contact_type TEXT NOT NULL CHECK(contact_type IN ('serve', 'pass', 'set', 'attack', 'block', 'receive', 'freeball', 'down', 'net', 'fault')),
+                            contact_type TEXT NOT NULL CHECK(contact_type IN ('serve', 'pass', 'set', 'attack', 'block', 'receive', 'freeball', 'down', 'net')),
                             team_id INTEGER NOT NULL,
                             x INTEGER,
                             y INTEGER,
@@ -590,7 +592,7 @@ class VideoStatsDB:
                         INSERT INTO contacts_new 
                         SELECT {select_cols}
                         FROM contacts
-                        WHERE contact_type IN ('serve', 'pass', 'set', 'attack', 'block', 'receive', 'freeball', 'down', 'net', 'fault', 'opp')
+                        WHERE contact_type IN ('serve', 'pass', 'set', 'attack', 'block', 'receive', 'freeball', 'down', 'net', 'opp')
                     """)
                     
                     # Drop old table and rename new one
@@ -657,24 +659,26 @@ class VideoStatsDB:
         if 'outcome' not in columns:
             print("Adding outcome column to contacts table...")
             try:
-                cursor.execute("ALTER TABLE contacts ADD COLUMN outcome TEXT DEFAULT 'continue' CHECK(outcome IN ('continue', 'ace', 'kill', 'error', 'down', 'stuff'))")
+                cursor.execute("ALTER TABLE contacts ADD COLUMN outcome TEXT DEFAULT 'continue' CHECK(outcome IN ('continue', 'ace', 'kill', 'error', 'down', 'stuff', 'assist', 'fault'))")
                 self.conn.commit()
                 print("outcome column added successfully!")
             except Exception as e:
                 print(f"Failed to add outcome column: {e}")
         else:
-            # Check if the outcome column has the old constraint (without 'stuff' or 'assist')
+            # Check if the outcome column has the old constraint (without 'stuff', 'assist', or 'fault')
             cursor.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='contacts'")
             result = cursor.fetchone()
             if result and result[0]:
                 sql = result[0]
-                # Check if 'stuff' or 'assist' is missing from the outcome constraint
-                if "'stuff'" not in sql or "'assist'" not in sql:
+                # Check if 'stuff', 'assist', or 'fault' is missing from the outcome constraint
+                if "'stuff'" not in sql or "'assist'" not in sql or "'fault'" not in sql:
                     missing = []
                     if "'stuff'" not in sql:
                         missing.append("'stuff'")
                     if "'assist'" not in sql:
                         missing.append("'assist'")
+                    if "'fault'" not in sql:
+                        missing.append("'fault'")
                     print(f"Migrating outcome column constraint to include {', '.join(missing)}...")
                     try:
                         # Create new table with updated constraint
@@ -684,12 +688,12 @@ class VideoStatsDB:
                                 rally_id INTEGER NOT NULL,
                                 sequence_number INTEGER NOT NULL,
                                 player_id INTEGER,
-                                contact_type TEXT NOT NULL CHECK(contact_type IN ('serve', 'pass', 'set', 'attack', 'block', 'receive', 'freeball', 'down', 'net', 'fault')),
+                                contact_type TEXT NOT NULL CHECK(contact_type IN ('serve', 'pass', 'set', 'attack', 'block', 'receive', 'freeball', 'down', 'net')),
                                 team_id INTEGER NOT NULL,
                                 x INTEGER,
                                 y INTEGER,
                                 timecode INTEGER,
-                                outcome TEXT DEFAULT 'continue' CHECK(outcome IN ('continue', 'ace', 'kill', 'error', 'down', 'stuff', 'assist')),
+                                outcome TEXT DEFAULT 'continue' CHECK(outcome IN ('continue', 'ace', 'kill', 'error', 'down', 'stuff', 'assist', 'fault')),
                                 rating INTEGER,
                                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -1038,6 +1042,23 @@ class VideoStatsDB:
         )
         self.conn.commit()
     
+    def unend_rally(self, rally_id: int) -> None:
+        """Reset a rally's point_winner_id and rally_end_time to NULL (un-end the rally).
+        
+        Args:
+            rally_id: The rally ID to update
+        """
+        if not self.conn:
+            self.connect()
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """UPDATE rallies 
+               SET point_winner_id = NULL, rally_end_time = NULL
+               WHERE rally_id = ?""",
+            (rally_id,)
+        )
+        self.conn.commit()
+    
     def update_contact_outcome(self, contact_id: int, outcome: str):
         """Update the outcome of a contact.
         
@@ -1053,6 +1074,26 @@ class VideoStatsDB:
             (outcome, contact_id)
         )
         self.conn.commit()
+    
+    def delete_contact(self, contact_id: int) -> bool:
+        """Delete a contact by ID.
+        
+        Args:
+            contact_id: The contact ID to delete
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        if not self.conn:
+            self.connect()
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("DELETE FROM contacts WHERE contact_id = ?", (contact_id,))
+            self.conn.commit()
+            return cursor.rowcount > 0
+        except Exception as e:
+            print(f"Error deleting contact {contact_id}: {e}")
+            return False
     
     def get_rally_contacts(self, rally_id: int) -> list:
         """Get all contacts for a rally, ordered by sequence number.
@@ -1075,6 +1116,30 @@ class VideoStatsDB:
             (rally_id,)
         )
         return cursor.fetchall()
+    
+    def get_last_contact(self, rally_id: int) -> Optional[sqlite3.Row]:
+        """Get the most recent contact in a rally.
+        
+        Args:
+            rally_id: The rally ID
+            
+        Returns:
+            Contact row (contact_id, rally_id, sequence_number, player_id, contact_type, 
+            team_id, x, y, outcome, timestamp) or None if no contacts exist
+        """
+        if not self.conn:
+            self.connect()
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """SELECT contact_id, rally_id, sequence_number, player_id, contact_type, 
+                      team_id, x, y, outcome, timestamp
+               FROM contacts 
+               WHERE rally_id = ?
+               ORDER BY sequence_number DESC
+               LIMIT 1""",
+            (rally_id,)
+        )
+        return cursor.fetchone()
     
     def delete_game_rallies_and_contacts(self, game_id: int) -> tuple[int, int]:
         """Delete all rallies and contacts for a given game.

@@ -595,7 +595,7 @@ class ContactEditDialog(QDialog):
         outcome_layout.setSpacing(2)
         self.outcome_button_group = QButtonGroup()
         self.outcome_button_group.setExclusive(True)
-        outcomes = ['continue', 'ace', 'kill', 'error', 'down', 'stuff', 'assist']
+        outcomes = ['continue', 'ace', 'kill', 'error', 'down', 'stuff', 'assist', 'fault']
         outcome_grid = QHBoxLayout()
         for i, oc in enumerate(outcomes):
             rb = QRadioButton(oc)

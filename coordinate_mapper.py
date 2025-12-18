@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
     QGraphicsEllipseItem, QGraphicsLineItem, QGraphicsTextItem, QApplication, QPushButton,
     QFileDialog, QSlider, QComboBox, QMessageBox, QDialog, QListWidget, QListWidgetItem
 )
-from PySide6.QtCore import Qt, QPointF, QRectF, Signal, QUrl, QTimer, QPoint
+from PySide6.QtCore import Qt, QPointF, QRectF, Signal, QUrl, QTimer, QPoint, QEvent
 from PySide6.QtGui import QPen, QBrush, QColor, QFont, QPainter
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
@@ -51,6 +51,9 @@ class CoordinateMapper(QMainWindow):
         if self.db and self.game_id:
             self._load_team_ids()
             self._load_score()
+            # Update undo button state after loading
+            if hasattr(self, 'undo_btn'):
+                self._update_undo_button_state()
         
         # Initialize LineupManager for substitutions and libero actions
         self.lineup_manager = LineupManager(self.db) if self.db else None
@@ -180,8 +183,23 @@ class CoordinateMapper(QMainWindow):
         self.libero_out_btn.setEnabled(self.db is not None and self.game_id is not None)
         button_layout.addWidget(self.libero_out_btn)
         
+        # Undo button
+        self.undo_btn = QPushButton("Undo")
+        self.undo_btn.setFont(QFont('Arial', 12))
+        self.undo_btn.clicked.connect(self.undo_last_contact)
+        # Initial state - will be updated by _update_undo_button_state after initialization
+        self.undo_btn.setEnabled(False)
+        button_layout.addWidget(self.undo_btn)
+        
         button_layout.addStretch()  # Push buttons to the left
         layout.addLayout(button_layout)
+        
+        # Undo popup label (below the button layout)
+        self.undo_popup_label = QLabel("")
+        self.undo_popup_label.setFont(QFont('Arial', 12))
+        self.undo_popup_label.setStyleSheet("color: red;")
+        self.undo_popup_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        layout.addWidget(self.undo_popup_label)
         
         # Status label
         self.status_label = QLabel("Click 'Set Court Boundaries' to start")
@@ -245,6 +263,11 @@ class CoordinateMapper(QMainWindow):
         self.media_player.positionChanged.connect(self.update_position)
         self.media_player.durationChanged.connect(self.update_duration)
         self.media_player.mediaStatusChanged.connect(self.on_media_status_changed)
+        
+        # Set up periodic update for undo button state (every 2 seconds when window is active)
+        self.undo_button_timer = QTimer()
+        self.undo_button_timer.timeout.connect(self._update_undo_button_state)
+        self.undo_button_timer.start(2000)  # Check every 2 seconds
         
         # Install event filter on the view to capture mouse clicks and key presses
         self.view.viewport().installEventFilter(self)
@@ -321,6 +344,8 @@ class CoordinateMapper(QMainWindow):
         
         if not self.team_us_id or not self.team_them_id:
             self.score_label.setText("Score: 0 - 0")
+            # Update undo button state
+            self._update_undo_button_state()
             return
         
         try:
@@ -340,6 +365,48 @@ class CoordinateMapper(QMainWindow):
         except Exception as e:
             print(f"Warning: Failed to update score display: {e}")
             self.score_label.setText(f"Score: {self.score_us} - {self.score_them}")
+        finally:
+            # Update undo button state
+            self._update_undo_button_state()
+    
+    def _update_undo_button_state(self):
+        """Update the undo button enabled state based on whether there are contacts to undo."""
+        if hasattr(self, 'undo_btn'):
+            if self.db and self.game_id:
+                # Check if there's at least one contact to undo
+                has_contact = self._has_contact_to_undo()
+                self.undo_btn.setEnabled(has_contact)
+            else:
+                self.undo_btn.setEnabled(False)
+    
+    def _has_contact_to_undo(self) -> bool:
+        """Check if there's at least one contact to undo in any rally."""
+        if not self.db or not self.game_id:
+            return False
+        
+        try:
+            if not self.db.conn:
+                self.db.connect()
+            cursor = self.db.conn.cursor()
+            
+            # Find the most recent rally
+            cursor.execute("""
+                SELECT rally_id 
+                FROM rallies 
+                WHERE game_id = ?
+                ORDER BY rally_id DESC
+                LIMIT 1
+            """, (self.game_id,))
+            result = cursor.fetchone()
+            
+            if result:
+                rally_id = result[0]
+                last_contact = self.db.get_last_contact(rally_id)
+                return last_contact is not None
+            return False
+        except Exception as e:
+            print(f"Error checking for contacts to undo: {e}")
+            return False
     
     def award_point(self, team: str):
         """Award a point to team_us or team_them by updating the most recent rally.
@@ -1188,6 +1255,10 @@ class CoordinateMapper(QMainWindow):
                 
                 # Emit signal with mapped coordinates and timecode
                 self.coordinate_mapped.emit(logical_coords[0], logical_coords[1], x, y, timecode_ms)
+                
+                # Update undo button state after coordinates are mapped
+                # Use QTimer with delay to allow contact recording to complete in data_entry
+                QTimer.singleShot(1000, self._update_undo_button_state)
     
     def position_popup_near_click(self, dialog: QDialog, pixel_x: float, pixel_y: float, offset_y: int = 10):
         """Position a popup dialog near the clicked location, ensuring it stays on screen.
@@ -1786,6 +1857,45 @@ class CoordinateMapper(QMainWindow):
         
         dialog.exec()
     
+    def undo_last_contact(self):
+        """Undo the most recent contact by calling parent DataEntryWindow's undo method."""
+        # Check if we have a parent DataEntryWindow with undo capability
+        parent = self.parent()
+        if parent and hasattr(parent, 'undo_last_contact'):
+            # Call parent's undo method
+            result = parent.undo_last_contact()
+            
+            if result:
+                player_name, player_number, contact_type = result
+                # Display popup message
+                if player_name and player_number:
+                    message = f"{player_name} ({player_number}) - {contact_type} Removed"
+                elif player_number:
+                    message = f"Player {player_number} - {contact_type} Removed"
+                elif player_name:
+                    message = f"{player_name} - {contact_type} Removed"
+                else:
+                    # For contacts without player (e.g., "down")
+                    message = f"{contact_type} Removed"
+                
+                # Show message in red
+                self.undo_popup_label.setText(message)
+                self.undo_popup_label.setStyleSheet("color: red;")
+                
+                # Hide message after 1.5 seconds
+                QTimer.singleShot(1500, lambda: self.undo_popup_label.setText(""))
+                
+                # Update score display and undo button state if needed
+                if self.db and self.game_id:
+                    self._load_score()
+                    self._update_undo_button_state()
+            else:
+                # No contact to undo
+                self.status_label.setText("No contact to undo")
+        else:
+            # No parent or parent doesn't have undo method
+            self.status_label.setText("Cannot undo: No data entry window connected")
+    
     def perform_libero_exit(self, libero_id: int, position: int, replaced_player_id: int):
         """Perform the libero exit action."""
         try:
@@ -1965,6 +2075,9 @@ class CoordinateMapper(QMainWindow):
             
             # Emit double-click signal
             self.double_click_mapped.emit(logical_coords[0], logical_coords[1], x, y, timecode_ms)
+            
+            # Update undo button state after a short delay (to allow contact to be recorded)
+            QTimer.singleShot(1000, self._update_undo_button_state)
     
     def _remove_down_text(self, text_item):
         """Remove the DOWN text from the scene."""
@@ -2188,6 +2301,20 @@ class CoordinateMapper(QMainWindow):
                 self.graphics_items.append(line3)
                 
                 self.status_label.setText("Plane defined! Click anywhere inside to get coordinates")
+    
+    def showEvent(self, event):
+        """Handle window show event - update undo button state when window is shown."""
+        super().showEvent(event)
+        if hasattr(self, 'undo_btn'):
+            self._update_undo_button_state()
+    
+    def changeEvent(self, event):
+        """Handle window state change events - update undo button when window gains focus."""
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.WindowStateChange or event.type() == QEvent.Type.ActivationChange:
+            if hasattr(self, 'undo_btn') and self.isActiveWindow():
+                # Use a small delay to ensure contact recording has completed
+                QTimer.singleShot(100, self._update_undo_button_state)
 
 
 def main():
