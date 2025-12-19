@@ -1685,6 +1685,13 @@ class ContactPathViewer(QMainWindow):
         self.contact_table.setVisible(False)
         print(f"DEBUG: Contact table setup complete, initial visibility: {self.contact_table.isVisible()}")
         
+        # Create horizontal layout container for the three controls
+        # This ensures they're always arranged side by side
+        self.highlight_controls_container = QWidget()
+        highlight_controls_layout = QHBoxLayout(self.highlight_controls_container)
+        highlight_controls_layout.setContentsMargins(0, 0, 0, 0)
+        highlight_controls_layout.setSpacing(10)  # 10px spacing between controls
+        
         # Create "Create Highlight Video" button
         # Try to use button from UI file, otherwise create it
         if hasattr(self.ui, 'pushButtonCreateHighlight'):
@@ -1694,41 +1701,55 @@ class ContactPathViewer(QMainWindow):
             print("DEBUG: Creating new Create Highlight button")
             self.create_highlight_btn = QPushButton("Create Highlight Video")
             self.create_highlight_btn.setFont(QFont('Arial', 12))
-            
-            # Position button below the contact table (200px wide)
-            if hasattr(self.ui, 'outerCourt'):
-                # If table is in outerCourt, position button below it
-                outer_court = self.ui.outerCourt
-                court_rect = outer_court.geometry()
-                table_height = court_rect.height() - 70  # Match table height calculation
-                button_y = table_height + 10  # 10px gap below table
-                button_width = 200  # Fixed 200px width as requested
-                button_height = 50
-                
-                self.create_highlight_btn.setParent(outer_court)
-                # Center the button horizontally (optional) or left-align (x=10)
-                # Let's left-align with 10px margin
-                self.create_highlight_btn.setGeometry(10, button_y, button_width, button_height)
-                print(f"DEBUG: Button positioned at (10, {button_y}, {button_width}, {button_height})")
-            else:
-                # Add button to video_container's vertical layout (below table)
-                if hasattr(self, 'video_container'):
-                    video_layout = self.video_container.layout()
-                    if video_layout:
-                        self.create_highlight_btn.setFixedWidth(200)  # Set 200px width
-                        video_layout.addWidget(self.create_highlight_btn)
-                        print(f"DEBUG: Button added to video_container layout")
-                    else:
-                        print("DEBUG: WARNING - video_container has no layout")
-                else:
-                    print("DEBUG: WARNING - no video_container found")
+            self.create_highlight_btn.setFixedWidth(200)
+            self.create_highlight_btn.setFixedHeight(50)
         
         # Connect signal (works whether button is from UI or created)
         self.create_highlight_btn.clicked.connect(self.create_highlight_video)
         
-        # Hide button by default (shown only in video mode)
-        self.create_highlight_btn.setVisible(False)
-        print(f"DEBUG: Create Highlight button setup complete")
+        # Create checkbox for including title screen
+        self.include_title_checkbox = QCheckBox("Include Title Screen")
+        self.include_title_checkbox.setFont(QFont('Arial', 11))
+        self.include_title_checkbox.setChecked(False)  # Default: don't include
+        
+        # Create "Configure Title Screen" button
+        self.configure_title_btn = QPushButton("Configure Title Screen")
+        self.configure_title_btn.setFont(QFont('Arial', 11))
+        self.configure_title_btn.setFixedWidth(180)
+        self.configure_title_btn.setFixedHeight(50)
+        self.configure_title_btn.clicked.connect(self.open_title_creator)
+        
+        # Add all three controls to the horizontal layout
+        highlight_controls_layout.addWidget(self.create_highlight_btn)
+        highlight_controls_layout.addWidget(self.include_title_checkbox)
+        highlight_controls_layout.addWidget(self.configure_title_btn)
+        highlight_controls_layout.addStretch()  # Push controls to the left
+        
+        # Position the container below the contact table
+        if hasattr(self.ui, 'outerCourt'):
+            outer_court = self.ui.outerCourt
+            court_rect = outer_court.geometry()
+            table_height = court_rect.height() - 70
+            container_y = table_height + 10  # 10px gap below table
+            
+            self.highlight_controls_container.setParent(outer_court)
+            self.highlight_controls_container.setGeometry(10, container_y, court_rect.width() - 20, 50)
+            print(f"DEBUG: Highlight controls container positioned at (10, {container_y}, {court_rect.width() - 20}, 50)")
+        else:
+            # Add to video_container's vertical layout (below table)
+            if hasattr(self, 'video_container'):
+                video_layout = self.video_container.layout()
+                if video_layout:
+                    video_layout.addWidget(self.highlight_controls_container)
+                    print(f"DEBUG: Highlight controls container added to video_container layout")
+                else:
+                    print("DEBUG: WARNING - video_container has no layout")
+            else:
+                print("DEBUG: WARNING - no video_container found")
+        
+        # Hide container by default (shown only in video mode)
+        self.highlight_controls_container.setVisible(False)
+        print(f"DEBUG: Highlight controls container setup complete")
     
     def populate_games_dropdown(self):
         """Populate the games comboBox with all games from the database."""
@@ -1938,9 +1959,9 @@ class ContactPathViewer(QMainWindow):
             if hasattr(self, 'video_container') and self.video_container:
                 self.video_container.setVisible(False)
                 print("DEBUG: Video container visible = False")
-            if hasattr(self, 'create_highlight_btn') and self.create_highlight_btn:
-                self.create_highlight_btn.setVisible(False)
-                print("DEBUG: Create Highlight button visible = False")
+            if hasattr(self, 'highlight_controls_container') and self.highlight_controls_container:
+                self.highlight_controls_container.setVisible(False)
+                print("DEBUG: Highlight controls container visible = False")
             # Make sure court background is drawn
             self.draw_court_background()
         else:  # video mode
@@ -1963,12 +1984,12 @@ class ContactPathViewer(QMainWindow):
                 print(f"DEBUG: Contact table geometry = {self.contact_table.geometry()}")
             else:
                 print("DEBUG: WARNING - contact_table is None!")
-            if hasattr(self, 'create_highlight_btn') and self.create_highlight_btn:
-                self.create_highlight_btn.setVisible(True)
-                self.create_highlight_btn.show()  # Explicitly show
-                self.create_highlight_btn.raise_()  # Bring to front
-                print("DEBUG: Create Highlight button visible = True")
-                print(f"DEBUG: Create Highlight button geometry = {self.create_highlight_btn.geometry()}")
+            if hasattr(self, 'highlight_controls_container') and self.highlight_controls_container:
+                self.highlight_controls_container.setVisible(True)
+                self.highlight_controls_container.show()  # Explicitly show
+                self.highlight_controls_container.raise_()  # Bring to front
+                print("DEBUG: Highlight controls container visible = True")
+                print(f"DEBUG: Highlight controls container geometry = {self.highlight_controls_container.geometry()}")
     
     def display_contacts(self):
         """Display contacts for the selected game with filtering."""
@@ -2523,6 +2544,33 @@ class ContactPathViewer(QMainWindow):
         else:
             QMessageBox.warning(self, "Extraction Failed", message)
     
+    def open_title_creator(self):
+        """Open the highlight title creator GUI."""
+        try:
+            import subprocess
+            import sys
+            from pathlib import Path
+            
+            # Get the path to highlight_title_creator.py (same directory as this file)
+            script_path = Path(__file__).parent / "highlight_title_creator.py"
+            
+            if not script_path.exists():
+                QMessageBox.warning(self, "File Not Found", 
+                                  f"Could not find highlight_title_creator.py at:\n{script_path}")
+                return
+            
+            # Launch the script in a separate process
+            if sys.platform == 'win32':
+                subprocess.Popen([sys.executable, str(script_path)], 
+                                creationflags=subprocess.CREATE_NO_WINDOW)
+            else:
+                subprocess.Popen([sys.executable, str(script_path)])
+            
+            print(f"DEBUG: Opened highlight_title_creator.py")
+            
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to open title creator:\n{str(e)}")
+    
     def create_highlight_video(self):
         """Create a highlight video from selected contacts."""
         if not self.game_id:
@@ -2641,26 +2689,75 @@ class ContactPathViewer(QMainWindow):
                 QMessageBox.warning(self, "Extraction Failed", "Failed to extract any clips!")
                 return
             
-            # Create concat file for ffmpeg
-            concat_file = temp_dir / "concat.txt"
-            with open(concat_file, 'w') as f:
-                for clip_file in clip_files:
-                    # Use forward slashes for ffmpeg compatibility
-                    clip_path_str = str(clip_file).replace('\\', '/')
-                    f.write(f"file '{clip_path_str}'\n")
+            # Check if title screen should be included
+            include_title = (hasattr(self, 'include_title_checkbox') and 
+                           self.include_title_checkbox and 
+                           self.include_title_checkbox.isChecked())
             
-            print(f"DEBUG: Concatenating {len(clip_files)} clips into highlight video")
+            title_video_path = None
+            if include_title:
+                # Look for the title video file (output.mp4 from highlight_title_creator.py)
+                title_video_path = Path("output.mp4")
+                if not title_video_path.exists():
+                    QMessageBox.warning(self, "Title Screen Not Found", 
+                                      "Title screen checkbox is checked, but 'output.mp4' not found.\n"
+                                      "Please create a title screen using 'Configure Title Screen' button first.")
+                    progress.close()
+                    return
             
-            # Concatenate clips using ffmpeg
-            cmd = [
-                'ffmpeg',
-                '-f', 'concat',
-                '-safe', '0',
-                '-i', str(concat_file),
-                '-c', 'copy',
+            # Build list of all input files (title first if included, then all clips)
+            input_files = []
+            if include_title and title_video_path:
+                input_files.append(str(title_video_path.absolute()))
+            
+            # Add all video clips
+            for clip_file in clip_files:
+                input_files.append(str(clip_file))
+            
+            total_inputs = len(input_files)
+            print(f"DEBUG: Concatenating {total_inputs} files ({len(clip_files)} clips" + 
+                  (f" + 1 title screen" if include_title else "") + ") into highlight video")
+            
+            # Build ffmpeg command with filter_complex pattern
+            # Pattern: -i for each file, then filter_complex with fps filters and concat
+            cmd = ['ffmpeg']
+            
+            # Add -i for each input file
+            for input_file in input_files:
+                cmd.extend(['-i', input_file])
+            
+            # Build filter_complex string
+            # For each input: [N:v]fps=30000/1001[vN] to normalize frame rate
+            # Then concat all: [v0][0:a][v1][1:a]... concat=n=total:v=1:a=1[v][a]
+            filter_parts = []
+            concat_inputs = []
+            
+            for i in range(total_inputs):
+                # Add fps filter for each video stream
+                filter_parts.append(f"[{i}:v]fps=30000/1001[v{i}]")
+                # Add to concat inputs: video and audio
+                concat_inputs.append(f"[v{i}][{i}:a]")
+            
+            # Build the concat filter
+            concat_filter = ''.join(concat_inputs) + f" concat=n={total_inputs}:v=1:a=1[v][a]"
+            
+            # Combine all filters
+            filter_complex = ';'.join(filter_parts) + ';' + concat_filter
+            
+            # Add filter_complex and output options
+            cmd.extend([
+                '-filter_complex', filter_complex,
+                '-map', '[v]',
+                '-map', '[a]',
+                '-c:v', 'libx264',
+                '-pix_fmt', 'yuv420p',
+                '-c:a', 'aac',
                 '-y',
                 str(highlight_path)
-            ]
+            ])
+            
+            # Print the ffmpeg command to terminal before executing
+            print(f"DEBUG: Running ffmpeg command: {' '.join(cmd)}")
             
             result = subprocess.run(
                 cmd,
@@ -2691,13 +2788,14 @@ class ContactPathViewer(QMainWindow):
             QMessageBox.warning(self, "Error", f"Error creating highlight video:\n{str(e)}")
         
         finally:
-            # Clean up temporary files
-            import shutil
-            try:
-                shutil.rmtree(temp_dir)
-                print(f"DEBUG: Cleaned up temporary directory: {temp_dir}")
-            except Exception as e:
-                print(f"DEBUG: Failed to clean up temp directory: {e}")
+            # Do NOT clean up temporary files (commented out per user request)
+            # import shutil
+            # try:
+            #     shutil.rmtree(temp_dir)
+            #     print(f"DEBUG: Cleaned up temporary directory: {temp_dir}")
+            # except Exception as e:
+            #     print(f"DEBUG: Failed to clean up temp directory: {e}")
+            print(f"DEBUG: Temporary directory preserved: {temp_dir}")
     
     def open_video_player(self, timecode_ms, contact_info=""):
         """Open video player window at specified timecode."""
