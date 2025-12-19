@@ -3137,9 +3137,9 @@ class ContactPathViewer(QMainWindow):
                 
                 if result == QDialog.DialogCode.Accepted:
                     message_shown[0] = True
-                    # Use QTimer to delay showing message box, ensuring dialog is fully closed
+                    # Use QTimer to delay showing message box and refreshing display, ensuring dialog is fully closed
                     from PySide6.QtCore import QTimer
-                    def show_message():
+                    def refresh_display():
                         # Double-check popup is hidden and edit button disconnected
                         if self.contact_popup:
                             self.contact_popup.hide()
@@ -3148,13 +3148,24 @@ class ContactPathViewer(QMainWindow):
                                     self.contact_popup.edit_button.clicked.disconnect()
                                 except (TypeError, RuntimeError):
                                     pass
-                        QMessageBox.information(self, "Updated", "Contact has been updated. Refresh the display to see changes.")
-                        # Ensure popup stays hidden after message box closes
+                        
+                        # Automatically refresh the display if in drawing mode
+                        if self.display_mode == 'drawing' and self.game_id:
+                            # Refresh the drawing canvas with current filter settings
+                            self.display_contacts()
+                        elif self.display_mode == 'video' and self.game_id:
+                            # Refresh the video mode table
+                            self.display_contacts()
+                        else:
+                            # Fallback: just show message if we can't refresh
+                            QMessageBox.information(self, "Updated", "Contact has been updated. Refresh the display to see changes.")
+                        
+                        # Ensure popup stays hidden after refresh
                         if self.contact_popup:
                             self.contact_popup.hide()
                     
-                    # Delay by 100ms to ensure dialog is fully closed
-                    QTimer.singleShot(100, show_message)
+                    # Delay by 100ms to ensure dialog is fully closed before refreshing
+                    QTimer.singleShot(100, refresh_display)
         
         dialog.finished.connect(on_dialog_finished)
         result = dialog.exec()
@@ -3185,8 +3196,19 @@ class ContactPathViewer(QMainWindow):
                         self.contact_popup.edit_button.clicked.disconnect()
                     except (TypeError, RuntimeError):
                         pass
-            QMessageBox.information(self, "Updated", "Contact has been updated. Refresh the display to see changes.")
-            # Ensure popup stays hidden after message box closes
+            
+            # Automatically refresh the display if in drawing or video mode
+            if self.display_mode == 'drawing' and self.game_id:
+                # Refresh the drawing canvas with current filter settings
+                self.display_contacts()
+            elif self.display_mode == 'video' and self.game_id:
+                # Refresh the video mode table
+                self.display_contacts()
+            else:
+                # Fallback: just show message if we can't refresh
+                QMessageBox.information(self, "Updated", "Contact has been updated. Refresh the display to see changes.")
+            
+            # Ensure popup stays hidden after refresh
             if self.contact_popup:
                 self.contact_popup.hide()
 

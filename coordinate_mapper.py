@@ -109,83 +109,99 @@ class CoordinateMapper(QMainWindow):
         
         # Reduce margins and spacing to minimize unused space
         layout.setContentsMargins(5, 5, 5, 5)  # left, top, right, bottom
-        layout.setSpacing(5)  # Spacing between widgets
+        layout.setSpacing(2)  # Minimal spacing between widgets
         
         # Button bar at the top
         button_layout = QHBoxLayout()
+        button_layout.setContentsMargins(0, 0, 0, 0)  # Remove margins from button layout
+        button_layout.setSpacing(5)  # Minimal spacing between buttons
+        
+        # Compact button style
+        compact_button_style = "padding: 4px 8px; margin: 0px;"
         
         self.load_video_btn = QPushButton("Load Video")
-        self.load_video_btn.setFont(QFont('Arial', 12))
+        self.load_video_btn.setFont(QFont('Arial', 11))
+        self.load_video_btn.setStyleSheet(compact_button_style)
         self.load_video_btn.clicked.connect(self.load_video)
         button_layout.addWidget(self.load_video_btn)
         
         self.set_boundaries_btn = QPushButton("Set Court Boundaries")
-        self.set_boundaries_btn.setFont(QFont('Arial', 12))
+        self.set_boundaries_btn.setFont(QFont('Arial', 11))
+        self.set_boundaries_btn.setStyleSheet(compact_button_style)
         self.set_boundaries_btn.clicked.connect(self.start_set_boundaries)
         button_layout.addWidget(self.set_boundaries_btn)
         
         self.modify_court_btn = QPushButton("Modify Court")
-        self.modify_court_btn.setFont(QFont('Arial', 12))
+        self.modify_court_btn.setFont(QFont('Arial', 11))
+        self.modify_court_btn.setStyleSheet(compact_button_style)
         self.modify_court_btn.clicked.connect(self.start_modify_court)
         self.modify_court_btn.setEnabled(False)  # Disabled until court is set
         button_layout.addWidget(self.modify_court_btn)
         
         self.store_boundaries_btn = QPushButton("Store Court Boundaries")
-        self.store_boundaries_btn.setFont(QFont('Arial', 12))
+        self.store_boundaries_btn.setFont(QFont('Arial', 11))
+        self.store_boundaries_btn.setStyleSheet(compact_button_style)
         self.store_boundaries_btn.clicked.connect(self.store_court_boundaries)
         self.store_boundaries_btn.setEnabled(False)  # Disabled until court is set
         button_layout.addWidget(self.store_boundaries_btn)
         
         self.clear_dots_btn = QPushButton("Clear Dots")
-        self.clear_dots_btn.setFont(QFont('Arial', 12))
+        self.clear_dots_btn.setFont(QFont('Arial', 11))
+        self.clear_dots_btn.setStyleSheet(compact_button_style)
         self.clear_dots_btn.clicked.connect(self.clear_green_dots)
         self.clear_dots_btn.setEnabled(True)  # Always enabled
         button_layout.addWidget(self.clear_dots_btn)
         
         # Score display and buttons
-        button_layout.addSpacing(20)  # Add some space before score section
+        button_layout.addSpacing(10)  # Reduced spacing before score section
         
         self.score_label = QLabel("Score: 0 - 0")
-        self.score_label.setFont(QFont('Arial', 12, QFont.Weight.Bold))
-        self.score_label.setStyleSheet("color: blue; padding: 5px;")
+        self.score_label.setFont(QFont('Arial', 11, QFont.Weight.Bold))
+        self.score_label.setStyleSheet("color: blue; padding: 2px 5px; margin: 0px;")
         button_layout.addWidget(self.score_label)
         
         self.award_point_us_btn = QPushButton("+1 Us")
-        self.award_point_us_btn.setFont(QFont('Arial', 12))
+        self.award_point_us_btn.setFont(QFont('Arial', 11))
+        self.award_point_us_btn.setStyleSheet(compact_button_style)
         self.award_point_us_btn.clicked.connect(lambda: self.award_point('us'))
         self.award_point_us_btn.setEnabled(self.db is not None and self.game_id is not None)
         button_layout.addWidget(self.award_point_us_btn)
         
         self.award_point_them_btn = QPushButton("+1 Them")
-        self.award_point_them_btn.setFont(QFont('Arial', 12))
+        self.award_point_them_btn.setFont(QFont('Arial', 11))
+        self.award_point_them_btn.setStyleSheet(compact_button_style)
         self.award_point_them_btn.clicked.connect(lambda: self.award_point('them'))
         self.award_point_them_btn.setEnabled(self.db is not None and self.game_id is not None)
         button_layout.addWidget(self.award_point_them_btn)
         
         # Substitution and Libero buttons
-        button_layout.addSpacing(20)  # Add some space before substitution section
+        button_layout.addSpacing(10)  # Reduced spacing before substitution section
         
         self.substitution_btn = QPushButton("Substitution")
-        self.substitution_btn.setFont(QFont('Arial', 12))
+        self.substitution_btn.setFont(QFont('Arial', 11))
+        self.substitution_btn.setStyleSheet(compact_button_style)
         self.substitution_btn.clicked.connect(self.show_substitution_dialog)
         self.substitution_btn.setEnabled(self.db is not None and self.game_id is not None)
         button_layout.addWidget(self.substitution_btn)
         
         self.libero_in_btn = QPushButton("Libero IN")
-        self.libero_in_btn.setFont(QFont('Arial', 12))
+        self.libero_in_btn.setFont(QFont('Arial', 11))
+        self.libero_in_btn.setStyleSheet(compact_button_style)
         self.libero_in_btn.clicked.connect(self.show_libero_in_dialog)
         self.libero_in_btn.setEnabled(self.db is not None and self.game_id is not None)
         button_layout.addWidget(self.libero_in_btn)
         
         self.libero_out_btn = QPushButton("Libero OUT")
-        self.libero_out_btn.setFont(QFont('Arial', 12))
+        self.libero_out_btn.setFont(QFont('Arial', 11))
+        self.libero_out_btn.setStyleSheet(compact_button_style)
         self.libero_out_btn.clicked.connect(self.show_libero_out_dialog)
         self.libero_out_btn.setEnabled(self.db is not None and self.game_id is not None)
         button_layout.addWidget(self.libero_out_btn)
         
         # Undo button
         self.undo_btn = QPushButton("Undo")
-        self.undo_btn.setFont(QFont('Arial', 12))
+        self.undo_btn.setFont(QFont('Arial', 11))
+        self.undo_btn.setStyleSheet(compact_button_style)
         self.undo_btn.clicked.connect(self.undo_last_contact)
         # Initial state - will be updated by _update_undo_button_state after initialization
         self.undo_btn.setEnabled(False)
@@ -194,16 +210,18 @@ class CoordinateMapper(QMainWindow):
         button_layout.addStretch()  # Push buttons to the left
         layout.addLayout(button_layout)
         
-        # Undo popup label (below the button layout)
+        # Undo popup label (below the button layout) - set to zero height when empty
         self.undo_popup_label = QLabel("")
-        self.undo_popup_label.setFont(QFont('Arial', 12))
-        self.undo_popup_label.setStyleSheet("color: red;")
+        self.undo_popup_label.setFont(QFont('Arial', 11))
+        self.undo_popup_label.setStyleSheet("color: red; padding: 0px; margin: 0px; max-height: 0px;")
         self.undo_popup_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        self.undo_popup_label.setFixedHeight(0)  # Zero height when empty
         layout.addWidget(self.undo_popup_label)
         
-        # Status label
+        # Status label - reduce spacing
         self.status_label = QLabel("Click 'Set Court Boundaries' to start")
-        self.status_label.setFont(QFont('Arial', 12))
+        self.status_label.setFont(QFont('Arial', 11))
+        self.status_label.setStyleSheet("padding: 2px 0px; margin: 0px;")  # Minimal padding
         layout.addWidget(self.status_label)
         
         # Graphics view for drawing
@@ -1880,10 +1898,14 @@ class CoordinateMapper(QMainWindow):
                 
                 # Show message in red
                 self.undo_popup_label.setText(message)
-                self.undo_popup_label.setStyleSheet("color: red;")
+                self.undo_popup_label.setStyleSheet("color: red; padding: 2px 0px; margin: 0px;")
+                self.undo_popup_label.setFixedHeight(20)  # Expand to show message
                 
                 # Hide message after 1.5 seconds
-                QTimer.singleShot(1500, lambda: self.undo_popup_label.setText(""))
+                def clear_label():
+                    self.undo_popup_label.setText("")
+                    self.undo_popup_label.setFixedHeight(0)  # Collapse when empty
+                QTimer.singleShot(1500, clear_label)
                 
                 # Update score display and undo button state if needed
                 if self.db and self.game_id:

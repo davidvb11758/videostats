@@ -95,6 +95,10 @@ class StatsCalculator:
         if not db.conn:
             db.connect()
         
+        # Compute receive ratings first (if not already computed)
+        print(f"Computing receive ratings for game {game_id} before calculating stats...")
+        self.compute_receive_ratings_for_game(db, game_id)
+        
         cursor = db.conn.cursor()
         
         # Delete existing stats for this game
@@ -327,57 +331,86 @@ class StatsCalculator:
         Returns:
             Rating (0, 1, 2, or 3) or None if cannot be determined
         """
+        print(f"    DEBUG compute_receive_rating: receive_team_id={receive_team_id}, next_type={next_contact_type}, next_team_id={next_contact_team_id}, next_x={next_contact_x}, next_y={next_contact_y}")
+        
         # If no next contact, cannot determine rating
         if next_contact_type is None:
+            print(f"    DEBUG: No next contact type - returning None")
             return None
         
         # Case 1: Next contact is DOWN
         if next_contact_type == 'down':
+            print(f"    DEBUG: Case 1 - Next contact is 'down'")
             # Rating = 0, EXCEPT when down location is within the other team's boundaries
             # Other team's boundaries: x between 0-300, and y > 0 and y < 600
             if next_contact_x is not None and next_contact_y is not None:
+                print(f"    DEBUG: Down contact has coordinates: x={next_contact_x}, y={next_contact_y}")
                 if (0 <= next_contact_x <= 300 and 0 < next_contact_y < 600):
+                    print(f"    DEBUG: Down is in bounds (other team's boundaries) - using lookup table")
                     # Down is in bounds - use lookup table
                     # Map x and y from 0-600 to 0-60 (10% of original, rounded)
                     mapped_x = int(round(next_contact_x * 0.1))
                     mapped_y = int(round(next_contact_y * 0.1))
+                    print(f"    DEBUG: Mapped coordinates: mapped_x={mapped_x}, mapped_y={mapped_y}")
                     
                     # Clamp to valid array indices
                     if self.receive_rating and len(self.receive_rating) > 0:
                         max_y = len(self.receive_rating) - 1
                         max_x = len(self.receive_rating[0]) - 1 if len(self.receive_rating[0]) > 0 else 0
+                        print(f"    DEBUG: Array bounds: max_x={max_x}, max_y={max_y}")
                         mapped_y = min(max(0, mapped_y), max_y)
                         mapped_x = min(max(0, mapped_x), max_x)
+                        print(f"    DEBUG: Clamped coordinates: mapped_x={mapped_x}, mapped_y={mapped_y}")
                         
                         rating = self.receive_rating[mapped_y][mapped_x]
+                        print(f"    DEBUG: Lookup result: rating={rating} from receive_rating[{mapped_y}][{mapped_x}]")
                         return rating
+                    else:
+                        print(f"    DEBUG: WARNING - receive_rating config not available for lookup")
+                else:
+                    print(f"    DEBUG: Down is out of bounds - returning 0")
+            else:
+                print(f"    DEBUG: Down contact missing coordinates - returning 0")
             # Default: rating = 0 for DOWN
             return 0
         
         # Case 2: Next contact is by the other team
         if next_contact_team_id is not None:
             other_team_id = team_them_id if receive_team_id == team_us_id else team_us_id
+            print(f"    DEBUG: Case 2 - Checking if next contact is by other team: other_team_id={other_team_id}, next_team_id={next_contact_team_id}")
             if next_contact_team_id == other_team_id:
+                print(f"    DEBUG: Next contact is by other team - returning 0")
                 return 0
         
         # Case 3: Next contact is by the same team
         if next_contact_team_id == receive_team_id:
+            print(f"    DEBUG: Case 3 - Next contact is by same team")
             if next_contact_x is not None and next_contact_y is not None:
+                print(f"    DEBUG: Same team contact has coordinates: x={next_contact_x}, y={next_contact_y}")
                 # Map x and y from 0-600 to 0-60 (10% of original, rounded)
                 mapped_x = int(round(next_contact_x * 0.1))
                 mapped_y = int(round(next_contact_y * 0.1))
+                print(f"    DEBUG: Mapped coordinates: mapped_x={mapped_x}, mapped_y={mapped_y}")
                 
                 # Clamp to valid array indices
                 if self.receive_rating and len(self.receive_rating) > 0:
                     max_y = len(self.receive_rating) - 1
                     max_x = len(self.receive_rating[0]) - 1 if len(self.receive_rating[0]) > 0 else 0
+                    print(f"    DEBUG: Array bounds: max_x={max_x}, max_y={max_y}")
                     mapped_y = min(max(0, mapped_y), max_y)
                     mapped_x = min(max(0, mapped_x), max_x)
+                    print(f"    DEBUG: Clamped coordinates: mapped_x={mapped_x}, mapped_y={mapped_y}")
                     
                     rating = self.receive_rating[mapped_y][mapped_x]
+                    print(f"    DEBUG: Lookup result: rating={rating} from receive_rating[{mapped_y}][{mapped_x}]")
                     return rating
+                else:
+                    print(f"    DEBUG: WARNING - receive_rating config not available for lookup")
+            else:
+                print(f"    DEBUG: Same team contact missing coordinates")
         
         # Default: cannot determine rating
+        print(f"    DEBUG: Default case - cannot determine rating, returning None")
         return None
     
     def compute_receive_ratings_for_game(self, db: VideoStatsDB, game_id: int):
@@ -387,6 +420,10 @@ class StatsCalculator:
             db: VideoStatsDB database connection
             game_id: The game ID to process
         """
+        print(f"\n{'='*80}")
+        print(f"DEBUG: compute_receive_ratings_for_game called for game_id={game_id}")
+        print(f"{'='*80}")
+        
         if not db.conn:
             db.connect()
         
@@ -401,11 +438,20 @@ class StatsCalculator:
         
         game_result = cursor.fetchone()
         if not game_result:
-            print(f"Game {game_id} not found")
+            print(f"DEBUG: Game {game_id} not found")
             return
         
         team_us_id = game_result['team_us_id']
         team_them_id = game_result['team_them_id']
+        print(f"DEBUG: Team IDs - team_us_id={team_us_id}, team_them_id={team_them_id}")
+        
+        # Check if receive_rating config is loaded
+        if self.receive_rating is None:
+            print("DEBUG: WARNING - receive_rating config is None!")
+        elif len(self.receive_rating) == 0:
+            print("DEBUG: WARNING - receive_rating config is empty!")
+        else:
+            print(f"DEBUG: receive_rating config loaded - {len(self.receive_rating)} rows, {len(self.receive_rating[0]) if self.receive_rating[0] else 0} columns")
         
         # Get all receive contacts for this game, ordered by rally and sequence
         cursor.execute("""
@@ -423,16 +469,21 @@ class StatsCalculator:
         receive_contacts = cursor.fetchall()
         
         if not receive_contacts:
-            print(f"No receive contacts found for game {game_id}")
+            print(f"DEBUG: No receive contacts found for game {game_id}")
             return
+        
+        print(f"DEBUG: Found {len(receive_contacts)} receive contacts to process")
         
         updated_count = 0
         
-        for receive in receive_contacts:
+        for idx, receive in enumerate(receive_contacts):
             contact_id = receive['contact_id']
             rally_id = receive['rally_id']
             sequence_number = receive['sequence_number']
             receive_team_id = receive['receive_team_id']
+            
+            print(f"\nDEBUG: Processing receive contact #{idx+1}/{len(receive_contacts)}")
+            print(f"  contact_id={contact_id}, rally_id={rally_id}, sequence={sequence_number}, receive_team_id={receive_team_id}")
             
             # Find the next contact in the same rally
             cursor.execute("""
@@ -455,6 +506,8 @@ class StatsCalculator:
             next_contact_x = next_contact['x'] if next_contact else None
             next_contact_y = next_contact['y'] if next_contact else None
             
+            print(f"  Next contact: type={next_contact_type}, team_id={next_contact_team_id}, x={next_contact_x}, y={next_contact_y}")
+            
             # Compute rating
             rating = self.compute_receive_rating(
                 receive_team_id=receive_team_id,
@@ -466,19 +519,25 @@ class StatsCalculator:
                 team_them_id=team_them_id
             )
             
+            print(f"  Computed rating: {rating}")
+            
             # Update the contact with the rating
             if rating is not None:
+                print(f"  Updating contact_id={contact_id} with rating={rating}")
                 cursor.execute("""
                     UPDATE contacts
                     SET rating = ?
                     WHERE contact_id = ?
                 """, (rating, contact_id))
                 updated_count += 1
+                print(f"  ✓ Successfully updated contact {contact_id} with rating {rating}")
             else:
-                print(f"Warning: Could not compute rating for contact_id={contact_id}, rally_id={rally_id}, sequence={sequence_number}")
+                print(f"  ✗ WARNING: Could not compute rating for contact_id={contact_id}, rally_id={rally_id}, sequence={sequence_number}")
         
         db.conn.commit()
-        print(f"Updated {updated_count} receive ratings for game {game_id}")
+        print(f"\n{'='*80}")
+        print(f"DEBUG: Updated {updated_count} receive ratings for game {game_id}")
+        print(f"{'='*80}\n")
     
     def compute_receive_ratings_for_all_games(self, db: VideoStatsDB):
         """Compute receive ratings for all games in the database.
