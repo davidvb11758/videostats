@@ -1396,7 +1396,7 @@ class ClickableGraphicsScene(QGraphicsScene):
 class ContactPathViewer(QMainWindow):
     """Main window for viewing contact paths."""
     
-    def __init__(self, ui_widget, db: VideoStatsDB):
+    def __init__(self, ui_widget, db: VideoStatsDB, game_id=None):
         super().__init__()
         
         # Copy properties from loaded UI
@@ -1416,6 +1416,7 @@ class ContactPathViewer(QMainWindow):
         self.game_id = None
         self.team_us_id = None
         self.team_them_id = None
+        self.initial_game_id = game_id  # Store initial game_id for later selection
         
         # Graphics scene for drawing contacts
         self.scene = None
@@ -1452,6 +1453,10 @@ class ContactPathViewer(QMainWindow):
         self.setup_contact_table()
         self.populate_games_dropdown()
         self.connect_signals()
+        
+        # If game_id was provided, select it in the combo box
+        if self.initial_game_id is not None:
+            self.select_game_by_id(self.initial_game_id)
         
         # Initialize display mode UI (default is drawing mode)
         self.update_display_mode_ui()
@@ -1927,6 +1932,27 @@ class ContactPathViewer(QMainWindow):
             
             # Populate player list for our team
             self.populate_player_list()
+    
+    def select_game_by_id(self, game_id):
+        """Select a game in the combo box by game_id."""
+        if not hasattr(self.ui, 'comboBox'):
+            return
+        
+        combo = self.ui.comboBox
+        # Find the index that matches the game_id
+        for i in range(combo.count()):
+            item_data = combo.itemData(i, Qt.UserRole)
+            if item_data and item_data.get('game_id') == game_id:
+                # Temporarily block signals to avoid triggering on_game_selected during setup
+                combo.blockSignals(True)
+                combo.setCurrentIndex(i)
+                combo.blockSignals(False)
+                # Manually trigger the selection handler
+                self.on_game_selected(i)
+                return
+        
+        # If game_id not found, log a warning
+        print(f"DEBUG: Game ID {game_id} not found in combo box")
     
     def on_display_mode_changed(self):
         """Handle display mode radio button changes."""
