@@ -23,12 +23,21 @@ class LineupManager:
         if not db.conn:
             db.connect()
     
-    def _log_event(self, team_id: int, event_type: str, payload: dict):
-        """Log an event to the events table."""
+    def _log_event(self, team_id: int, event_type: str, payload: dict, game_id: Optional[int] = None):
+        """Log an event to the events table.
+        
+        Args:
+            team_id: Team ID
+            event_type: Type of event
+            payload: Event payload dictionary
+            game_id: Game ID (required)
+        """
+        if game_id is None:
+            raise ValueError("game_id is required for logging events")
         cursor = self.db.conn.cursor()
         cursor.execute(
-            "INSERT INTO events (team_id, event_type, payload) VALUES (?, ?, ?)",
-            (team_id, event_type, json.dumps(payload))
+            "INSERT INTO events (game_id, team_id, event_type, payload) VALUES (?, ?, ?, ?)",
+            (game_id, team_id, event_type, json.dumps(payload))
         )
         self.db.conn.commit()
     
@@ -52,6 +61,21 @@ class LineupManager:
                 placed_at=datetime.fromisoformat(row[4]) if isinstance(row[4], str) else row[4]
             )
         return lineup
+    
+    def _get_active_lineup_snapshot(self, game_id: int, team_id: int) -> dict:
+        """Get current active lineup as a serializable snapshot dictionary.
+        
+        Returns a dict with position -> {player_id, role_code, is_server} for JSON serialization.
+        """
+        lineup = self._get_active_lineup(game_id, team_id)
+        snapshot = {}
+        for pos, entry in lineup.items():
+            snapshot[str(pos)] = {
+                'player_id': entry.player_id,
+                'role_code': entry.role_code,
+                'is_server': entry.is_server
+            }
+        return snapshot
     
     def _get_rotation_state(self, game_id: int, team_id: int) -> Optional[RotationState]:
         """Get current rotation state for team."""
@@ -78,6 +102,21 @@ class LineupManager:
             serving=bool(row[2]),
             term_of_service_start=term_start
         )
+    
+    def _get_rotation_state_snapshot(self, game_id: int, team_id: int) -> Optional[dict]:
+        """Get current rotation state as a serializable snapshot dictionary.
+        
+        Returns a dict with rotation_order, rotation_index, serving, term_of_service_start for JSON serialization.
+        """
+        state = self._get_rotation_state(game_id, team_id)
+        if not state:
+            return None
+        return {
+            'rotation_order': state.rotation_order,
+            'rotation_index': state.rotation_index,
+            'serving': state.serving,
+            'term_of_service_start': state.term_of_service_start.isoformat() if state.term_of_service_start else None
+        }
     
     def _get_player_role(self, player_id: int) -> Optional[str]:
         """Get player's role_code from players table."""
@@ -224,7 +263,7 @@ class LineupManager:
                 'lineup': lineup_snapshot,
                 'serving': serving,
                 'rotation_order': DEFAULT_ROTATION_ORDER
-            })
+            }, game_id)
             
             self.db.conn.commit()
             
@@ -248,6 +287,10 @@ class LineupManager:
             raise ValueError("Cannot rotate: no rotation state found")
         
         try:
+            # Get snapshots before rotation
+            active_lineup_snapshot_before = self._get_active_lineup_snapshot(game_id, team_id)
+            rotation_state_snapshot_before = self._get_rotation_state_snapshot(game_id, team_id)
+            
             # Compute new lineup: each player moves to next position
             new_lineup = {}
             for old_pos, entry in lineup.items():
@@ -278,19 +321,18 @@ class LineupManager:
             # Run role adjustment check
             self.role_adjustment_check(game_id, team_id)
             
-            # Log rotation event
-            old_lineup_snapshot = {pos: {'player_id': entry.player_id, 'role_code': entry.role_code}
-                                  for pos, entry in lineup.items()}
-            # Refresh lineup after potential libero removal
-            current_lineup = self._get_active_lineup(game_id, team_id)
-            new_lineup_snapshot = {pos: {'player_id': entry.player_id, 'role_code': entry.role_code}
-                                  for pos, entry in current_lineup.items()}
+            # Get snapshots after rotation (and role adjustment)
+            active_lineup_snapshot_after = self._get_active_lineup_snapshot(game_id, team_id)
+            rotation_state_snapshot_after = self._get_rotation_state_snapshot(game_id, team_id)
             
+            # Log rotation event with snapshots
             self._log_event(team_id, 'rotation', {
-                'old_lineup': old_lineup_snapshot,
-                'new_lineup': new_lineup_snapshot,
+                'active_lineup_snapshot_before': active_lineup_snapshot_before,
+                'active_lineup_snapshot_after': active_lineup_snapshot_after,
+                'rotation_state_snapshot_before': rotation_state_snapshot_before,
+                'rotation_state_snapshot_after': rotation_state_snapshot_after,
                 'rotation_index': new_rotation_index
-            })
+            }, game_id)
             
             self.db.conn.commit()
             
@@ -350,7 +392,7 @@ class LineupManager:
                 'position': 1,
                 'player_id': server_entry.player_id,
                 'serving': True
-            })
+            }, game_id)
         
         self.db.conn.commit()
     
@@ -424,6 +466,9 @@ class LineupManager:
         in_role = self._get_player_role(in_player_id)
         
         try:
+            # Get snapshot of active_lineup before substitution
+            active_lineup_snapshot_before = self._get_active_lineup_snapshot(game_id, team_id)
+            
             # Update active_lineup
             in_role_normalized = self._normalize_role_code(in_role) if in_role else 'OH'
             cursor.execute("""
@@ -442,18 +487,25 @@ class LineupManager:
                 (game_id, team_id, out_player_id, in_player_id, out_position, in_position, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
             """, (game_id, team_id, out_player_id, in_player_id, target_position, target_position, datetime.now(timezone.utc)))
+            substitution_id = cursor.lastrowid
             
             # Run role adjustment check
             self.role_adjustment_check(game_id, team_id)
             
-            # Log substitution event
+            # Get snapshot of active_lineup after substitution (and role adjustment)
+            active_lineup_snapshot_after = self._get_active_lineup_snapshot(game_id, team_id)
+            
+            # Log substitution event with snapshots
             self._log_event(team_id, 'substitution', {
+                'substitution_id': substitution_id,
                 'out_player_id': out_player_id,
                 'in_player_id': in_player_id,
                 'position': target_position,
                 'out_role': self._get_player_role(out_player_id),
-                'in_role': in_role_normalized
-            })
+                'in_role': in_role_normalized,
+                'active_lineup_snapshot_before': active_lineup_snapshot_before,
+                'active_lineup_snapshot_after': active_lineup_snapshot_after
+            }, game_id)
             
             self.db.conn.commit()
             
@@ -489,6 +541,9 @@ class LineupManager:
             raise ValueError(f"Player {libero_id} is not a libero (role: {libero_role})")
         
         try:
+            # Get snapshot of active_lineup before libero action
+            active_lineup_snapshot_before = self._get_active_lineup_snapshot(game_id, team_id)
+            
             if action == 'enter':
                 # Validate replaced player is on court at this position
                 cursor.execute("""
@@ -541,17 +596,24 @@ class LineupManager:
                 (game_id, team_id, libero_id, replaced_player_id, replaced_position, action, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
             """, (game_id, team_id, libero_id, replaced_player_id, replaced_position, action, datetime.now(timezone.utc)))
+            libero_action_id = cursor.lastrowid
             
             # Run role adjustment check
             self.role_adjustment_check(game_id, team_id)
             
-            # Log libero event
+            # Get snapshot of active_lineup after libero action (and role adjustment)
+            active_lineup_snapshot_after = self._get_active_lineup_snapshot(game_id, team_id)
+            
+            # Log libero event with snapshots
             self._log_event(team_id, 'libero', {
+                'libero_action_id': libero_action_id,
                 'action': action,
                 'libero_id': libero_id,
                 'replaced_player_id': replaced_player_id,
-                'position': replaced_position
-            })
+                'position': replaced_position,
+                'active_lineup_snapshot_before': active_lineup_snapshot_before,
+                'active_lineup_snapshot_after': active_lineup_snapshot_after
+            }, game_id)
             
             self.db.conn.commit()
             
@@ -611,14 +673,14 @@ class LineupManager:
         """
         cursor = self.db.conn.cursor()
         
-        # Find the initial_setup event (should be the first one)
+        # Find the initial_setup event for this game (should be the first one)
         cursor.execute("""
             SELECT payload, created_at
             FROM events
-            WHERE team_id = ? AND event_type = 'initial_setup'
+            WHERE game_id = ? AND team_id = ? AND event_type = 'initial_setup'
             ORDER BY created_at ASC
             LIMIT 1
-        """, (team_id,))
+        """, (game_id, team_id))
         
         result = cursor.fetchone()
         if not result:
@@ -641,15 +703,24 @@ class LineupManager:
             if not game_id:
                 raise ValueError("game_id is required to restore initial lineup")
             
-            # Clear current active lineup
+            # Get current active lineup players for this game before clearing
+            cursor.execute("""
+                SELECT player_id FROM active_lineup 
+                WHERE game_id = ? AND team_id = ?
+            """, (game_id, team_id))
+            current_active_players = [row[0] for row in cursor.fetchall()]
+            
+            # Clear current active lineup for this game only
             cursor.execute("DELETE FROM active_lineup WHERE game_id = ? AND team_id = ?", (game_id, team_id))
             
-            # Mark all players from this team as inactive first
-            cursor.execute("""
-                UPDATE players 
-                SET is_active = 0 
-                WHERE team_id = ?
-            """, (team_id,))
+            # Mark only players who were active in THIS game as inactive
+            if current_active_players:
+                placeholders = ','.join('?' * len(current_active_players))
+                cursor.execute(f"""
+                    UPDATE players 
+                    SET is_active = 0 
+                    WHERE player_id IN ({placeholders})
+                """, current_active_players)
             
             # Restore initial lineup
             now = datetime.now(timezone.utc)
@@ -696,5 +767,91 @@ class LineupManager:
             
         except Exception as e:
             self.db.conn.rollback()
-            raise ValueError(f"Failed to restore initial lineup: {e}")
+            raise
+    
+    def _restore_active_lineup_from_snapshot(self, game_id: int, team_id: int, snapshot: dict):
+        """Restore active_lineup from a snapshot dictionary.
+        
+        Args:
+            game_id: Game ID
+            team_id: Team ID
+            snapshot: Dictionary with position -> {player_id, role_code, is_server}
+        """
+        cursor = self.db.conn.cursor()
+        
+        # Clear current active lineup for this game/team
+        cursor.execute("DELETE FROM active_lineup WHERE game_id = ? AND team_id = ?", (game_id, team_id))
+        
+        # Mark all players from this team as inactive first
+        cursor.execute("""
+            UPDATE players 
+            SET is_active = 0 
+            WHERE team_id = ?
+        """, (team_id,))
+        
+        # Restore lineup from snapshot
+        now = datetime.now(timezone.utc)
+        for pos_str, player_data in snapshot.items():
+            pos = int(pos_str)
+            player_id = player_data['player_id']
+            role_code = player_data.get('role_code', 'OH')
+            is_server = player_data.get('is_server', False)
+            
+            cursor.execute("""
+                INSERT INTO active_lineup (game_id, team_id, position_number, player_id, role_code, is_server, placed_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (game_id, team_id, pos, player_id, role_code, 1 if is_server else 0, now))
+            
+            # Mark player as active
+            self._update_player_active(player_id, True)
+    
+    def _restore_rotation_state_from_snapshot(self, game_id: int, team_id: int, snapshot: dict):
+        """Restore rotation_state from a snapshot dictionary.
+        
+        Args:
+            game_id: Game ID
+            team_id: Team ID
+            snapshot: Dictionary with rotation_order, rotation_index, serving, term_of_service_start
+        """
+        cursor = self.db.conn.cursor()
+        
+        rotation_order = snapshot.get('rotation_order', DEFAULT_ROTATION_ORDER)
+        rotation_index = snapshot.get('rotation_index', 0)
+        serving = snapshot.get('serving', False)
+        term_start_str = snapshot.get('term_of_service_start')
+        
+        term_start = None
+        if term_start_str:
+            try:
+                term_start = datetime.fromisoformat(term_start_str) if isinstance(term_start_str, str) else term_start_str
+            except (ValueError, TypeError):
+                term_start = None
+        
+        rotation_order_json = json.dumps(rotation_order)
+        
+        cursor.execute("""
+            INSERT OR REPLACE INTO rotation_state 
+            (game_id, team_id, rotation_order, rotation_index, serving, term_of_service_start)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (game_id, team_id, rotation_order_json, rotation_index, 1 if serving else 0, term_start))
+    
+    def _delete_substitution(self, substitution_id: int):
+        """Delete a substitution record.
+        
+        Args:
+            substitution_id: Substitution ID to delete
+        """
+        cursor = self.db.conn.cursor()
+        cursor.execute("DELETE FROM substitutions WHERE id = ?", (substitution_id,))
+        self.db.conn.commit()
+    
+    def _delete_libero_action(self, libero_action_id: int):
+        """Delete a libero action record.
+        
+        Args:
+            libero_action_id: Libero action ID to delete
+        """
+        cursor = self.db.conn.cursor()
+        cursor.execute("DELETE FROM libero_actions WHERE id = ?", (libero_action_id,))
+        self.db.conn.commit()
 

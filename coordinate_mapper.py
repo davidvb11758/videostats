@@ -236,6 +236,8 @@ class CoordinateMapper(QMainWindow):
         # Enable scrolling
         self.view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        # Set focus policy so view can receive keyboard focus for arrow key navigation
+        self.view.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         layout.addWidget(self.view)
         
         # Coordinate display label
@@ -407,23 +409,16 @@ class CoordinateMapper(QMainWindow):
                 self.db.connect()
             cursor = self.db.conn.cursor()
             
-            # Find the most recent rally
+            # Check if there are any events (any type) for this game, excluding initial_setup
             cursor.execute("""
-                SELECT rally_id 
-                FROM rallies 
-                WHERE game_id = ?
-                ORDER BY rally_id DESC
-                LIMIT 1
+                SELECT COUNT(*) 
+                FROM events 
+                WHERE game_id = ? AND event_type != 'initial_setup'
             """, (self.game_id,))
             result = cursor.fetchone()
-            
-            if result:
-                rally_id = result[0]
-                last_contact = self.db.get_last_contact(rally_id)
-                return last_contact is not None
-            return False
+            return result[0] > 0 if result else False
         except Exception as e:
-            print(f"Error checking for contacts to undo: {e}")
+            print(f"Error checking for events to undo: {e}")
             return False
     
     def award_point(self, team: str):
@@ -501,7 +496,10 @@ class CoordinateMapper(QMainWindow):
             self.status_label.setText(f"Point awarded to {team_name}! Score: {self.score_us} - {self.score_them}")
             
             print(f"DEBUG: Point awarded to {team_name} (team_id={point_winner_id}). New score: {self.score_us} - {self.score_them}")
-            
+            # Set focus on the view so right arrow key works immediately
+            # The view handles keyboard events, so it needs focus for arrow keys to work
+            if self.view:
+                self.view.setFocus()
         except Exception as e:
             error_msg = f"Error awarding point: {str(e)}"
             self.status_label.setText(error_msg)
@@ -664,10 +662,10 @@ class CoordinateMapper(QMainWindow):
             event.accept()
             return True
         elif event.key() == Qt.Key.Key_Right:
-            # Fast-forward 5 seconds on right arrow (works when playing or paused)
+            # Fast-forward 3 seconds on right arrow (works when playing or paused)
             if self.video_loaded:
                 current_pos = self.media_player.position()
-                new_pos = current_pos + 5000  # 5 seconds in milliseconds
+                new_pos = current_pos + 3000  # 3 seconds in milliseconds
                 duration = self.media_player.duration()
                 if duration > 0 and new_pos > duration:
                     new_pos = duration
@@ -676,10 +674,10 @@ class CoordinateMapper(QMainWindow):
             event.accept()
             return True
         elif event.key() == Qt.Key.Key_Left:
-            # Rewind 5 seconds on left arrow (works when playing or paused)
+            # Rewind 2 seconds on left arrow (works when playing or paused)
             if self.video_loaded:
                 current_pos = self.media_player.position()
-                new_pos = max(0, current_pos - 5000)  # 5 seconds in milliseconds
+                new_pos = max(0, current_pos - 2000)  # 2 seconds in milliseconds
                 self.media_player.setPosition(new_pos)
                 print(f"DEBUG: Rewind from {current_pos}ms to {new_pos}ms")
             event.accept()
@@ -1876,11 +1874,52 @@ class CoordinateMapper(QMainWindow):
         dialog.exec()
     
     def undo_last_contact(self):
-        """Undo the most recent contact by calling parent DataEntryWindow's undo method."""
+        """Undo the most recent event by calling parent DataEntryWindow's undo method."""
         # Check if we have a parent DataEntryWindow with undo capability
         parent = self.parent()
-        if parent and hasattr(parent, 'undo_last_contact'):
-            # Call parent's undo method
+        if parent and hasattr(parent, 'undo_last_event'):
+            # Call parent's unified undo method
+            result = parent.undo_last_event()
+            
+            if result:
+                # Result can be a tuple (player_name, player_number, event_description) or similar
+                # Handle both contact events (with player info) and other events (with description)
+                if isinstance(result, tuple) and len(result) >= 3:
+                    player_name, player_number, event_description = result[0], result[1], result[2]
+                    
+                    # Build message - prefer player info if available, otherwise use description
+                    if player_name and player_number:
+                        message = f"{player_name} ({player_number}) - {event_description}"
+                    elif player_number:
+                        message = f"Player {player_number} - {event_description}"
+                    elif player_name:
+                        message = f"{player_name} - {event_description}"
+                    else:
+                        message = event_description
+                else:
+                    # Fallback: use result as-is if it's a string
+                    message = str(result) if result else "Event undone"
+                
+                # Show message in red
+                self.undo_popup_label.setText(message)
+                self.undo_popup_label.setStyleSheet("color: red; padding: 2px 0px; margin: 0px;")
+                self.undo_popup_label.setFixedHeight(20)  # Expand to show message
+                
+                # Hide message after 1.5 seconds
+                def clear_label():
+                    self.undo_popup_label.setText("")
+                    self.undo_popup_label.setFixedHeight(0)  # Collapse when empty
+                QTimer.singleShot(1500, clear_label)
+                
+                # Update score display and undo button state if needed
+                if self.db and self.game_id:
+                    self._load_score()
+                    self._update_undo_button_state()
+            else:
+                # No event to undo
+                self.status_label.setText("No event to undo")
+        elif parent and hasattr(parent, 'undo_last_contact'):
+            # Fallback to old method for backward compatibility
             result = parent.undo_last_contact()
             
             if result:

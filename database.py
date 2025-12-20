@@ -241,8 +241,9 @@ class VideoStatsDB:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                game_id INTEGER NOT NULL REFERENCES games(game_id),
                 team_id INTEGER NOT NULL REFERENCES teams(team_id),
-                event_type TEXT NOT NULL CHECK(event_type IN ('rotation', 'substitution', 'libero', 'server_change', 'initial_setup')),
+                event_type TEXT NOT NULL CHECK(event_type IN ('rotation', 'substitution', 'libero', 'server_change', 'initial_setup', 'contact', 'point_awarded')),
                 payload TEXT NOT NULL, -- JSON
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -293,6 +294,18 @@ class VideoStatsDB:
             # Set default game_id for existing records
             cursor.execute("""
                 UPDATE libero_actions 
+                SET game_id = (SELECT game_id FROM games ORDER BY game_id DESC LIMIT 1)
+                WHERE game_id IS NULL
+            """)
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+        
+        # Migration: Add game_id column to events table if it doesn't exist (for existing databases)
+        try:
+            cursor.execute("ALTER TABLE events ADD COLUMN game_id INTEGER REFERENCES games(game_id)")
+            # Set default game_id for existing records (use most recent game or NULL)
+            cursor.execute("""
+                UPDATE events 
                 SET game_id = (SELECT game_id FROM games ORDER BY game_id DESC LIMIT 1)
                 WHERE game_id IS NULL
             """)
@@ -435,6 +448,54 @@ class VideoStatsDB:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_active_lineup_player ON active_lineup(player_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_rotation_state_game ON rotation_state(game_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_rotation_state_team ON rotation_state(team_id)")
+        # Migration: Update events table CHECK constraint to include new event types (contact, point_awarded)
+        # SQLite doesn't support ALTER TABLE for CHECK constraints, so we need to recreate the table if needed
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='events'")
+        if cursor.fetchone():
+            cursor.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='events'")
+            result = cursor.fetchone()
+            if result and result[0]:
+                sql_def = result[0]
+                # Check if constraint doesn't include new event types
+                if "'contact'" not in sql_def or "'point_awarded'" not in sql_def:
+                    print("Migrating events table to support new event types (contact, point_awarded)...")
+                    try:
+                        # Create new table with updated constraint
+                        cursor.execute("""
+                            CREATE TABLE events_new (
+                                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                game_id INTEGER NOT NULL REFERENCES games(game_id),
+                                team_id INTEGER NOT NULL REFERENCES teams(team_id),
+                                event_type TEXT NOT NULL CHECK(event_type IN ('rotation', 'substitution', 'libero', 'server_change', 'initial_setup', 'contact', 'point_awarded')),
+                                payload TEXT NOT NULL,
+                                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                            )
+                        """)
+                        
+                        # Copy all data from old table
+                        cursor.execute("""
+                            INSERT INTO events_new 
+                            (id, game_id, team_id, event_type, payload, created_at)
+                            SELECT id, game_id, team_id, event_type, payload, created_at
+                            FROM events
+                        """)
+                        
+                        # Drop old table and rename new one
+                        cursor.execute("DROP TABLE events")
+                        cursor.execute("ALTER TABLE events_new RENAME TO events")
+                        
+                        # Recreate indexes
+                        cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_game ON events(game_id)")
+                        cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_team ON events(team_id)")
+                        cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type)")
+                        
+                        self.conn.commit()
+                        print("Events table migrated successfully!")
+                    except Exception as e:
+                        self.conn.rollback()
+                        print(f"Migration of events table failed: {e}. You may need to manually migrate the database.")
+        
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_game ON events(game_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_team ON events(team_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_substitutions_team ON substitutions(team_id)")

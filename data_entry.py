@@ -3163,6 +3163,31 @@ class DataEntryWindow(QMainWindow):
             
             print(f"DEBUG RECORD: *** SUCCESS! Contact saved with contact_id={contact_id} ***")
             
+            # Log contact event for undo functionality
+            contact_event_payload = {
+                "contact_id": contact_id,
+                "rally_id": self.current_rally_id,
+                "sequence_number": self.current_sequence,
+                "player_id": player_id,
+                "contact_type": contact_type,
+                "team_id": team_id,
+                "x": x_coord,
+                "y": y_coord,
+                "timecode": timecode_ms,
+                "outcome": outcome,
+                "rating": None  # Rating is set separately if available
+            }
+            # Get rating if it exists
+            if not self.db.conn:
+                self.db.connect()
+            cursor = self.db.conn.cursor()
+            cursor.execute("SELECT rating FROM contacts WHERE contact_id = ?", (contact_id,))
+            rating_result = cursor.fetchone()
+            if rating_result and rating_result[0] is not None:
+                contact_event_payload["rating"] = rating_result[0]
+            
+            self.lineup_manager._log_event(team_id, 'contact', contact_event_payload, self.game_id)
+            
             # If this is a "down" contact, check if the previous contact was a block
             # If so, update the block's outcome to "stuff"
             if contact_type == "down":
@@ -3223,9 +3248,12 @@ class DataEntryWindow(QMainWindow):
             self._recording_contact = False
             QMessageBox.critical(self, "Database Error", f"Failed to record contact:\n{str(e)}")
     
-    def undo_last_contact(self):
-        """Remove the most recent contact from the database and restore state.
+    def _undo_contact_by_id(self, contact_id: int):
+        """Undo a contact by ID. This is the core contact deletion logic.
         
+        Args:
+            contact_id: The contact ID to delete
+            
         Returns:
             Tuple (player_name, player_number, contact_type) for popup display, or None if failed/no contact
         """
@@ -3237,38 +3265,23 @@ class DataEntryWindow(QMainWindow):
         
         cursor = self.db.conn.cursor()
         
-        # Find the rally to undo from
-        rally_id_to_use = None
-        if self.rally_in_progress and self.current_rally_id:
-            rally_id_to_use = self.current_rally_id
-        else:
-            # Find the most recent rally (may be ended or incomplete)
-            cursor.execute("""
-                SELECT rally_id 
-                FROM rallies 
-                WHERE game_id = ?
-                ORDER BY rally_id DESC
-                LIMIT 1
-            """, (self.game_id,))
-            result = cursor.fetchone()
-            if result:
-                rally_id_to_use = result[0]
-        
-        if not rally_id_to_use:
+        # Get contact details
+        cursor.execute("""
+            SELECT contact_id, rally_id, sequence_number, player_id, contact_type, team_id, outcome
+            FROM contacts
+            WHERE contact_id = ?
+        """, (contact_id,))
+        contact_row = cursor.fetchone()
+        if not contact_row:
             return None
         
-        # Get the last contact in this rally
-        last_contact = self.db.get_last_contact(rally_id_to_use)
-        if not last_contact:
-            return None
-        
-        contact_id = last_contact[0]
-        rally_id = last_contact[1]
-        sequence_number = last_contact[2]
-        player_id = last_contact[3]
-        contact_type = last_contact[4]
-        team_id = last_contact[5]
-        outcome = last_contact[8]
+        contact_id = contact_row[0]
+        rally_id = contact_row[1]
+        sequence_number = contact_row[2]
+        player_id = contact_row[3]
+        contact_type = contact_row[4]
+        team_id = contact_row[5]
+        outcome = contact_row[6]
         
         # Get player info for popup message
         player_name = None
@@ -3363,12 +3376,11 @@ class DataEntryWindow(QMainWindow):
                     self.current_rally_id = None
             else:
                 # Rally was ended, but we un-ended it, so restore rally_in_progress
-                if rally_id_to_use == rally_id:
-                    self.current_rally_id = rally_id
-                    self.rally_in_progress = True
-                    self.current_sequence = self.db.get_current_rally_sequence(rally_id) - 1
-                    if self.current_sequence < 1:
-                        self.current_sequence = 0
+                self.current_rally_id = rally_id
+                self.rally_in_progress = True
+                self.current_sequence = self.db.get_current_rally_sequence(rally_id) - 1
+                if self.current_sequence < 1:
+                    self.current_sequence = 0
         
         # Restore opponent_contact_count
         # If undone contact was by team_us, recalculate opponent_contact_count
@@ -3398,6 +3410,310 @@ class DataEntryWindow(QMainWindow):
         
         # Return player info for popup display
         return (player_name, player_number, contact_type)
+    
+    def undo_last_contact(self):
+        """Remove the most recent contact from the database and restore state.
+        
+        Returns:
+            Tuple (player_name, player_number, contact_type) for popup display, or None if failed/no contact
+        """
+        if not self.game_id:
+            return None
+        
+        if not self.db.conn:
+            self.db.connect()
+        
+        cursor = self.db.conn.cursor()
+        
+        # Find the rally to undo from
+        rally_id_to_use = None
+        if self.rally_in_progress and self.current_rally_id:
+            rally_id_to_use = self.current_rally_id
+        else:
+            # Find the most recent rally (may be ended or incomplete)
+            cursor.execute("""
+                SELECT rally_id 
+                FROM rallies 
+                WHERE game_id = ?
+                ORDER BY rally_id DESC
+                LIMIT 1
+            """, (self.game_id,))
+            result = cursor.fetchone()
+            if result:
+                rally_id_to_use = result[0]
+        
+        if not rally_id_to_use:
+            return None
+        
+        # Get the last contact in this rally
+        last_contact = self.db.get_last_contact(rally_id_to_use)
+        if not last_contact:
+            return None
+        
+        contact_id = last_contact[0]
+        
+        # Use the core deletion logic
+        return self._undo_contact_by_id(contact_id)
+    
+    def undo_last_event(self):
+        """Unified undo method that undoes the most recent event (any type) in chronological order.
+        
+        Returns:
+            Tuple (player_name, player_number, contact_type) or event description for popup display, or None if failed/no event
+        """
+        if not self.game_id:
+            return None
+        
+        if not self.db.conn:
+            self.db.connect()
+        
+        cursor = self.db.conn.cursor()
+        
+        # Find the most recent event (any type) for this game, excluding initial_setup
+        cursor.execute("""
+            SELECT id, team_id, event_type, payload, created_at
+            FROM events
+            WHERE game_id = ? AND event_type != 'initial_setup'
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+        """, (self.game_id,))
+        
+        event_result = cursor.fetchone()
+        if not event_result:
+            return None
+        
+        event_id, team_id, event_type, payload_json, created_at = event_result
+        
+        # Parse payload
+        try:
+            payload = json.loads(payload_json) if isinstance(payload_json, str) else payload_json
+        except json.JSONDecodeError:
+            print(f"ERROR: Failed to parse event payload for event {event_id}")
+            return None
+        
+        # Call appropriate undo handler based on event type
+        result = None
+        try:
+            if event_type == 'contact':
+                result = self._undo_contact_event(payload)
+            elif event_type == 'point_awarded':
+                result = self._undo_point_awarded_event(payload)
+            elif event_type == 'substitution':
+                result = self._undo_substitution_event(payload, team_id)
+            elif event_type == 'libero':
+                result = self._undo_libero_event(payload, team_id)
+            elif event_type == 'rotation':
+                result = self._undo_rotation_event(payload, team_id)
+            elif event_type == 'server_change':
+                # Server change undo not implemented yet, skip for now
+                print(f"DEBUG: Server change undo not implemented, skipping event {event_id}")
+                return None
+            else:
+                print(f"WARNING: Unknown event type '{event_type}' for event {event_id}")
+                return None
+            
+            # If undo was successful, delete the event record
+            if result is not None:
+                cursor.execute("DELETE FROM events WHERE id = ?", (event_id,))
+                self.db.conn.commit()
+            
+            return result
+            
+        except Exception as e:
+            self.db.conn.rollback()
+            print(f"ERROR: Failed to undo event {event_id} (type: {event_type}): {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+    
+    def _undo_contact_event(self, payload: dict):
+        """Undo a contact event.
+        
+        Args:
+            payload: Event payload containing contact_id and other contact info
+            
+        Returns:
+            Tuple (player_name, player_number, contact_type) for popup display
+        """
+        contact_id = payload.get('contact_id')
+        if not contact_id:
+            print("ERROR: contact_id not found in contact event payload")
+            return None
+        
+        # Use the existing contact deletion logic
+        return self._undo_contact_by_id(contact_id)
+    
+    def _undo_point_awarded_event(self, payload: dict):
+        """Undo a point_awarded event.
+        
+        Args:
+            payload: Event payload containing rally_id, point_winner_id, score info, etc.
+            
+        Returns:
+            String description for popup display
+        """
+        rally_id = payload.get('rally_id')
+        point_winner_id = payload.get('point_winner_id')
+        score_us = payload.get('score_us')
+        score_them = payload.get('score_them')
+        auto_rotated = payload.get('auto_rotated', False)
+        
+        if not rally_id:
+            print("ERROR: rally_id not found in point_awarded event payload")
+            return None
+        
+        # Un-end the rally
+        self.db.unend_rally(rally_id)
+        print(f"DEBUG: Un-ended rally {rally_id}")
+        
+        # Restore score
+        if score_us is not None:
+            self.score_us = score_us
+        if score_them is not None:
+            self.score_them = score_them
+        
+        # If auto_rotation occurred, reverse it using the stored snapshots
+        if auto_rotated and payload.get('rotation_state_before') and payload.get('active_lineup_snapshot_before'):
+            rotation_state_before = payload.get('rotation_state_before')
+            active_lineup_snapshot_before = payload.get('active_lineup_snapshot_before')
+            # Restore to state before rotation
+            self.lineup_manager._restore_active_lineup_from_snapshot(self.game_id, point_winner_id, active_lineup_snapshot_before)
+            self.lineup_manager._restore_rotation_state_from_snapshot(self.game_id, point_winner_id, rotation_state_before)
+            # Update UI
+            self.update_mainwindow_player_buttons()
+        
+        # Restore rally state
+        self.rally_in_progress = True
+        self.current_rally_id = rally_id
+        self.current_sequence = self.db.get_current_rally_sequence(rally_id) if self.db else 0
+        
+        # Update UI
+        self.update_score_display()
+        self.update_ui_state()
+        
+        # Return description for popup
+        team_name = "Us" if point_winner_id == self.team_us_id else "Them"
+        return (None, None, f"Point to {team_name} removed")
+    
+    def _undo_substitution_event(self, payload: dict, team_id: int):
+        """Undo a substitution event.
+        
+        Args:
+            payload: Event payload containing substitution_id, snapshots, etc.
+            team_id: Team ID
+            
+        Returns:
+            String description for popup display
+        """
+        substitution_id = payload.get('substitution_id')
+        active_lineup_snapshot_before = payload.get('active_lineup_snapshot_before')
+        
+        if not substitution_id:
+            print("ERROR: substitution_id not found in substitution event payload")
+            return None
+        
+        if not active_lineup_snapshot_before:
+            print("ERROR: active_lineup_snapshot_before not found in substitution event payload")
+            return None
+        
+        # Delete the substitution record
+        self.lineup_manager._delete_substitution(substitution_id)
+        
+        # Restore active_lineup from snapshot
+        self.lineup_manager._restore_active_lineup_from_snapshot(self.game_id, team_id, active_lineup_snapshot_before)
+        
+        # Update UI (player buttons)
+        self.update_mainwindow_player_buttons()
+        
+        # Return description for popup
+        out_player_id = payload.get('out_player_id')
+        in_player_id = payload.get('in_player_id')
+        # Get player names for display
+        if not self.db.conn:
+            self.db.connect()
+        cursor = self.db.conn.cursor()
+        out_name = None
+        in_name = None
+        if out_player_id:
+            cursor.execute("SELECT name, player_number FROM players WHERE player_id = ?", (out_player_id,))
+            out_result = cursor.fetchone()
+            if out_result:
+                out_name = out_result[0] or f"#{out_result[1]}"
+        if in_player_id:
+            cursor.execute("SELECT name, player_number FROM players WHERE player_id = ?", (in_player_id,))
+            in_result = cursor.fetchone()
+            if in_result:
+                in_name = in_result[0] or f"#{in_result[1]}"
+        
+        return (None, None, f"Substitution reversed: {in_name} out, {out_name} in")
+    
+    def _undo_libero_event(self, payload: dict, team_id: int):
+        """Undo a libero event.
+        
+        Args:
+            payload: Event payload containing libero_action_id, snapshots, etc.
+            team_id: Team ID
+            
+        Returns:
+            String description for popup display
+        """
+        libero_action_id = payload.get('libero_action_id')
+        active_lineup_snapshot_before = payload.get('active_lineup_snapshot_before')
+        action = payload.get('action')  # 'enter' or 'exit'
+        
+        if not libero_action_id:
+            print("ERROR: libero_action_id not found in libero event payload")
+            return None
+        
+        if not active_lineup_snapshot_before:
+            print("ERROR: active_lineup_snapshot_before not found in libero event payload")
+            return None
+        
+        # Delete the libero action record
+        self.lineup_manager._delete_libero_action(libero_action_id)
+        
+        # Restore active_lineup from snapshot
+        self.lineup_manager._restore_active_lineup_from_snapshot(self.game_id, team_id, active_lineup_snapshot_before)
+        
+        # Update UI (player buttons)
+        self.update_mainwindow_player_buttons()
+        
+        # Return description for popup
+        action_text = "exit" if action == "enter" else "enter"  # Reverse the action for display
+        return (None, None, f"Libero {action_text} reversed")
+    
+    def _undo_rotation_event(self, payload: dict, team_id: int):
+        """Undo a rotation event.
+        
+        Args:
+            payload: Event payload containing snapshots, etc.
+            team_id: Team ID
+            
+        Returns:
+            String description for popup display
+        """
+        active_lineup_snapshot_before = payload.get('active_lineup_snapshot_before')
+        rotation_state_snapshot_before = payload.get('rotation_state_snapshot_before')
+        
+        if not active_lineup_snapshot_before:
+            print("ERROR: active_lineup_snapshot_before not found in rotation event payload")
+            return None
+        
+        if not rotation_state_snapshot_before:
+            print("ERROR: rotation_state_snapshot_before not found in rotation event payload")
+            return None
+        
+        # Restore active_lineup from snapshot
+        self.lineup_manager._restore_active_lineup_from_snapshot(self.game_id, team_id, active_lineup_snapshot_before)
+        
+        # Restore rotation_state from snapshot
+        self.lineup_manager._restore_rotation_state_from_snapshot(self.game_id, team_id, rotation_state_snapshot_before)
+        
+        # Update UI (player buttons)
+        self.update_mainwindow_player_buttons()
+        
+        # Return description for popup
+        return (None, None, "Rotation reversed")
     
     def assign_rally_outcomes(self, rally_id: int, point_winner_id: int):
         """Determine and assign outcomes to contacts in a rally based on rules.
@@ -3722,9 +4038,17 @@ class DataEntryWindow(QMainWindow):
                         team_them_served = True
             
             # Auto-rotate team_us if team_them served and team_us won the point
+            auto_rotated = False
+            rotation_state_before = None
+            active_lineup_snapshot_before = None
             if team_them_served and point_winner_id == self.team_us_id:
+                # Get rotation state and lineup before rotation
+                rotation_state_before = self.lineup_manager._get_rotation_state_snapshot(self.game_id, self.team_us_id)
+                active_lineup_snapshot_before = self.lineup_manager._get_active_lineup_snapshot(self.game_id, self.team_us_id)
+                
                 try:
                     self.lineup_manager.rotate(self.game_id, self.team_us_id)
+                    auto_rotated = True
                     print(f"DEBUG: Auto-rotated team_us after winning point (team_them had served)")
                     # Update MainWindow player buttons to reflect rotation
                     self.update_mainwindow_player_buttons()
@@ -3732,6 +4056,22 @@ class DataEntryWindow(QMainWindow):
                     self.show_rotation_popup()
                 except Exception as e:
                     print(f"DEBUG ERROR: Failed to rotate team_us: {e}")
+                    auto_rotated = False  # Reset if rotation failed
+            
+            # Log point_awarded event for undo functionality
+            from datetime import datetime
+            point_awarded_payload = {
+                "rally_id": rally_id_to_update,
+                "point_winner_id": point_winner_id,
+                "rally_end_time": rally_end_datetime.isoformat() if isinstance(rally_end_datetime, datetime) else str(rally_end_datetime),
+                "score_us": self.score_us,
+                "score_them": self.score_them,
+                "auto_rotated": auto_rotated,
+                "rotation_state_before": rotation_state_before,
+                "active_lineup_snapshot_before": active_lineup_snapshot_before
+            }
+            # Log event for the winning team (we need team_id, use point_winner_id)
+            self.lineup_manager._log_event(point_winner_id, 'point_awarded', point_awarded_payload, self.game_id)
             
             # Display debug message with team_us lineup after each point
             self.print_team_us_lineup()
@@ -3832,9 +4172,17 @@ class DataEntryWindow(QMainWindow):
                                 print(f"DEBUG: Previous rally {rally_number - 1} serving_team_id was team_them")
             
             # Auto-rotate team_us if team_them served in previous rally and team_us won the point
+            auto_rotated = False
+            rotation_state_before = None
+            active_lineup_snapshot_before = None
             if team_them_served_previous and point_winner_id == self.team_us_id:
+                # Get rotation state and lineup before rotation
+                rotation_state_before = self.lineup_manager._get_rotation_state_snapshot(self.game_id, self.team_us_id)
+                active_lineup_snapshot_before = self.lineup_manager._get_active_lineup_snapshot(self.game_id, self.team_us_id)
+                
                 try:
                     self.lineup_manager.rotate(self.game_id, self.team_us_id)
+                    auto_rotated = True
                     print(f"DEBUG: Auto-rotated team_us after winning point from mapper (team_them had served in previous rally)")
                     # Update MainWindow player buttons to reflect rotation
                     self.update_mainwindow_player_buttons()
@@ -3842,9 +4190,47 @@ class DataEntryWindow(QMainWindow):
                     self.show_rotation_popup()
                 except Exception as e:
                     print(f"DEBUG ERROR: Failed to rotate team_us: {e}")
+                    auto_rotated = False  # Reset if rotation failed
             
             # Reload score to get updated values
             self.load_score()
+            
+            # Log point_awarded event for undo functionality
+            # Get the most recent rally that was ended
+            if not self.db.conn:
+                self.db.connect()
+            cursor = self.db.conn.cursor()
+            cursor.execute("""
+                SELECT rally_id, rally_end_time
+                FROM rallies 
+                WHERE game_id = ? AND point_winner_id = ?
+                ORDER BY rally_id DESC
+                LIMIT 1
+            """, (self.game_id, point_winner_id))
+            rally_result = cursor.fetchone()
+            if rally_result:
+                rally_id, rally_end_time = rally_result
+                # Handle rally_end_time - it might be a datetime object or a string
+                rally_end_time_str = None
+                if rally_end_time:
+                    if isinstance(rally_end_time, datetime):
+                        rally_end_time_str = rally_end_time.isoformat()
+                    elif isinstance(rally_end_time, str):
+                        rally_end_time_str = rally_end_time
+                    else:
+                        rally_end_time_str = str(rally_end_time)
+                
+                point_awarded_payload = {
+                    "rally_id": rally_id,
+                    "point_winner_id": point_winner_id,
+                    "rally_end_time": rally_end_time_str,
+                    "score_us": self.score_us,
+                    "score_them": self.score_them,
+                    "auto_rotated": auto_rotated,
+                    "rotation_state_before": rotation_state_before,
+                    "active_lineup_snapshot_before": active_lineup_snapshot_before
+                }
+                self.lineup_manager._log_event(point_winner_id, 'point_awarded', point_awarded_payload, self.game_id)
             
             # Reset rally state - no rally in progress after point is awarded
             self.rally_in_progress = False
@@ -5096,8 +5482,20 @@ class DataEntryWindow(QMainWindow):
                 # Delete all rallies and contacts for this game
                 contacts_deleted, rallies_deleted = self.db.delete_game_rallies_and_contacts(self.game_id)
                 
+                # Delete all events for this game EXCEPT initial_setup events
+                if not self.db.conn:
+                    self.db.connect()
+                cursor = self.db.conn.cursor()
+                cursor.execute("""
+                    DELETE FROM events 
+                    WHERE game_id = ? AND event_type != 'initial_setup'
+                """, (self.game_id,))
+                events_deleted = cursor.rowcount
+                self.db.conn.commit()
+                
                 # Restore initial lineup and rotation state for team_us
-                success, team_us_serving = self.lineup_manager.restore_initial_lineup(self.game_id, self.team_us_id)
+                # This resets active_lineup, rotation_state, and deletes all substitutions and libero_actions
+                success, team_us_serving = self.lineup_manager.restore_initial_lineup(self.team_us_id, self.game_id)
                 if success:
                     # Set serving team based on initial setup
                     if team_us_serving:
@@ -5107,7 +5505,13 @@ class DataEntryWindow(QMainWindow):
                 else:
                     # Fallback: if no initial setup found, default to team_us serving
                     self.serving_team_id = self.team_us_id
-                    print("WARNING: Could not find initial setup event. Using default lineup.")
+                    print("WARNING: Could not find initial setup event for team_us. Using default lineup.")
+                
+                # Also restore initial lineup and rotation state for team_them if they have an initial setup
+                if self.team_them_id:
+                    team_them_success, _ = self.lineup_manager.restore_initial_lineup(self.team_them_id, self.game_id)
+                    if not team_them_success:
+                        print("WARNING: Could not find initial setup event for team_them.")
                 
                 # Reset tracking state
                 self.current_rally_id = None
