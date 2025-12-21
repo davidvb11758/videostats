@@ -163,13 +163,7 @@ class CreateGameDialog(QDialog):
                 SELECT player_id, name, jersey, player_number, role_code
                 FROM players
                 WHERE team_id = ?
-                ORDER BY 
-                    CASE 
-                        WHEN CAST(player_number AS INTEGER) IS NOT NULL 
-                        THEN CAST(player_number AS INTEGER)
-                        ELSE 999999
-                    END,
-                    player_number
+                ORDER BY name ASC
             """, (team_id,))
             
             players = cursor.fetchall()
@@ -185,9 +179,15 @@ class CreateGameDialog(QDialog):
             # Populate with players
             for player in players:
                 player_id, name, jersey, player_number, role_code = player
-                display_name = f"#{jersey or player_number} {name or 'Unknown'}"
-                if role_code:
-                    display_name += f" ({role_code})"
+                player_name = name or 'Unknown'
+                jersey_number = jersey or player_number
+                role = role_code or ''
+                
+                # Format: "player name (jersey # role)"
+                if role:
+                    display_name = f"{player_name} ({jersey_number} {role})"
+                else:
+                    display_name = f"{player_name} ({jersey_number})"
                 
                 # Add to all position combos
                 for player_combo, _ in self.position_widgets.values():
@@ -232,13 +232,7 @@ class CreateGameDialog(QDialog):
                 SELECT player_id, name, jersey, player_number, role_code
                 FROM players
                 WHERE team_id = ?
-                ORDER BY 
-                    CASE 
-                        WHEN CAST(player_number AS INTEGER) IS NOT NULL 
-                        THEN CAST(player_number AS INTEGER)
-                        ELSE 999999
-                    END,
-                    player_number
+                ORDER BY name ASC
             """, (team_id,))
             
             players = cursor.fetchall()
@@ -249,9 +243,15 @@ class CreateGameDialog(QDialog):
                 if player_id in lineup_player_ids:
                     continue
                 
-                display_name = f"#{jersey or player_number} {name or 'Unknown'}"
-                if role_code:
-                    display_name += f" ({role_code})"
+                player_name = name or 'Unknown'
+                jersey_number = jersey or player_number
+                role = role_code or ''
+                
+                # Format: "player name (jersey # role)"
+                if role:
+                    display_name = f"{player_name} ({jersey_number} {role})"
+                else:
+                    display_name = f"{player_name} ({jersey_number})"
                 
                 self.libero_combo.addItem(display_name, player_id)
             
@@ -309,13 +309,7 @@ class CreateGameDialog(QDialog):
                 SELECT player_id, name, jersey, player_number, role_code
                 FROM players
                 WHERE team_id = ?
-                ORDER BY 
-                    CASE 
-                        WHEN CAST(player_number AS INTEGER) IS NOT NULL 
-                        THEN CAST(player_number AS INTEGER)
-                        ELSE 999999
-                    END,
-                    player_number
+                ORDER BY name ASC
             """, (team_id,))
             
             players = cursor.fetchall()
@@ -338,9 +332,15 @@ class CreateGameDialog(QDialog):
                     if libero_id and player_id == libero_id:
                         continue
                     
-                    display_name = f"#{jersey or player_number} {name or 'Unknown'}"
-                    if role_code:
-                        display_name += f" ({role_code})"
+                    player_name = name or 'Unknown'
+                    jersey_number = jersey or player_number
+                    role = role_code or ''
+                    
+                    # Format: "player name (jersey # role)"
+                    if role:
+                        display_name = f"{player_name} ({jersey_number} {role})"
+                    else:
+                        display_name = f"{player_name} ({jersey_number})"
                     
                     player_combo.addItem(display_name, player_id)
                 

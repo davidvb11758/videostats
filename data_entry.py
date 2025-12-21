@@ -1025,7 +1025,14 @@ class DataEntryWindow(QMainWindow):
         
         # Substitution button
         if hasattr(self.ui, 'pushButton_substitution'):
-            self.ui.pushButton_substitution.clicked.connect(self.show_substitution_dialog)
+            def on_substitution_button_clicked():
+                print("=" * 60)
+                print("DEBUG SUBSTITUTION: Substitution button clicked")
+                print(f"DEBUG SUBSTITUTION: Calling method: show_substitution_dialog")
+                print(f"DEBUG SUBSTITUTION: game_id={self.game_id}, team_us_id={self.team_us_id}")
+                print("=" * 60)
+                self.show_substitution_dialog()
+            self.ui.pushButton_substitution.clicked.connect(on_substitution_button_clicked)
         
         # Add Libero IN and Libero OUT buttons next to substitution button
         self.setup_libero_buttons()
@@ -1486,7 +1493,7 @@ class DataEntryWindow(QMainWindow):
                         groupbox.setVisible(True)
                         groupbox.setFixedWidth(66)
                         # Set title to player info
-                        player_label = f"#{server_player_number}-{server_player_name}" if server_player_name else f"#{server_player_number}"
+                        player_label = f"{server_player_name}-{server_player_number}" if server_player_name else f"{server_player_number}"
                         groupbox.setTitle(player_label)
                         
                         # Hide all buttons first
@@ -1697,7 +1704,7 @@ class DataEntryWindow(QMainWindow):
                 down_btn.setFixedHeight(22)
                 down_btn.setStyleSheet("background-color: #FF6B6B; border: 1px solid #505050;")
                 
-                fault_btn = QPushButton("fault")
+                fault_btn = QPushButton("Fault")
                 fault_btn.setFont(QFont('Arial', 8))
                 fault_btn.setFixedHeight(22)
                 fault_btn.setStyleSheet("border: 1px solid #505050;")
@@ -2075,7 +2082,7 @@ class DataEntryWindow(QMainWindow):
                     # Set GroupBox width to 66px
                     groupbox.setFixedWidth(66)
                     
-                    # Set GroupBox title to first player's "#-Name" (or combine if multiple)
+                    # Set GroupBox title to first player's "Name-num" (or combine if multiple)
                     if players_in_groupbox:
                         player_labels = []
                         for player_data in players_in_groupbox:
@@ -2084,7 +2091,7 @@ class DataEntryWindow(QMainWindow):
                                 _, player_number, player_name, _, _, _ = player_data
                             else:
                                 _, player_number, player_name, _, _ = player_data
-                            label = f"#{player_number}-{player_name}" if player_name else f"#{player_number}"
+                            label = f"{player_name}-{player_number}" if player_name else f"{player_number}"
                             player_labels.append(label)
                         groupbox.setTitle(" / ".join(player_labels))
                     
@@ -2274,15 +2281,12 @@ class DataEntryWindow(QMainWindow):
                 if server_groupbox:
                     break
             
-            # Show/hide GroupBoxes based on assignments
+                    # Show/hide GroupBoxes based on assignments
             for groupbox_name in ['groupBox_LF', 'groupBox_MF', 'groupBox_RF', 'groupBox_LB', 'groupBox_MB', 'groupBox_RB']:
                 groupbox = dialog_widget.findChild(QGroupBox, groupbox_name)
                 if groupbox:
                     if groupbox_name in groupbox_assignments and groupbox_assignments[groupbox_name]:
                         groupbox.setVisible(True)
-                        # Highlight server GroupBox if this is it
-                        if groupbox_name == server_groupbox:
-                            groupbox.setStyleSheet("QGroupBox { font-weight: bold; border: 2px solid #FF0000; }")
                     else:
                         groupbox.setVisible(False)
             
@@ -2312,7 +2316,7 @@ class DataEntryWindow(QMainWindow):
                                 # Check if parent layout is horizontal - if so, add directly
                                 if isinstance(parent_layout, QHBoxLayout):
                                     # Create fault button and add to horizontal layout
-                                    fault_btn = QPushButton("fault")
+                                    fault_btn = QPushButton("Fault")
                                     fault_btn.setFont(QFont('Arial', 8))
                                     fault_btn.setFixedHeight(22)
                                     fault_btn.setVisible(True)
@@ -2331,7 +2335,7 @@ class DataEntryWindow(QMainWindow):
                                         hbox.setSpacing(2)
                                         hbox.addWidget(down_btn)
                                         # Create and add fault button
-                                        fault_btn = QPushButton("fault")
+                                        fault_btn = QPushButton("Fault")
                                         fault_btn.setFont(QFont('Arial', 8))
                                         fault_btn.setFixedHeight(22)
                                         fault_btn.setVisible(True)
@@ -2609,7 +2613,7 @@ class DataEntryWindow(QMainWindow):
             
             # Fault button (only for team_us)
             if team_id == self.team_us_id:
-                fault_btn = QPushButton("fault")
+                fault_btn = QPushButton("Fault")
                 fault_btn.setFont(QFont('Arial', 8))
                 fault_btn.setFixedHeight(22)
                 fault_btn.clicked.connect(lambda: (selected_action.__setitem__(0, ["fault", "fault"]), dialog.accept()))
@@ -4627,27 +4631,75 @@ class DataEntryWindow(QMainWindow):
     
     def show_substitution_dialog(self):
         """Show dialog for player substitution."""
+        print("=" * 60)
+        print("DEBUG SUBSTITUTION: Method show_substitution_dialog() called")
+        print(f"DEBUG SUBSTITUTION: game_id={self.game_id}, team_us_id={self.team_us_id}")
+        print("=" * 60)
+        
         if not self.game_id or not self.team_us_id:
+            print("DEBUG SUBSTITUTION: ERROR - No game or team selected")
             QMessageBox.warning(self, "No Game", "Please select a game first.")
             return
         
         # Get bench players and active players
+        print("DEBUG SUBSTITUTION: Calling get_bench_players()...")
         bench_players = self.get_bench_players(self.team_us_id)
+        print(f"DEBUG SUBSTITUTION: get_bench_players() returned {len(bench_players)} bench players")
+        for idx, (player_id, player_number, player_name) in enumerate(bench_players, 1):
+            print(f"  Bench Player {idx}: ID={player_id}, Number={player_number}, Name={player_name}")
+        
+        print("DEBUG SUBSTITUTION: Calling get_active_players_with_positions()...")
         active_players = self.get_active_players_with_positions(self.team_us_id)
+        print(f"DEBUG SUBSTITUTION: get_active_players_with_positions() returned {len(active_players)} active players")
+        for idx, (player_id, player_number, player_name, position) in enumerate(active_players, 1):
+            print(f"  Active Player {idx}: ID={player_id}, Number={player_number}, Name={player_name}, Position={position}")
         
         if not bench_players:
+            print("DEBUG SUBSTITUTION: ERROR - No bench players available")
             QMessageBox.information(self, "No Bench Players", "No bench players available for substitution.")
             return
         
         if not active_players:
+            print("DEBUG SUBSTITUTION: ERROR - No active players on court")
             QMessageBox.information(self, "No Active Players", "No active players on court.")
             return
+        
+        # Get jersey numbers and role codes for active players
+        if not self.db.conn:
+            self.db.connect()
+        cursor = self.db.conn.cursor()
+        active_player_ids = [p[0] for p in active_players]
+        placeholders = ','.join('?' * len(active_player_ids))
+        cursor.execute(f"""
+            SELECT player_id, COALESCE(jersey, player_number) as jersey_number, COALESCE(role_code, '') as role_code
+            FROM players
+            WHERE player_id IN ({placeholders})
+        """, active_player_ids)
+        active_player_info = {row[0]: (row[1], row[2]) for row in cursor.fetchall()}  # {player_id: (jersey, role_code)}
+        
+        # Get jersey numbers and role codes for bench players
+        bench_player_ids = [p[0] for p in bench_players]
+        if bench_player_ids:
+            placeholders = ','.join('?' * len(bench_player_ids))
+            cursor.execute(f"""
+                SELECT player_id, COALESCE(jersey, player_number) as jersey_number, COALESCE(role_code, '') as role_code
+                FROM players
+                WHERE player_id IN ({placeholders})
+            """, bench_player_ids)
+            bench_player_info = {row[0]: (row[1], row[2]) for row in cursor.fetchall()}  # {player_id: (jersey, role_code)}
+        else:
+            bench_player_info = {}
+        
+        # Sort bench players alphabetically by name
+        bench_players_sorted = sorted(bench_players, key=lambda x: (x[2] or '').lower() if x[2] else 'zzz')
+        print(f"DEBUG SUBSTITUTION: Bench players sorted alphabetically: {[(p[2], p[1]) for p in bench_players_sorted]}")
         
         # Create substitution dialog
         dialog = QDialog(self)
         dialog.setWindowTitle("Player Substitution")
         dialog.setModal(True)
-        dialog.setMinimumSize(500, 400)
+        dialog.setMinimumSize(650, 300)
+        dialog.setMaximumSize(700, 350)
         
         layout = QVBoxLayout(dialog)
         
@@ -4656,42 +4708,163 @@ class DataEntryWindow(QMainWindow):
         instructions.setWordWrap(True)
         layout.addWidget(instructions)
         
-        # Two column layout for lists
-        lists_layout = QHBoxLayout()
+        # Two column layout: bench on left, court grid on right
+        main_layout = QHBoxLayout()
         
         # Bench players list (left)
+        print("DEBUG SUBSTITUTION: Creating bench players list...")
         bench_label = QLabel("Bench Players:")
-        bench_label.setFont(QFont('Arial', 10, QFont.Weight.Bold))
+        bench_label.setFont(QFont('Arial', 12, QFont.Weight.Bold))
         bench_list = QListWidget()
-        bench_list.setMinimumWidth(200)
-        for player_id, player_number, player_name in bench_players:
-            display_text = f"#{player_number} - {player_name}" if player_name else f"#{player_number}"
+        bench_list.setMinimumWidth(165)
+        bench_list.setMaximumWidth(165)
+        for player_id, player_number, player_name in bench_players_sorted:
+            jersey, role_code = bench_player_info.get(player_id, (player_number, ''))
+            player_name = player_name or 'Unknown'
+            role = role_code if role_code else ''
+            # Format: "Name (#-Role)" - no spaces around dash
+            if role:
+                display_text = f"{player_name} ({jersey}-{role})"
+            else:
+                display_text = f"{player_name} ({jersey})"
+            print(f"DEBUG SUBSTITUTION: Adding bench player to list: '{display_text}' (ID={player_id})")
             item = QListWidgetItem(display_text)
+            item.setFont(QFont('Arial', 11))  # 11pt font for player data
             item.setData(Qt.ItemDataRole.UserRole, player_id)
             bench_list.addItem(item)
+        print(f"DEBUG SUBSTITUTION: Bench list created with {bench_list.count()} items")
         
         bench_layout = QVBoxLayout()
         bench_layout.addWidget(bench_label)
         bench_layout.addWidget(bench_list)
-        lists_layout.addLayout(bench_layout)
+        main_layout.addLayout(bench_layout)
         
-        # Active players list (right)
+        # Court positions grid (right)
+        # Court layout: 
+        # Row 0 (top): positions 4, 3, 2 (left to right)
+        # Row 1 (bottom): positions 5, 6, 1 (left to right)
+        print("DEBUG SUBSTITUTION: Creating court positions grid...")
         active_label = QLabel("Active Players (on court):")
-        active_label.setFont(QFont('Arial', 10, QFont.Weight.Bold))
-        active_list = QListWidget()
-        active_list.setMinimumWidth(200)
-        for player_id, player_number, player_name, position_number in active_players:
-            display_text = f"#{player_number} - {player_name} (Pos {position_number})" if player_name else f"#{player_number} (Pos {position_number})"
-            item = QListWidgetItem(display_text)
-            item.setData(Qt.ItemDataRole.UserRole, player_id)
-            active_list.addItem(item)
+        active_label.setFont(QFont('Arial', 12, QFont.Weight.Bold))
+        active_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        # Add horizontal line below label: "____________  Net  ___________"
+        net_line = QLabel("____________  Net  ___________")
+        net_line.setFont(QFont('Arial', 10))
+        net_line.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        # Create grid layout for court positions
+        court_grid = QGridLayout()
+        court_grid.setSpacing(10)
+        court_grid.setContentsMargins(10, 10, 10, 10)
+        print("DEBUG SUBSTITUTION: QGridLayout created with spacing=10, margins=10")
+        
+        # Create a dictionary mapping position_number to (row, col) in grid
+        # Position 4 -> (0, 0) top-left, Position 3 -> (0, 1) top-middle, Position 2 -> (0, 2) top-right
+        # Position 5 -> (1, 0) bottom-left, Position 6 -> (1, 1) bottom-middle, Position 1 -> (1, 2) bottom-right
+        position_to_grid = {
+            4: (0, 0),  # top-left
+            3: (0, 1),  # top-middle
+            2: (0, 2),  # top-right
+            5: (1, 0),  # bottom-left
+            6: (1, 1),  # bottom-middle
+            1: (1, 2)   # bottom-right
+        }
+        print(f"DEBUG SUBSTITUTION: Position to grid mapping: {position_to_grid}")
+        
+        # Create buttons for each position
+        position_buttons = {}  # {position_number: button}
+        selected_position = [None]  # Use list to allow modification in closure
+        
+        # Create a dictionary of players by position
+        players_by_position = {pos: (player_id, player_number, player_name) 
+                              for player_id, player_number, player_name, pos in active_players}
+        print(f"DEBUG SUBSTITUTION: Players by position: {players_by_position}")
+        
+        # Add buttons in the correct order for court layout
+        print("DEBUG SUBSTITUTION: Creating position buttons...")
+        for pos in [4, 3, 2, 5, 6, 1]:
+            row, col = position_to_grid[pos]
+            if pos in players_by_position:
+                player_id, player_number, player_name = players_by_position[pos]
+                jersey, role_code = active_player_info.get(player_id, (player_number, ''))
+                player_name = player_name or 'Unknown'
+                role = role_code if role_code else ''
+                # Format: "Name (#-Role)" - no spaces around dash
+                if role:
+                    display_text = f"{player_name} ({jersey}-{role})"
+                else:
+                    display_text = f"{player_name} ({jersey})"
+                print(f"DEBUG SUBSTITUTION: Position {pos} (row={row}, col={col}): Player '{display_text}' (ID={player_id})")
+            else:
+                display_text = f"Position {pos}\n(Empty)"
+                player_id = None
+                print(f"DEBUG SUBSTITUTION: Position {pos} (row={row}, col={col}): Empty")
+            
+            # Create button for this position
+            pos_btn = QPushButton(display_text)
+            pos_btn.setMinimumSize(125, 60)
+            pos_btn.setMaximumSize(125, 60)
+            pos_btn.setCheckable(True)
+            pos_btn.setStyleSheet("""
+                QPushButton {
+                    border: 2px solid #505050;
+                    border-radius: 10px;
+                    padding: 5px;
+                    text-align: center;
+                    font-size: 11pt;
+                }
+                QPushButton:checked {
+                    background-color: #ADD8E6;
+                    border: 3px solid #0000FF;
+                }
+                QPushButton:hover {
+                    background-color: #E0E0E0;
+                }
+            """)
+            print(f"DEBUG SUBSTITUTION: Created button for position {pos} with text '{display_text}', size 125x60")
+            
+            if player_id:
+                # Store player_id in button property
+                pos_btn.setProperty('player_id', player_id)
+                pos_btn.setProperty('position', pos)
+                
+                def make_click_handler(btn, pid):
+                    def handler():
+                        # Uncheck all other position buttons
+                        for other_pos, other_btn in position_buttons.items():
+                            if other_btn != btn:
+                                other_btn.setChecked(False)
+                        selected_position[0] = pid
+                        on_selection_changed()
+                    return handler
+                
+                pos_btn.clicked.connect(make_click_handler(pos_btn, player_id))
+            else:
+                pos_btn.setEnabled(False)
+            
+            position_buttons[pos] = pos_btn
+            court_grid.addWidget(pos_btn, row, col)
+            print(f"DEBUG SUBSTITUTION: Added button to grid at row={row}, col={col}")
+        
+        print(f"DEBUG SUBSTITUTION: Total buttons created: {len(position_buttons)}")
+        print(f"DEBUG SUBSTITUTION: Grid layout item count: {court_grid.count()}")
+        
+        # Create a container widget for the grid to ensure proper layout
+        grid_container = QWidget()
+        grid_container.setLayout(court_grid)
+        print("DEBUG SUBSTITUTION: Created grid_container QWidget and set grid layout")
         
         active_layout = QVBoxLayout()
         active_layout.addWidget(active_label)
-        active_layout.addWidget(active_list)
-        lists_layout.addLayout(active_layout)
+        active_layout.addWidget(net_line)  # Add net line below label
+        active_layout.addWidget(grid_container)
+        active_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        main_layout.addLayout(active_layout)
+        print("DEBUG SUBSTITUTION: Added active_label and grid_container to active_layout")
+        print("DEBUG SUBSTITUTION: Added active_layout to main_layout")
         
-        layout.addLayout(lists_layout)
+        layout.addLayout(main_layout)
         
         # Buttons
         button_layout = QHBoxLayout()
@@ -4708,22 +4881,20 @@ class DataEntryWindow(QMainWindow):
         def on_selection_changed():
             """Enable substitute button when both players are selected."""
             bench_selected = bench_list.currentItem() is not None
-            active_selected = active_list.currentItem() is not None
+            active_selected = selected_position[0] is not None
             substitute_btn.setEnabled(bench_selected and active_selected)
         
         bench_list.itemSelectionChanged.connect(on_selection_changed)
-        active_list.itemSelectionChanged.connect(on_selection_changed)
         
         def perform_substitution():
             """Perform the substitution."""
             bench_item = bench_list.currentItem()
-            active_item = active_list.currentItem()
+            out_player_id = selected_position[0]
             
-            if not bench_item or not active_item:
+            if not bench_item or not out_player_id:
                 return
             
             in_player_id = bench_item.data(Qt.ItemDataRole.UserRole)
-            out_player_id = active_item.data(Qt.ItemDataRole.UserRole)
             
             try:
                 # Perform substitution using LineupManager
@@ -4755,7 +4926,13 @@ class DataEntryWindow(QMainWindow):
         
         layout.addLayout(button_layout)
         
+        print("DEBUG SUBSTITUTION: Dialog layout complete, showing dialog...")
+        print(f"DEBUG SUBSTITUTION: Dialog size: {dialog.width()}x{dialog.height()}")
+        print(f"DEBUG SUBSTITUTION: Main layout item count: {main_layout.count()}")
+        print("=" * 60)
         dialog.exec()
+        print("DEBUG SUBSTITUTION: Dialog closed")
+        print("=" * 60)
     
     def setup_libero_buttons(self):
         """Create and position Libero IN and Libero OUT buttons next to substitution button."""

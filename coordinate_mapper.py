@@ -1454,131 +1454,15 @@ class CoordinateMapper(QMainWindow):
         return result[0] if result else None
     
     def show_substitution_dialog(self):
-        """Show dialog for player substitution."""
-        if not self.game_id or not self.team_us_id:
+        """Show dialog for player substitution by calling parent DataEntryWindow's method."""
+        # Check if parent is DataEntryWindow and call its substitution dialog
+        from data_entry import DataEntryWindow
+        if isinstance(self.parent(), DataEntryWindow):
+            print("DEBUG SUBSTITUTION: CoordinateMapper calling parent DataEntryWindow.show_substitution_dialog()")
+            self.parent().show_substitution_dialog()
+        else:
+            # Fallback if no parent or parent is not DataEntryWindow
             QMessageBox.warning(self, "No Game", "Please select a game first.")
-            return
-        
-        # Get bench players and active players
-        bench_players = self.get_bench_players(self.team_us_id)
-        active_players = self.get_active_players_with_positions(self.team_us_id)
-        
-        if not bench_players:
-            QMessageBox.information(self, "No Bench Players", "No bench players available for substitution.")
-            return
-        
-        if not active_players:
-            QMessageBox.information(self, "No Active Players", "No active players on court.")
-            return
-        
-        # Create substitution dialog
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Player Substitution")
-        dialog.setModal(True)
-        dialog.setMinimumSize(500, 400)
-        
-        layout = QVBoxLayout(dialog)
-        
-        # Instructions
-        instructions = QLabel("Select a bench player to enter and an active player to exit:")
-        instructions.setWordWrap(True)
-        layout.addWidget(instructions)
-        
-        # Two column layout for lists
-        lists_layout = QHBoxLayout()
-        
-        # Bench players list (left)
-        bench_label = QLabel("Bench Players:")
-        bench_label.setFont(QFont('Arial', 10, QFont.Weight.Bold))
-        bench_list = QListWidget()
-        bench_list.setMinimumWidth(200)
-        for player_id, player_number, player_name in bench_players:
-            display_text = f"#{player_number} - {player_name}" if player_name else f"#{player_number}"
-            item = QListWidgetItem(display_text)
-            item.setData(Qt.ItemDataRole.UserRole, player_id)
-            bench_list.addItem(item)
-        
-        bench_layout = QVBoxLayout()
-        bench_layout.addWidget(bench_label)
-        bench_layout.addWidget(bench_list)
-        lists_layout.addLayout(bench_layout)
-        
-        # Active players list (right)
-        active_label = QLabel("Active Players (on court):")
-        active_label.setFont(QFont('Arial', 10, QFont.Weight.Bold))
-        active_list = QListWidget()
-        active_list.setMinimumWidth(200)
-        for player_id, player_number, player_name, position_number in active_players:
-            display_text = f"#{player_number} - {player_name} (Pos {position_number})" if player_name else f"#{player_number} (Pos {position_number})"
-            item = QListWidgetItem(display_text)
-            item.setData(Qt.ItemDataRole.UserRole, player_id)
-            active_list.addItem(item)
-        
-        active_layout = QVBoxLayout()
-        active_layout.addWidget(active_label)
-        active_layout.addWidget(active_list)
-        lists_layout.addLayout(active_layout)
-        
-        layout.addLayout(lists_layout)
-        
-        # Buttons
-        button_layout = QHBoxLayout()
-        button_layout.addStretch()
-        
-        cancel_btn = QPushButton("Cancel")
-        cancel_btn.clicked.connect(dialog.reject)
-        button_layout.addWidget(cancel_btn)
-        
-        substitute_btn = QPushButton("Substitute")
-        substitute_btn.setDefault(True)
-        substitute_btn.setEnabled(False)  # Disabled until both are selected
-        
-        def on_selection_changed():
-            """Enable substitute button when both players are selected."""
-            bench_selected = bench_list.currentItem() is not None
-            active_selected = active_list.currentItem() is not None
-            substitute_btn.setEnabled(bench_selected and active_selected)
-        
-        bench_list.itemSelectionChanged.connect(on_selection_changed)
-        active_list.itemSelectionChanged.connect(on_selection_changed)
-        
-        def perform_substitution():
-            """Perform the substitution."""
-            bench_item = bench_list.currentItem()
-            active_item = active_list.currentItem()
-            
-            if not bench_item or not active_item:
-                return
-            
-            in_player_id = bench_item.data(Qt.ItemDataRole.UserRole)
-            out_player_id = active_item.data(Qt.ItemDataRole.UserRole)
-            
-            try:
-                if not self.lineup_manager:
-                    QMessageBox.critical(self, "Error", "LineupManager not initialized.")
-                    return
-                
-                # Perform substitution using LineupManager
-                self.lineup_manager.substitution(
-                    team_id=self.team_us_id,
-                    out_player_id=out_player_id,
-                    in_player_id=in_player_id,
-                    game_id=self.game_id
-                )
-                
-                QMessageBox.information(self, "Substitution Complete", 
-                                      "Player substitution completed successfully.")
-                dialog.accept()
-            except Exception as e:
-                QMessageBox.critical(self, "Substitution Error", 
-                                   f"Failed to perform substitution:\n{str(e)}")
-        
-        substitute_btn.clicked.connect(perform_substitution)
-        button_layout.addWidget(substitute_btn)
-        
-        layout.addLayout(button_layout)
-        
-        dialog.exec()
     
     def show_libero_in_dialog(self):
         """Show dialog for libero to enter, displaying all positions (1-6) with players."""

@@ -105,19 +105,19 @@ Extend the undo functionality to support all game events (contacts, substitution
 - Log a `'contact'` event to the events table
 - Event payload should include:
     ```json
-                {
-                  "contact_id": <contact_id>,
-                  "rally_id": <rally_id>,
-                  "sequence_number": <sequence_number>,
-                  "player_id": <player_id>,
-                  "contact_type": <contact_type>,
-                  "team_id": <team_id>,
-                  "x": <x>,
-                  "y": <y>,
-                  "timecode": <timecode>,
-                  "outcome": <outcome>,
-                  "rating": <rating>
-                }
+                    {
+                      "contact_id": <contact_id>,
+                      "rally_id": <rally_id>,
+                      "sequence_number": <sequence_number>,
+                      "player_id": <player_id>,
+                      "contact_type": <contact_type>,
+                      "team_id": <team_id>,
+                      "x": <x>,
+                      "y": <y>,
+                      "timecode": <timecode>,
+                      "outcome": <outcome>,
+                      "rating": <rating>
+                    }
     ```
 
 
@@ -133,14 +133,14 @@ Extend the undo functionality to support all game events (contacts, substitution
 - Log a `'point_awarded'` event to the events table
 - Event payload should include:
     ```json
-                {
-                  "rally_id": <rally_id>,
-                  "point_winner_id": <point_winner_id>,
-                  "rally_end_time": <rally_end_time>,
-                  "score_us": <score_us>,
-                  "score_them": <score_them>,
-                  "auto_rotated": <boolean>  // if rotation occurred
-                }
+                    {
+                      "rally_id": <rally_id>,
+                      "point_winner_id": <point_winner_id>,
+                      "rally_end_time": <rally_end_time>,
+                      "score_us": <score_us>,
+                      "score_them": <score_them>,
+                      "auto_rotated": <boolean>  // if rotation occurred
+                    }
     ```
 
 
@@ -291,4 +291,3 @@ Extend the undo functionality to support all game events (contacts, substitution
 - **IMPORTANT**: When undoing a contact event, preserve ALL existing contact deletion logic from `undo_last_contact()` method, including:
 - Deleting contact from contacts table via `self.db.delete_contact(contact_id)`
 - Handling cascaded outcome reversals (block stuff→continue, serve ace→continue, attack kill→continue)
-- Un-ending rally if it was ended (`self.db.unend_rally()`)
