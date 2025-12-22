@@ -118,9 +118,40 @@ class LineupManager:
             'term_of_service_start': state.term_of_service_start.isoformat() if state.term_of_service_start else None
         }
     
-    def _get_player_role(self, player_id: int) -> Optional[str]:
-        """Get player's role_code from players table."""
+    def _get_player_role(self, player_id: int, game_id: Optional[int] = None, team_id: Optional[int] = None) -> Optional[str]:
+        """Get player's role code.
+        
+        For team_us with game_id, uses game_role_code from game_players table.
+        Otherwise, falls back to role_code from players table.
+        
+        Args:
+            player_id: Player ID
+            game_id: Optional game ID (required for team_us to use game_role_code)
+            team_id: Optional team ID (required with game_id to check if team_us)
+        
+        Returns:
+            Role code string or None
+        """
         cursor = self.db.conn.cursor()
+        
+        # If game_id and team_id are provided, check if it's team_us and use game_role_code
+        if game_id is not None and team_id is not None:
+            # Check if this team_id is team_us for this game
+            cursor.execute("""
+                SELECT team_us_id FROM games WHERE game_id = ?
+            """, (game_id,))
+            result = cursor.fetchone()
+            if result and result[0] == team_id:
+                # This is team_us - use game_role_code from game_players
+                cursor.execute("""
+                    SELECT game_role_code FROM game_players
+                    WHERE game_id = ? AND team_id = ? AND player_id = ?
+                """, (game_id, team_id, player_id))
+                row = cursor.fetchone()
+                if row and row[0]:
+                    return row[0]
+        
+        # Fallback to role_code from players table (for team_them or when game_id not provided)
         cursor.execute("SELECT role_code FROM players WHERE player_id = ?", (player_id,))
         row = cursor.fetchone()
         return row[0] if row and row[0] else None
@@ -217,7 +248,8 @@ class LineupManager:
             # Insert new lineup
             now = datetime.now(timezone.utc)
             for pos, player_id in lineup:
-                role = self._get_player_role(player_id)
+                # Use game_role_code for team_us, fallback to role_code from players
+                role = self._get_player_role(player_id, game_id, team_id)
                 if not role:
                     # Default role if not set
                     role = 'OH'
@@ -249,11 +281,11 @@ class LineupManager:
             # Run role adjustment check
             self.role_adjustment_check(game_id, team_id)
             
-            # Log initial setup event
+            # Log initial setup event (use game_role_code for team_us)
             lineup_snapshot = {
                 pos: {
                     'player_id': player_id,
-                    'role_code': self._get_player_role(player_id) or 'OH',
+                    'role_code': self._get_player_role(player_id, game_id, team_id) or 'OH',
                     'is_server': (pos == 1 and serving)
                 }
                 for pos, player_id in lineup
@@ -462,8 +494,8 @@ class LineupManager:
         
         target_position = actual_out_position
         
-        # Get in_player's role
-        in_role = self._get_player_role(in_player_id)
+        # Get in_player's role (use game_role_code for team_us)
+        in_role = self._get_player_role(in_player_id, game_id, team_id)
         
         try:
             # Get snapshot of active_lineup before substitution
@@ -495,13 +527,13 @@ class LineupManager:
             # Get snapshot of active_lineup after substitution (and role adjustment)
             active_lineup_snapshot_after = self._get_active_lineup_snapshot(game_id, team_id)
             
-            # Log substitution event with snapshots
+            # Log substitution event with snapshots (use game_role_code for team_us)
             self._log_event(team_id, 'substitution', {
                 'substitution_id': substitution_id,
                 'out_player_id': out_player_id,
                 'in_player_id': in_player_id,
                 'position': target_position,
-                'out_role': self._get_player_role(out_player_id),
+                'out_role': self._get_player_role(out_player_id, game_id, team_id),
                 'in_role': in_role_normalized,
                 'active_lineup_snapshot_before': active_lineup_snapshot_before,
                 'active_lineup_snapshot_after': active_lineup_snapshot_after
@@ -535,8 +567,8 @@ class LineupManager:
         
         cursor = self.db.conn.cursor()
         
-        # Validate libero role
-        libero_role = self._get_player_role(libero_id)
+        # Validate libero role (use game_role_code for team_us)
+        libero_role = self._get_player_role(libero_id, game_id, team_id)
         if libero_role != 'Lib':
             raise ValueError(f"Player {libero_id} is not a libero (role: {libero_role})")
         
@@ -577,7 +609,8 @@ class LineupManager:
                 
                 # Replace libero with original player (or validate replacement rule)
                 # For now, assume replaced_player_id is the original player
-                original_role = self._get_player_role(replaced_player_id)
+                # Use game_role_code for team_us
+                original_role = self._get_player_role(replaced_player_id, game_id, team_id)
                 original_role_normalized = self._normalize_role_code(original_role) if original_role else 'OH'
                 
                 cursor.execute("""

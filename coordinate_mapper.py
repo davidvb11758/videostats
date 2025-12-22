@@ -210,19 +210,23 @@ class CoordinateMapper(QMainWindow):
         button_layout.addStretch()  # Push buttons to the left
         layout.addLayout(button_layout)
         
-        # Undo popup label (below the button layout) - set to zero height when empty
-        self.undo_popup_label = QLabel("")
-        self.undo_popup_label.setFont(QFont('Arial', 11))
-        self.undo_popup_label.setStyleSheet("color: red; padding: 0px; margin: 0px; max-height: 0px;")
-        self.undo_popup_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
-        self.undo_popup_label.setFixedHeight(0)  # Zero height when empty
-        layout.addWidget(self.undo_popup_label)
+        # Single shared message area (below the button layout) - single text row
+        # Displays "Last action: [message]" or "Last Undo: [message]" or other status messages
+        self.message_display = QLabel("")
+        self.message_display.setFont(QFont('Arial', 11))
+        self.message_display.setStyleSheet("color: black; padding: 2px 0px; margin: 0px;")
+        self.message_display.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        layout.addWidget(self.message_display)
         
-        # Status label - reduce spacing
-        self.status_label = QLabel("Click 'Set Court Boundaries' to start")
-        self.status_label.setFont(QFont('Arial', 11))
-        self.status_label.setStyleSheet("padding: 2px 0px; margin: 0px;")  # Minimal padding
-        layout.addWidget(self.status_label)
+        # Keep references for backward compatibility
+        self.last_action_message = self.message_display
+        self.last_undo_message = self.message_display
+        
+        # Status label - kept for backward compatibility but not displayed
+        # All messages now go to message_display
+        self.status_label = QLabel("")
+        self.status_label.setFixedHeight(0)  # Hide it
+        self.status_label.setVisible(False)
         
         # Graphics view for drawing
         self.scene = QGraphicsScene(0, 0, self.canvas_width, self.canvas_height)
@@ -421,6 +425,42 @@ class CoordinateMapper(QMainWindow):
             print(f"Error checking for events to undo: {e}")
             return False
     
+    def set_last_action_message(self, message: str):
+        """Set the Last action message.
+        
+        Args:
+            message: The action message to display (e.g., "Substitution completed Player Name (#) out - Player name (#) in")
+        """
+        if hasattr(self, 'message_display'):
+            full_message = f"Last action: {message}"
+            self.message_display.setText(full_message)
+            self.message_display.setStyleSheet("color: black; padding: 2px 0px; margin: 0px;")
+    
+    def set_last_undo_message(self, message: str):
+        """Set the Last Undo message.
+        
+        Args:
+            message: The undo message to display
+        """
+        if hasattr(self, 'message_display'):
+            full_message = f"Last Undo: {message}"
+            self.message_display.setText(full_message)
+            self.message_display.setStyleSheet("color: red; padding: 2px 0px; margin: 0px;")
+    
+    def set_status_message(self, message: str, is_undo: bool = False):
+        """Set a status message in the shared message area.
+        
+        Args:
+            message: The message to display (will be shown as-is, without "Last action:" or "Last Undo:" prefix)
+            is_undo: If True, display with red text, otherwise with black text
+        """
+        if hasattr(self, 'message_display'):
+            self.message_display.setText(message)
+            if is_undo:
+                self.message_display.setStyleSheet("color: red; padding: 2px 0px; margin: 0px;")
+            else:
+                self.message_display.setStyleSheet("color: black; padding: 2px 0px; margin: 0px;")
+    
     def award_point(self, team: str):
         """Award a point to team_us or team_them by updating the most recent rally.
         
@@ -431,14 +471,14 @@ class CoordinateMapper(QMainWindow):
             team: 'us' to award point to team_us, 'them' to award point to team_them
         """
         if not self.db or not self.game_id:
-            self.status_label.setText("Error: No database connection or game selected!")
+            self.set_status_message("Error: No database connection or game selected!")
             return
         
         if team == 'us' and not self.team_us_id:
-            self.status_label.setText("Error: team_us_id not loaded!")
+            self.set_status_message("Error: team_us_id not loaded!")
             return
         elif team == 'them' and not self.team_them_id:
-            self.status_label.setText("Error: team_them_id not loaded!")
+            self.set_status_message("Error: team_them_id not loaded!")
             return
         
         try:
@@ -463,7 +503,7 @@ class CoordinateMapper(QMainWindow):
             result = cursor.fetchone()
             
             if not result:
-                self.status_label.setText("Error: No rally found to update!")
+                self.set_status_message("Error: No rally found to update!")
                 return
             
             rally_id, rally_number, prev_serving_team_id = result
@@ -493,7 +533,9 @@ class CoordinateMapper(QMainWindow):
             
             # Update status
             team_name = "Us" if team == 'us' else "Them"
-            self.status_label.setText(f"Point awarded to {team_name}! Score: {self.score_us} - {self.score_them}")
+            # Update Last action message
+            action_text = f"Point awarded {team_name}! Score: {self.score_us} - {self.score_them}"
+            self.set_last_action_message(action_text)
             
             print(f"DEBUG: Point awarded to {team_name} (team_id={point_winner_id}). New score: {self.score_us} - {self.score_them}")
             # Set focus on the view so right arrow key works immediately
@@ -502,7 +544,7 @@ class CoordinateMapper(QMainWindow):
                 self.view.setFocus()
         except Exception as e:
             error_msg = f"Error awarding point: {str(e)}"
-            self.status_label.setText(error_msg)
+            self.set_status_message(error_msg)
             print(f"ERROR: {error_msg}")
     
     def start_set_boundaries(self):
@@ -517,7 +559,8 @@ class CoordinateMapper(QMainWindow):
         
         # Enter setup mode
         self.mode = 'setup'
-        self.status_label.setText("Click to define bottom-left corner of the plane")
+        status_msg = "Click to define bottom-left corner of the plane"
+        self.set_status_message(status_msg)
         self.coord_label.setText("")
         self.modify_court_btn.setEnabled(False)
         self.store_boundaries_btn.setEnabled(False)
@@ -529,7 +572,8 @@ class CoordinateMapper(QMainWindow):
         
         # Enter modify mode
         self.mode = 'modify'
-        self.status_label.setText("Click and drag any point to modify. Click 'Set Court Boundaries' to exit modify mode.")
+        status_msg = "Click and drag any point to modify. Click 'Set Court Boundaries' to exit modify mode."
+        self.set_status_message(status_msg)
         
         # Make the points visually distinct (larger and different color)
         for i, ellipse in enumerate(self.point_ellipses):
@@ -560,7 +604,7 @@ class CoordinateMapper(QMainWindow):
         import os
         if not os.path.exists(file_path):
             print(f"Warning: Video file not found: {file_path}")
-            self.status_label.setText(f"Video file not found: {file_path}")
+            self.set_status_message(f"Video file not found: {file_path}")
             return
         
         # Remove existing video item if present
@@ -594,7 +638,8 @@ class CoordinateMapper(QMainWindow):
         self.enable_video_controls()
         
         # Update status
-        self.status_label.setText("Video loaded. Click 'Set Court Boundaries' to start defining the court.")
+        status_msg = "Video loaded. Click 'Set Court Boundaries' to start defining the court."
+        self.set_status_message(status_msg)
         print(f"DEBUG: Video loaded from: {file_path}")
     
     def enable_video_controls(self):
@@ -719,7 +764,7 @@ class CoordinateMapper(QMainWindow):
     def store_court_boundaries(self):
         """Store the court boundaries to the database and prepare for contact location clicks."""
         if len(self.corner_points) < 10:
-            self.status_label.setText("Error: Court boundaries not fully defined!")
+            self.set_status_message("Error: Court boundaries not fully defined!")
             return
         
         # Capture scroll bar values at the time boundaries are stored
@@ -799,7 +844,7 @@ class CoordinateMapper(QMainWindow):
         self.mode = 'normal'
         
         # Update status
-        self.status_label.setText(status_msg)
+        self.set_status_message(status_msg)
         
         # Print for debugging
         print("Court boundaries stored:")
@@ -1073,7 +1118,7 @@ class CoordinateMapper(QMainWindow):
             
             # Update status and draw lines
             if len(self.corner_points) == 1:
-                self.status_label.setText("Click to define bottom-right corner (300, 0)")
+                self.set_status_message("Click to define bottom-right corner (300, 0)")
             elif len(self.corner_points) == 2:
                 # Draw line between first two points
                 line = QGraphicsLineItem(
@@ -1083,7 +1128,7 @@ class CoordinateMapper(QMainWindow):
                 line.setPen(QPen(QColor(0, 0, 255), 2))  # Blue line
                 self.scene.addItem(line)
                 self.graphics_items.append(line)
-                self.status_label.setText("Click to define top-right corner (300, 600)")
+                self.set_status_message("Click to define top-right corner (300, 600)")
             elif len(self.corner_points) == 3:
                 # Draw line from second to third point
                 line = QGraphicsLineItem(
@@ -1093,7 +1138,7 @@ class CoordinateMapper(QMainWindow):
                 line.setPen(QPen(QColor(0, 0, 255), 2))  # Blue line
                 self.scene.addItem(line)
                 self.graphics_items.append(line)
-                self.status_label.setText("Click to define top-left corner (0, 600)")
+                self.set_status_message("Click to define top-left corner (0, 600)")
             elif len(self.corner_points) == 4:
                 # Complete the quadrilateral
                 line1 = QGraphicsLineItem(
@@ -1111,7 +1156,7 @@ class CoordinateMapper(QMainWindow):
                 line2.setPen(QPen(QColor(0, 0, 255), 2))  # Blue line
                 self.scene.addItem(line2)
                 self.graphics_items.append(line2)
-                self.status_label.setText("Click left edge midpoint (0, 300)")
+                self.set_status_message("Click left edge midpoint (0, 300)")
             elif len(self.corner_points) == 5:
                 # Draw lines to left midpoint
                 line1 = QGraphicsLineItem(
@@ -1131,7 +1176,7 @@ class CoordinateMapper(QMainWindow):
                 line2.setPen(pen)
                 self.scene.addItem(line2)
                 self.graphics_items.append(line2)
-                self.status_label.setText("Click right edge midpoint (300, 300)")
+                self.set_status_message("Click right edge midpoint (300, 300)")
             elif len(self.corner_points) == 6:
                 # Draw lines to right midpoint and center line
                 pen = QPen(QColor(255, 165, 0), 2)  # Orange
@@ -1163,7 +1208,7 @@ class CoordinateMapper(QMainWindow):
                 line3.setPen(centerline_pen)
                 self.scene.addItem(line3)
                 self.graphics_items.append(line3)
-                self.status_label.setText("Click left point of Y=200 line (team_us side)")
+                self.set_status_message("Click left point of Y=200 line (team_us side)")
             elif len(self.corner_points) == 7:
                 # Draw Y=200 line (left point)
                 pen = QPen(QColor(0, 255, 0), 2)  # Green for Y=200 line
@@ -1175,7 +1220,7 @@ class CoordinateMapper(QMainWindow):
                 line1.setPen(pen)
                 self.scene.addItem(line1)
                 self.graphics_items.append(line1)
-                self.status_label.setText("Click right point of Y=200 line (team_us side)")
+                self.set_status_message("Click right point of Y=200 line (team_us side)")
             elif len(self.corner_points) == 8:
                 # Draw Y=200 line (right point) and complete the line
                 pen = QPen(QColor(0, 255, 0), 2)  # Green for Y=200 line
@@ -1195,7 +1240,7 @@ class CoordinateMapper(QMainWindow):
                 line2.setPen(pen)
                 self.scene.addItem(line2)
                 self.graphics_items.append(line2)
-                self.status_label.setText("Click left point of Y=400 line (team_them side)")
+                self.set_status_message("Click left point of Y=400 line (team_them side)")
             elif len(self.corner_points) == 9:
                 # Draw Y=400 line (left point)
                 pen = QPen(QColor(255, 0, 255), 2)  # Magenta for Y=400 line
@@ -1207,7 +1252,7 @@ class CoordinateMapper(QMainWindow):
                 line1.setPen(pen)
                 self.scene.addItem(line1)
                 self.graphics_items.append(line1)
-                self.status_label.setText("Click right point of Y=400 line (team_them side)")
+                self.set_status_message("Click right point of Y=400 line (team_them side)")
             elif len(self.corner_points) == 10:
                 # Draw Y=400 line (right point) and complete the line
                 pen = QPen(QColor(255, 0, 255), 2)  # Magenta for Y=400 line
@@ -1227,7 +1272,8 @@ class CoordinateMapper(QMainWindow):
                 line2.setPen(pen)
                 self.scene.addItem(line2)
                 self.graphics_items.append(line2)
-                self.status_label.setText("Plane defined! Click 'Store Court Boundaries' to save and start mapping.")
+                status_msg = "Plane defined! Click 'Store Court Boundaries' to save and start mapping."
+                self.set_status_message(status_msg)
                 
                 # Enable modify and store buttons, change to normal mode
                 self.modify_court_btn.setEnabled(True)
@@ -1242,27 +1288,28 @@ class CoordinateMapper(QMainWindow):
             
             if logical_coords is not None:
                 # Draw a small point
-                radius = 3
-                ellipse = QGraphicsEllipseItem(x - radius, y - radius, radius * 2, radius * 2)
-                ellipse.setBrush(QBrush(QColor(0, 255, 0)))  # Green fill
-                ellipse.setPen(QPen(QColor(0, 0, 0), 1))  # Black outline
-                self.scene.addItem(ellipse)
-                self.graphics_items.append(ellipse)
-                
-                # Display coordinates
-                coord_text = f"({logical_coords[0]:.2f}, {logical_coords[1]:.2f})"
-                text_item = QGraphicsTextItem(coord_text)
-                text_item.setPos(x, y + 15)
-                text_item.setDefaultTextColor(QColor(0, 255, 0))  # Green text
-                font = QFont('Arial', 9)
-                text_item.setFont(font)
-                self.scene.addItem(text_item)
-                self.graphics_items.append(text_item)
-                
-                # Update label with latest coordinates
-                self.coord_label.setText(
-                    f"Latest point: [{logical_coords[0]:.2f}, {logical_coords[1]:.2f}]"
-                )
+                # COMMENTED OUT: Green dot and coordinate display
+                # radius = 3
+                # ellipse = QGraphicsEllipseItem(x - radius, y - radius, radius * 2, radius * 2)
+                # ellipse.setBrush(QBrush(QColor(0, 255, 0)))  # Green fill
+                # ellipse.setPen(QPen(QColor(0, 0, 0), 1))  # Black outline
+                # self.scene.addItem(ellipse)
+                # self.graphics_items.append(ellipse)
+                # 
+                # # Display coordinates
+                # coord_text = f"({logical_coords[0]:.2f}, {logical_coords[1]:.2f})"
+                # text_item = QGraphicsTextItem(coord_text)
+                # text_item.setPos(x, y + 15)
+                # text_item.setDefaultTextColor(QColor(0, 255, 0))  # Green text
+                # font = QFont('Arial', 9)
+                # text_item.setFont(font)
+                # self.scene.addItem(text_item)
+                # self.graphics_items.append(text_item)
+                # 
+                # # Update label with latest coordinates
+                # self.coord_label.setText(
+                #     f"Latest point: [{logical_coords[0]:.2f}, {logical_coords[1]:.2f}]"
+                # )
                 
                 self.mapped_points.append([x, y, logical_coords[0], logical_coords[1]])
                 
@@ -1588,8 +1635,24 @@ class CoordinateMapper(QMainWindow):
                 # Track the replacement
                 self.libero_replacements[pos] = replaced_player_id
                 
-                QMessageBox.information(self, "Libero Entered", 
-                                      f"Libero has entered at position {pos}, replacing player #{replaced_player_id}.")
+                # Get player info for message
+                cursor = self.db.conn.cursor()
+                cursor.execute("""
+                    SELECT COALESCE(p.jersey, p.player_number) as player_number, p.name
+                    FROM players p
+                    WHERE p.player_id = ?
+                """, (replaced_player_id,))
+                player_info = cursor.fetchone()
+                if player_info:
+                    player_number, player_name = player_info
+                    player_display = f"{player_name or 'Unknown'} ({player_number})"
+                else:
+                    player_display = f"Player #{replaced_player_id}"
+                
+                # Update Last action message
+                action_text = f"Libero in for {player_display}"
+                self.set_last_action_message(action_text)
+                
                 dialog.accept()
             except Exception as e:
                 QMessageBox.critical(self, "Libero Error", 
@@ -1784,16 +1847,8 @@ class CoordinateMapper(QMainWindow):
                     # Fallback: use result as-is if it's a string
                     message = str(result) if result else "Event undone"
                 
-                # Show message in red
-                self.undo_popup_label.setText(message)
-                self.undo_popup_label.setStyleSheet("color: red; padding: 2px 0px; margin: 0px;")
-                self.undo_popup_label.setFixedHeight(20)  # Expand to show message
-                
-                # Hide message after 1.5 seconds
-                def clear_label():
-                    self.undo_popup_label.setText("")
-                    self.undo_popup_label.setFixedHeight(0)  # Collapse when empty
-                QTimer.singleShot(1500, clear_label)
+                # Update Last Undo message (permanent, not temporary)
+                self.set_last_undo_message(message)
                 
                 # Update score display and undo button state if needed
                 if self.db and self.game_id:
@@ -1801,7 +1856,7 @@ class CoordinateMapper(QMainWindow):
                     self._update_undo_button_state()
             else:
                 # No event to undo
-                self.status_label.setText("No event to undo")
+                self.set_status_message("No event to undo")
         elif parent and hasattr(parent, 'undo_last_contact'):
             # Fallback to old method for backward compatibility
             result = parent.undo_last_contact()
@@ -1819,16 +1874,8 @@ class CoordinateMapper(QMainWindow):
                     # For contacts without player (e.g., "down")
                     message = f"{contact_type} Removed"
                 
-                # Show message in red
-                self.undo_popup_label.setText(message)
-                self.undo_popup_label.setStyleSheet("color: red; padding: 2px 0px; margin: 0px;")
-                self.undo_popup_label.setFixedHeight(20)  # Expand to show message
-                
-                # Hide message after 1.5 seconds
-                def clear_label():
-                    self.undo_popup_label.setText("")
-                    self.undo_popup_label.setFixedHeight(0)  # Collapse when empty
-                QTimer.singleShot(1500, clear_label)
+                # Update Last Undo message (permanent, not temporary)
+                self.set_last_undo_message(message)
                 
                 # Update score display and undo button state if needed
                 if self.db and self.game_id:
@@ -1836,10 +1883,10 @@ class CoordinateMapper(QMainWindow):
                     self._update_undo_button_state()
             else:
                 # No contact to undo
-                self.status_label.setText("No contact to undo")
+                self.set_status_message("No contact to undo")
         else:
             # No parent or parent doesn't have undo method
-            self.status_label.setText("Cannot undo: No data entry window connected")
+            self.set_status_message("Cannot undo: No data entry window connected")
     
     def perform_libero_exit(self, libero_id: int, position: int, replaced_player_id: int):
         """Perform the libero exit action."""
@@ -1862,8 +1909,25 @@ class CoordinateMapper(QMainWindow):
             if position in self.libero_replacements:
                 del self.libero_replacements[position]
             
-            QMessageBox.information(self, "Libero Exited", 
-                                  f"Libero has exited position {position}. Original player restored.")
+            # Get player info for message
+            if not self.db.conn:
+                self.db.connect()
+            cursor = self.db.conn.cursor()
+            cursor.execute("""
+                SELECT COALESCE(p.jersey, p.player_number) as player_number, p.name
+                FROM players p
+                WHERE p.player_id = ?
+            """, (replaced_player_id,))
+            player_info = cursor.fetchone()
+            if player_info:
+                player_number, player_name = player_info
+                player_display = f"{player_name or 'Unknown'} ({player_number})"
+            else:
+                player_display = f"Player #{replaced_player_id}"
+            
+            # Update Last action message
+            action_text = f"Libero out for {player_display}"
+            self.set_last_action_message(action_text)
         except Exception as e:
             QMessageBox.critical(self, "Libero Error", 
                                f"Failed to exit libero:\n{str(e)}")
@@ -2044,7 +2108,8 @@ class CoordinateMapper(QMainWindow):
             self.mode = 'normal'
             self.modify_court_btn.setEnabled(True)
             self.store_boundaries_btn.setEnabled(True)
-            self.status_label.setText("Plane defined! Click 'Store Court Boundaries' to save and start mapping.")
+            status_msg = "Plane defined! Click 'Store Court Boundaries' to save and start mapping."
+            self.set_status_message(status_msg)
             # Compute homography matrix
             self._compute_homography()
             # Redraw the plane
@@ -2056,7 +2121,7 @@ class CoordinateMapper(QMainWindow):
             self.mode = 'normal'
             self.modify_court_btn.setEnabled(False)  # Can't modify if not fully configured
             self.store_boundaries_btn.setEnabled(False)
-            self.status_label.setText("Plane partially defined (6 points). Please set up Y200 and Y400 lines.")
+            self.set_status_message("Plane partially defined (6 points). Please set up Y200 and Y400 lines.")
             self.homography_matrix = None  # Can't compute homography without all points
             # Redraw the plane
             self._redraw_plane()
@@ -2245,7 +2310,8 @@ class CoordinateMapper(QMainWindow):
                 self.scene.addItem(line3)
                 self.graphics_items.append(line3)
                 
-                self.status_label.setText("Plane defined! Click anywhere inside to get coordinates")
+                status_msg = "Plane defined! Click anywhere inside to get coordinates"
+                self.set_status_message(status_msg)
     
     def showEvent(self, event):
         """Handle window show event - update undo button state when window is shown."""

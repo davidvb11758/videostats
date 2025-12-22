@@ -4665,27 +4665,58 @@ class DataEntryWindow(QMainWindow):
             return
         
         # Get jersey numbers and role codes for active players
+        # For team_us, use game_role_code from game_players; otherwise use role_code from players
         if not self.db.conn:
             self.db.connect()
         cursor = self.db.conn.cursor()
         active_player_ids = [p[0] for p in active_players]
         placeholders = ','.join('?' * len(active_player_ids))
-        cursor.execute(f"""
-            SELECT player_id, COALESCE(jersey, player_number) as jersey_number, COALESCE(role_code, '') as role_code
-            FROM players
-            WHERE player_id IN ({placeholders})
-        """, active_player_ids)
+        
+        # Check if this is team_us
+        cursor.execute("SELECT team_us_id FROM games WHERE game_id = ?", (self.game_id,))
+        game_result = cursor.fetchone()
+        is_team_us = game_result and game_result[0] == self.team_us_id
+        
+        if is_team_us:
+            # Use game_role_code from game_players for team_us
+            cursor.execute(f"""
+                SELECT p.player_id, 
+                       COALESCE(p.jersey, p.player_number) as jersey_number,
+                       COALESCE(gp.game_role_code, '') as role_code
+                FROM players p
+                INNER JOIN game_players gp ON p.player_id = gp.player_id
+                WHERE gp.game_id = ? AND gp.team_id = ? AND p.player_id IN ({placeholders})
+            """, (self.game_id, self.team_us_id, *active_player_ids))
+        else:
+            # Use role_code from players for team_them
+            cursor.execute(f"""
+                SELECT player_id, COALESCE(jersey, player_number) as jersey_number, COALESCE(role_code, '') as role_code
+                FROM players
+                WHERE player_id IN ({placeholders})
+            """, active_player_ids)
         active_player_info = {row[0]: (row[1], row[2]) for row in cursor.fetchall()}  # {player_id: (jersey, role_code)}
         
         # Get jersey numbers and role codes for bench players
         bench_player_ids = [p[0] for p in bench_players]
         if bench_player_ids:
             placeholders = ','.join('?' * len(bench_player_ids))
-            cursor.execute(f"""
-                SELECT player_id, COALESCE(jersey, player_number) as jersey_number, COALESCE(role_code, '') as role_code
-                FROM players
-                WHERE player_id IN ({placeholders})
-            """, bench_player_ids)
+            if is_team_us:
+                # Use game_role_code from game_players for team_us
+                cursor.execute(f"""
+                    SELECT p.player_id,
+                           COALESCE(p.jersey, p.player_number) as jersey_number,
+                           COALESCE(gp.game_role_code, '') as role_code
+                    FROM players p
+                    INNER JOIN game_players gp ON p.player_id = gp.player_id
+                    WHERE gp.game_id = ? AND gp.team_id = ? AND p.player_id IN ({placeholders})
+                """, (self.game_id, self.team_us_id, *bench_player_ids))
+            else:
+                # Use role_code from players for team_them
+                cursor.execute(f"""
+                    SELECT player_id, COALESCE(jersey, player_number) as jersey_number, COALESCE(role_code, '') as role_code
+                    FROM players
+                    WHERE player_id IN ({placeholders})
+                """, bench_player_ids)
             bench_player_info = {row[0]: (row[1], row[2]) for row in cursor.fetchall()}  # {player_id: (jersey, role_code)}
         else:
             bench_player_info = {}
@@ -4914,8 +4945,41 @@ class DataEntryWindow(QMainWindow):
                 # Print updated lineup
                 self.print_team_us_lineup()
                 
-                QMessageBox.information(self, "Substitution Complete", 
-                                      "Player substitution completed successfully.")
+                # Get player info for action message
+                cursor = self.db.conn.cursor()
+                # Get out player info
+                cursor.execute("""
+                    SELECT COALESCE(p.jersey, p.player_number) as player_number, p.name
+                    FROM players p
+                    WHERE p.player_id = ?
+                """, (out_player_id,))
+                out_player_info = cursor.fetchone()
+                out_player_display = ""
+                if out_player_info:
+                    out_number, out_name = out_player_info
+                    out_player_display = f"{out_name or 'Unknown'} ({out_number})"
+                else:
+                    out_player_display = f"Player #{out_player_id}"
+                
+                # Get in player info
+                cursor.execute("""
+                    SELECT COALESCE(p.jersey, p.player_number) as player_number, p.name
+                    FROM players p
+                    WHERE p.player_id = ?
+                """, (in_player_id,))
+                in_player_info = cursor.fetchone()
+                in_player_display = ""
+                if in_player_info:
+                    in_number, in_name = in_player_info
+                    in_player_display = f"{in_name or 'Unknown'} ({in_number})"
+                else:
+                    in_player_display = f"Player #{in_player_id}"
+                
+                # Update coordinate mapper's Last action message
+                if self.coordinate_mapper:
+                    action_message = f"Substitution completed {out_player_display} out - {in_player_display} in"
+                    self.coordinate_mapper.set_last_action_message(action_message)
+                
                 dialog.accept()
             except Exception as e:
                 QMessageBox.critical(self, "Substitution Error", 

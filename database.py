@@ -104,6 +104,7 @@ class VideoStatsDB:
                 game_id INTEGER NOT NULL,
                 team_id INTEGER NOT NULL,
                 player_id INTEGER NOT NULL,
+                game_role_code TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (game_id) REFERENCES games(game_id) ON DELETE CASCADE,
                 FOREIGN KEY (team_id) REFERENCES teams(team_id),
@@ -760,6 +761,18 @@ class VideoStatsDB:
             except Exception as e:
                 print(f"Failed to add rating_manual column: {e}")
         
+        # Migration: Add game_role_code column to game_players table if it doesn't exist
+        cursor.execute("PRAGMA table_info(game_players)")
+        game_players_columns = [row[1] for row in cursor.fetchall()]
+        if 'game_role_code' not in game_players_columns:
+            print("Adding game_role_code column to game_players table...")
+            try:
+                cursor.execute("ALTER TABLE game_players ADD COLUMN game_role_code TEXT")
+                self.conn.commit()
+                print("game_role_code column added successfully!")
+            except Exception as e:
+                print(f"Failed to add game_role_code column: {e}")
+        
         if 'outcome' in columns:
             # Check if the outcome column has the old constraint (without 'stuff', 'assist', or 'fault')
             cursor.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='contacts'")
@@ -1308,20 +1321,33 @@ class VideoStatsDB:
         result = cursor.fetchone()[0]
         return (result or 0) + 1
     
-    def add_player_to_game(self, game_id: int, team_id: int, player_id: int) -> int:
-        """Add a player to a specific game's roster and return game_player_id."""
+    def add_player_to_game(self, game_id: int, team_id: int, player_id: int, game_role_code: str = None) -> int:
+        """Add a player to a specific game's roster and return game_player_id.
+        
+        Args:
+            game_id: The game ID
+            team_id: The team ID
+            player_id: The player ID
+            game_role_code: Optional role code for this player in this game (e.g., 'OH', 'S', 'RS', etc.)
+        """
         if not self.conn:
             self.connect()
         cursor = self.conn.cursor()
         try:
             cursor.execute(
-                "INSERT INTO game_players (game_id, team_id, player_id) VALUES (?, ?, ?)",
-                (game_id, team_id, player_id)
+                "INSERT INTO game_players (game_id, team_id, player_id, game_role_code) VALUES (?, ?, ?, ?)",
+                (game_id, team_id, player_id, game_role_code)
             )
             self.conn.commit()
             return cursor.lastrowid
         except sqlite3.IntegrityError:
-            # Player already in game roster
+            # Player already in game roster - update game_role_code if provided
+            if game_role_code is not None:
+                cursor.execute(
+                    "UPDATE game_players SET game_role_code = ? WHERE game_id = ? AND team_id = ? AND player_id = ?",
+                    (game_role_code, game_id, team_id, player_id)
+                )
+                self.conn.commit()
             cursor.execute(
                 "SELECT game_player_id FROM game_players WHERE game_id = ? AND team_id = ? AND player_id = ?",
                 (game_id, team_id, player_id)

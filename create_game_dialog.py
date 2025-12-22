@@ -6,7 +6,7 @@ Allows selecting Team_US, setting starting lineup, and launching data entry.
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QPushButton,
     QMessageBox, QDateEdit, QGridLayout, QGroupBox, QLineEdit, QRadioButton,
-    QButtonGroup, QWidget, QFrame
+    QButtonGroup, QWidget, QFrame, QScrollArea
 )
 from PySide6.QtCore import Qt, QDate, Signal
 from PySide6.QtGui import QFont
@@ -114,6 +114,16 @@ class CreateGameDialog(QDialog):
             self.libero_combo.addItem("-- No Libero --", None)
             self.libero_combo.currentIndexChanged.connect(self.on_libero_selected)
         
+        # Non-starter players widgets
+        self.non_starter_group = self.findChild(QGroupBox, "nonStarterGroup")
+        self.non_starter_scroll = self.findChild(QScrollArea, "nonStarterScrollArea")
+        self.non_starter_grid = None
+        self.non_starter_widgets = {}  # {player_id: (label, role_combo)}
+        if self.non_starter_scroll:
+            scroll_widget = self.non_starter_scroll.findChild(QWidget, "nonStarterScrollAreaWidgetContents")
+            if scroll_widget:
+                self.non_starter_grid = scroll_widget.findChild(QGridLayout, "nonStarterGrid")
+        
         self.serve_us_radio = self.findChild(QRadioButton, "serveUsRadio")
         self.serve_them_radio = self.findChild(QRadioButton, "serveThemRadio")
         self.serving_button_group = QButtonGroup()
@@ -152,15 +162,17 @@ class CreateGameDialog(QDialog):
         if team_id:
             self.populate_roster(team_id)
             self.set_lineup_enabled(True)
+            self.update_non_starter_players()
         else:
             self.set_lineup_enabled(False)
+            self.clear_non_starter_players()
     
     def populate_roster(self, team_id):
         """Populate player dropdowns with team roster."""
         try:
             cursor = self.db.conn.cursor()
             cursor.execute("""
-                SELECT player_id, name, jersey, player_number, role_code
+                SELECT player_id, name, jersey, player_number
                 FROM players
                 WHERE team_id = ?
                 ORDER BY name ASC
@@ -178,10 +190,10 @@ class CreateGameDialog(QDialog):
             
             # Populate with players
             for player in players:
-                player_id, name, jersey, player_number, role_code = player
+                player_id, name, jersey, player_number = player
                 player_name = name or 'Unknown'
                 jersey_number = jersey or player_number
-                role = role_code or ''
+                role = ''
                 
                 # Format: "player name (jersey # role)"
                 if role:
@@ -229,7 +241,7 @@ class CreateGameDialog(QDialog):
         try:
             cursor = self.db.conn.cursor()
             cursor.execute("""
-                SELECT player_id, name, jersey, player_number, role_code
+                SELECT player_id, name, jersey, player_number
                 FROM players
                 WHERE team_id = ?
                 ORDER BY name ASC
@@ -238,14 +250,14 @@ class CreateGameDialog(QDialog):
             players = cursor.fetchall()
             
             for player in players:
-                player_id, name, jersey, player_number, role_code = player
+                player_id, name, jersey, player_number = player
                 # Skip if player is in starting lineup
                 if player_id in lineup_player_ids:
                     continue
                 
                 player_name = name or 'Unknown'
                 jersey_number = jersey or player_number
-                role = role_code or ''
+                role = ''
                 
                 # Format: "player name (jersey # role)"
                 if role:
@@ -265,12 +277,15 @@ class CreateGameDialog(QDialog):
             QMessageBox.warning(self, "Error", f"Failed to update libero combo: {str(e)}")
         
         self.libero_combo.blockSignals(False)
+        # Update non-starter players list after libero combo update
+        self.update_non_starter_players()
     
     def on_libero_selected(self, index):
         """Handle libero selection - update starting lineup combos to exclude libero."""
         if index <= 0:  # "-- No Libero --" selected
             # Libero deselected, update all position combos to include all players
             self.update_position_combos()
+            self.update_non_starter_players()
             return
         
         libero_id = self.libero_combo.currentData()
@@ -293,6 +308,8 @@ class CreateGameDialog(QDialog):
         
         # Update position combos to exclude libero
         self.update_position_combos()
+        # Update non-starter players list (exclude libero)
+        self.update_non_starter_players()
     
     def update_position_combos(self):
         """Update all position combos to exclude the selected libero."""
@@ -306,7 +323,7 @@ class CreateGameDialog(QDialog):
         try:
             cursor = self.db.conn.cursor()
             cursor.execute("""
-                SELECT player_id, name, jersey, player_number, role_code
+                SELECT player_id, name, jersey, player_number
                 FROM players
                 WHERE team_id = ?
                 ORDER BY name ASC
@@ -326,7 +343,7 @@ class CreateGameDialog(QDialog):
                 player_combo.addItem("-- Select Player --", None)
                 
                 for player in players:
-                    player_id, name, jersey, player_number, role_code = player
+                    player_id, name, jersey, player_number = player
                     
                     # Skip if this is the libero
                     if libero_id and player_id == libero_id:
@@ -334,7 +351,7 @@ class CreateGameDialog(QDialog):
                     
                     player_name = name or 'Unknown'
                     jersey_number = jersey or player_number
-                    role = role_code or ''
+                    role = ''
                     
                     # Format: "player name (jersey # role)"
                     if role:
@@ -361,6 +378,92 @@ class CreateGameDialog(QDialog):
             player_combo.setEnabled(enabled)
             role_combo.setEnabled(enabled)
         self.libero_combo.setEnabled(enabled)
+        if self.non_starter_group:
+            self.non_starter_group.setEnabled(enabled)
+    
+    def clear_non_starter_players(self):
+        """Clear all non-starter player widgets."""
+        if not self.non_starter_grid:
+            return
+        
+        # Remove all widgets from the grid
+        while self.non_starter_grid.count():
+            item = self.non_starter_grid.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        
+        self.non_starter_widgets.clear()
+    
+    def update_non_starter_players(self):
+        """Update the list of non-starter players (excluding libero and starting lineup)."""
+        if not self.non_starter_grid:
+            return
+        
+        team_id = self.team_us_combo.currentData()
+        if not team_id:
+            self.clear_non_starter_players()
+            return
+        
+        # Get all players in starting lineup
+        starting_player_ids = set()
+        for player_combo, _ in self.position_widgets.values():
+            player_id = player_combo.currentData()
+            if player_id:
+                starting_player_ids.add(player_id)
+        
+        # Get libero ID
+        libero_id = self.libero_combo.currentData()
+        
+        try:
+            if not self.db.conn:
+                self.db.connect()
+            cursor = self.db.conn.cursor()
+            cursor.execute("""
+                SELECT player_id, name, jersey, player_number
+                FROM players
+                WHERE team_id = ?
+                ORDER BY name ASC
+            """, (team_id,))
+            
+            all_players = cursor.fetchall()
+            
+            # Filter to non-starter players (exclude starting lineup and libero)
+            non_starter_players = []
+            for player in all_players:
+                player_id, name, jersey, player_number = player
+                # Skip if in starting lineup or is libero
+                if player_id in starting_player_ids or player_id == libero_id:
+                    continue
+                non_starter_players.append(player)
+            
+            # Clear existing widgets
+            self.clear_non_starter_players()
+            
+            # Create widgets for each non-starter player
+            for row, player in enumerate(non_starter_players):
+                player_id, name, jersey, player_number = player
+                player_name = name or 'Unknown'
+                jersey_number = jersey or player_number
+                
+                # Create label
+                label = QLabel(f"{player_name} ({jersey_number}):")
+                label.setMinimumWidth(150)
+                
+                # Create role combo
+                role_combo = QComboBox()
+                role_combo.addItems(['S', 'RS', 'RH', 'MH', 'OH', 'DS'])
+                role_combo.setEditable(True)
+                # Default to empty (user must select)
+                
+                # Add to grid
+                self.non_starter_grid.addWidget(label, row, 0)
+                self.non_starter_grid.addWidget(role_combo, row, 1)
+                
+                # Store reference
+                self.non_starter_widgets[player_id] = (label, role_combo)
+        
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to update non-starter players: {str(e)}")
     
     def on_player_selected(self, position, index):
         """Handle player selection - prevent duplicate selections and libero conflicts."""
@@ -399,6 +502,8 @@ class CreateGameDialog(QDialog):
         
         # Update libero combo to exclude this player
         self.update_libero_combo()
+        # Update non-starter players list
+        self.update_non_starter_players()
     
     def validate_lineup(self):
         """Validate that lineup is complete and valid."""
@@ -531,9 +636,33 @@ class CreateGameDialog(QDialog):
             """, (team_us_id,))
             team_us_roster = cursor.fetchall()
             
+            # Get role codes for starting lineup players
+            starting_roles = {}
+            for pos, player_id, role in lineup_data:
+                starting_roles[player_id] = role
+            
+            # Get role codes for non-starter players
+            non_starter_roles = {}
+            for player_id, (label, role_combo) in self.non_starter_widgets.items():
+                role = role_combo.currentText().strip()
+                if role:
+                    non_starter_roles[player_id] = role
+            
+            # Get libero role (always 'Lib')
+            libero_id = self.libero_combo.currentData()
+            if libero_id:
+                non_starter_roles[libero_id] = 'Lib'
+            
             for (player_id,) in team_us_roster:
                 try:
-                    self.db.add_player_to_game(self.game_id, team_us_id, player_id)
+                    # Get role code for this player
+                    game_role_code = None
+                    if player_id in starting_roles:
+                        game_role_code = starting_roles[player_id]
+                    elif player_id in non_starter_roles:
+                        game_role_code = non_starter_roles[player_id]
+                    
+                    self.db.add_player_to_game(self.game_id, team_us_id, player_id, game_role_code)
                 except Exception as e:
                     # Player might already be in game - log but continue
                     print(f"Warning: Could not add team_us player {player_id} to game: {e}")
