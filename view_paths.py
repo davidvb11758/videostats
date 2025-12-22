@@ -1765,7 +1765,7 @@ class ContactPathViewer(QMainWindow):
         cursor.execute("""
             SELECT g.game_id, g.game_date, 
                    t1.name as team_us_name, t2.name as team_them_name,
-                   g.team_us_id, g.team_them_id
+                   g.team_us_id, g.team_them_id, g.notes
             FROM games g
             INNER JOIN teams t1 ON g.team_us_id = t1.team_id
             INNER JOIN teams t2 ON g.team_them_id = t2.team_id
@@ -1781,7 +1781,7 @@ class ContactPathViewer(QMainWindow):
             self.ui.comboBox.setItemData(0, None, Qt.UserRole)
             
             for game in games:
-                game_id, game_date, team_us_name, team_them_name, team_us_id, team_them_id = game
+                game_id, game_date, team_us_name, team_them_name, team_us_id, team_them_id, notes = game
                 display_text = f"Game {game_id}: {team_us_name} vs {team_them_name} ({game_date})"
                 self.ui.comboBox.addItem(display_text)
                 # Store game data
@@ -1791,7 +1791,8 @@ class ContactPathViewer(QMainWindow):
                     'team_us_id': team_us_id,
                     'team_them_id': team_them_id,
                     'team_us_name': team_us_name,
-                    'team_them_name': team_them_name
+                    'team_them_name': team_them_name,
+                    'notes': notes
                 }, Qt.UserRole)
     
     def populate_player_list(self):
@@ -1810,17 +1811,35 @@ class ContactPathViewer(QMainWindow):
         
         self.player_list_widget.clear()
         
+        # Reduce spacing between rows using stylesheet
+        self.player_list_widget.setStyleSheet("""
+            QListWidget::item {
+                padding: 2px;
+                margin: 0px;
+            }
+        """)
+        
         # Add "All Players" option
         all_item = QListWidgetItem("All Players")
         all_item.setData(Qt.UserRole, None)  # None indicates "all players"
         self.player_list_widget.addItem(all_item)
         all_item.setSelected(True)  # Select by default
         
+        # Prepare player list with format "Player name (jersey #)" and sort alphabetically
+        player_items = []
         for player in players:
             player_id, player_number, player_name, team_id = player
-            display_text = f"{player_number}"
             if player_name:
-                display_text += f" - {player_name}"
+                display_text = f"{player_name} ({player_number})"
+            else:
+                display_text = f"Player ({player_number})"
+            player_items.append((display_text, player_id, player_name or ""))
+        
+        # Sort alphabetically by player name
+        player_items.sort(key=lambda x: x[2].lower() if x[2] else "")
+        
+        # Add sorted players to list
+        for display_text, player_id, _ in player_items:
             item = QListWidgetItem(display_text)
             item.setData(Qt.UserRole, player_id)
             self.player_list_widget.addItem(item)
@@ -1928,7 +1947,16 @@ class ContactPathViewer(QMainWindow):
             if hasattr(self.ui, 'teamNameUs'):
                 self.ui.teamNameUs.setText(item_data['team_us_name'])
             if hasattr(self.ui, 'teamNameThem'):
-                self.ui.teamNameThem.setText(item_data['team_them_name'])
+                # Extract opponent alias from notes field
+                notes = item_data.get('notes', '') if item_data.get('notes') else ''
+                opponent_display = item_data['team_them_name']  # Default to team name
+                if notes:
+                    # Check if notes contains "Opponent: " prefix
+                    if notes.startswith("Opponent: "):
+                        opponent_display = notes.replace("Opponent: ", "").strip()
+                    else:
+                        opponent_display = notes.strip()
+                self.ui.teamNameThem.setText(opponent_display)
             
             # Populate player list for our team
             self.populate_player_list()
@@ -2237,9 +2265,6 @@ class ContactPathViewer(QMainWindow):
         
         # Draw contacts and connecting lines
         self.draw_contact_paths(filtered_contacts, all_contacts_map, has_filter)
-        
-        QMessageBox.information(self, "Contacts Displayed", 
-                               f"Displayed {len(filtered_contacts)} contacts matching the filter criteria.")
     
     def display_contacts_video_mode(self):
         """Display contacts in video mode - show table with contact list."""

@@ -119,21 +119,27 @@ class CoordinateMapper(QMainWindow):
         # Compact button style
         compact_button_style = "padding: 4px 8px; margin: 0px;"
         
+        # Store original button style for feedback reset
+        self.original_button_style = compact_button_style
+        
         self.load_video_btn = QPushButton("Load Video")
         self.load_video_btn.setFont(QFont('Arial', 11))
         self.load_video_btn.setStyleSheet(compact_button_style)
+        self.load_video_btn.clicked.connect(lambda: self._button_click_feedback(self.load_video_btn))
         self.load_video_btn.clicked.connect(self.load_video)
         button_layout.addWidget(self.load_video_btn)
         
         self.set_boundaries_btn = QPushButton("Set Court Boundaries")
         self.set_boundaries_btn.setFont(QFont('Arial', 11))
         self.set_boundaries_btn.setStyleSheet(compact_button_style)
+        self.set_boundaries_btn.clicked.connect(lambda: self._button_click_feedback(self.set_boundaries_btn))
         self.set_boundaries_btn.clicked.connect(self.start_set_boundaries)
         button_layout.addWidget(self.set_boundaries_btn)
         
         self.modify_court_btn = QPushButton("Modify Court")
         self.modify_court_btn.setFont(QFont('Arial', 11))
         self.modify_court_btn.setStyleSheet(compact_button_style)
+        self.modify_court_btn.clicked.connect(lambda: self._button_click_feedback(self.modify_court_btn))
         self.modify_court_btn.clicked.connect(self.start_modify_court)
         self.modify_court_btn.setEnabled(False)  # Disabled until court is set
         button_layout.addWidget(self.modify_court_btn)
@@ -141,6 +147,7 @@ class CoordinateMapper(QMainWindow):
         self.store_boundaries_btn = QPushButton("Store Court Boundaries")
         self.store_boundaries_btn.setFont(QFont('Arial', 11))
         self.store_boundaries_btn.setStyleSheet(compact_button_style)
+        self.store_boundaries_btn.clicked.connect(lambda: self._button_click_feedback(self.store_boundaries_btn))
         self.store_boundaries_btn.clicked.connect(self.store_court_boundaries)
         self.store_boundaries_btn.setEnabled(False)  # Disabled until court is set
         button_layout.addWidget(self.store_boundaries_btn)
@@ -148,6 +155,7 @@ class CoordinateMapper(QMainWindow):
         self.clear_dots_btn = QPushButton("Clear Dots")
         self.clear_dots_btn.setFont(QFont('Arial', 11))
         self.clear_dots_btn.setStyleSheet(compact_button_style)
+        self.clear_dots_btn.clicked.connect(lambda: self._button_click_feedback(self.clear_dots_btn))
         self.clear_dots_btn.clicked.connect(self.clear_green_dots)
         self.clear_dots_btn.setEnabled(True)  # Always enabled
         button_layout.addWidget(self.clear_dots_btn)
@@ -163,6 +171,7 @@ class CoordinateMapper(QMainWindow):
         self.award_point_us_btn = QPushButton("+1 Us")
         self.award_point_us_btn.setFont(QFont('Arial', 11))
         self.award_point_us_btn.setStyleSheet(compact_button_style)
+        self.award_point_us_btn.clicked.connect(lambda: self._button_click_feedback(self.award_point_us_btn))
         self.award_point_us_btn.clicked.connect(lambda: self.award_point('us'))
         self.award_point_us_btn.setEnabled(self.db is not None and self.game_id is not None)
         button_layout.addWidget(self.award_point_us_btn)
@@ -170,6 +179,7 @@ class CoordinateMapper(QMainWindow):
         self.award_point_them_btn = QPushButton("+1 Them")
         self.award_point_them_btn.setFont(QFont('Arial', 11))
         self.award_point_them_btn.setStyleSheet(compact_button_style)
+        self.award_point_them_btn.clicked.connect(lambda: self._button_click_feedback(self.award_point_them_btn))
         self.award_point_them_btn.clicked.connect(lambda: self.award_point('them'))
         self.award_point_them_btn.setEnabled(self.db is not None and self.game_id is not None)
         button_layout.addWidget(self.award_point_them_btn)
@@ -180,6 +190,7 @@ class CoordinateMapper(QMainWindow):
         self.substitution_btn = QPushButton("Substitution")
         self.substitution_btn.setFont(QFont('Arial', 11))
         self.substitution_btn.setStyleSheet(compact_button_style)
+        self.substitution_btn.clicked.connect(lambda: self._button_click_feedback(self.substitution_btn))
         self.substitution_btn.clicked.connect(self.show_substitution_dialog)
         self.substitution_btn.setEnabled(self.db is not None and self.game_id is not None)
         button_layout.addWidget(self.substitution_btn)
@@ -187,6 +198,7 @@ class CoordinateMapper(QMainWindow):
         self.libero_in_btn = QPushButton("Libero IN")
         self.libero_in_btn.setFont(QFont('Arial', 11))
         self.libero_in_btn.setStyleSheet(compact_button_style)
+        self.libero_in_btn.clicked.connect(lambda: self._button_click_feedback(self.libero_in_btn))
         self.libero_in_btn.clicked.connect(self.show_libero_in_dialog)
         self.libero_in_btn.setEnabled(self.db is not None and self.game_id is not None)
         button_layout.addWidget(self.libero_in_btn)
@@ -194,6 +206,7 @@ class CoordinateMapper(QMainWindow):
         self.libero_out_btn = QPushButton("Libero OUT")
         self.libero_out_btn.setFont(QFont('Arial', 11))
         self.libero_out_btn.setStyleSheet(compact_button_style)
+        self.libero_out_btn.clicked.connect(lambda: self._button_click_feedback(self.libero_out_btn))
         self.libero_out_btn.clicked.connect(self.show_libero_out_dialog)
         self.libero_out_btn.setEnabled(self.db is not None and self.game_id is not None)
         button_layout.addWidget(self.libero_out_btn)
@@ -202,6 +215,7 @@ class CoordinateMapper(QMainWindow):
         self.undo_btn = QPushButton("Undo")
         self.undo_btn.setFont(QFont('Arial', 11))
         self.undo_btn.setStyleSheet(compact_button_style)
+        self.undo_btn.clicked.connect(lambda: self._button_click_feedback(self.undo_btn))
         self.undo_btn.clicked.connect(self.undo_last_contact)
         # Initial state - will be updated by _update_undo_button_state after initialization
         self.undo_btn.setEnabled(False)
@@ -255,6 +269,7 @@ class CoordinateMapper(QMainWindow):
         
         self.play_pause_btn = QPushButton("Play")
         self.play_pause_btn.setFont(QFont('Arial', 10))
+        self.play_pause_btn.clicked.connect(lambda: self._button_click_feedback(self.play_pause_btn))
         self.play_pause_btn.clicked.connect(self.toggle_play_pause)
         self.play_pause_btn.setEnabled(False)
         video_controls_layout.addWidget(self.play_pause_btn)
@@ -297,6 +312,19 @@ class CoordinateMapper(QMainWindow):
         self.view.viewport().installEventFilter(self)
         self.view.installEventFilter(self)
         self.installEventFilter(self)
+    
+    def _button_click_feedback(self, button):
+        """Provide visual feedback when a button is clicked by briefly highlighting it."""
+        # Store original style if not already stored
+        if not hasattr(button, '_original_style'):
+            button._original_style = button.styleSheet()
+        
+        # Apply highlight style
+        highlight_style = self.original_button_style + " background-color: #4CAF50; color: white;"
+        button.setStyleSheet(highlight_style)
+        
+        # Reset to original style after 200ms
+        QTimer.singleShot(200, lambda: button.setStyleSheet(button._original_style))
         
         # Update score display after UI is set up
         self._update_score_display()

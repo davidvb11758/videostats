@@ -879,6 +879,19 @@ class VideoStatsDB:
             except Exception as e:
                 print(f"Failed to add still_image_path column: {e}")
         
+        # Add is_ended column to games table if it doesn't exist
+        # Refresh columns list after previous additions
+        cursor.execute("PRAGMA table_info(games)")
+        columns = [row[1] for row in cursor.fetchall()]
+        if 'is_ended' not in columns:
+            print("Adding is_ended column to games table...")
+            try:
+                cursor.execute("ALTER TABLE games ADD COLUMN is_ended BOOLEAN DEFAULT 0")
+                self.conn.commit()
+                print("is_ended column added successfully!")
+            except Exception as e:
+                print(f"Failed to add is_ended column: {e}")
+        
         # Add court boundary columns to games table if they don't exist
         court_columns = [
             'court_corner_tl_x', 'court_corner_tl_y',
@@ -1748,6 +1761,42 @@ class VideoStatsDB:
         except Exception as e:
             self.conn.rollback()
             raise Exception(f"Failed to delete game {game_id}: {str(e)}")
+    
+    def mark_game_ended(self, game_id: int):
+        """Mark a game as ended.
+        
+        Args:
+            game_id: The ID of the game to mark as ended
+        """
+        if not self.conn:
+            self.connect()
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "UPDATE games SET is_ended = 1 WHERE game_id = ?",
+            (game_id,)
+        )
+        self.conn.commit()
+    
+    def is_game_ended(self, game_id: int) -> bool:
+        """Check if a game is ended.
+        
+        Args:
+            game_id: The ID of the game to check
+            
+        Returns:
+            True if the game is ended, False otherwise
+        """
+        if not self.conn:
+            self.connect()
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT is_ended FROM games WHERE game_id = ?",
+            (game_id,)
+        )
+        result = cursor.fetchone()
+        if result:
+            return bool(result[0])
+        return False
 
 
 if __name__ == "__main__":

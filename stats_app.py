@@ -20,8 +20,10 @@ class StatsApp(QMainWindow):
         self.load_teams()
         
     def init_ui(self):
-        self.setWindowTitle('Volleyball Statistics Report')
-        self.setGeometry(100, 100, 1600, 900)
+        self.setWindowTitle('Iowa RocketsVolleyball Game Statistics')
+        # Set smaller initial size and make window resizable
+        self.setGeometry(100, 100, 1400, 800)
+        self.setMinimumSize(800, 500)  # Allow resizing but set minimum size
         
         # Central widget
         central_widget = QWidget()
@@ -99,6 +101,28 @@ class StatsApp(QMainWindow):
         controls_layout.addWidget(game_label)
         controls_layout.addWidget(self.game_list)
         controls_layout.addStretch()
+        
+        # Add close button
+        self.btn_close = QPushButton("Close")
+        self.btn_close.setStyleSheet("""
+            QPushButton {
+                background: #dc3545;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 8px 16px;
+                font-size: 14px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background: #c82333;
+            }
+            QPushButton:pressed {
+                background: #bd2130;
+            }
+        """)
+        self.btn_close.clicked.connect(self.close)
+        controls_layout.addWidget(self.btn_close)
         
         main_layout.addWidget(controls_widget)
         

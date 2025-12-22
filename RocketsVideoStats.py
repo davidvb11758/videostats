@@ -26,6 +26,9 @@ from create_game_dialog import CreateGameDialog
 from stats_app import StatsApp
 from view_paths import ContactPathViewer
 from data_entry import DataEntryWindow
+from list_games_dialog import ListGamesDialog
+from reprocess_outcomes import assign_rally_outcomes
+from stats_calc import StatsCalculator
 from PySide6.QtUiTools import QUiLoader
 
 
@@ -117,6 +120,10 @@ class RocketsVideoStatsWindow(QMainWindow):
         
         if hasattr(self.ui, 'btn_close_app'):
             self.ui.btn_close_app.clicked.connect(self.close_app)
+        
+        # List All Games button
+        if hasattr(self.ui, 'pushButton_2'):
+            self.ui.pushButton_2.clicked.connect(self.list_all_games)
         
         # Game selection combo box
         if hasattr(self.ui, 'combo_select_game'):
@@ -288,6 +295,15 @@ class RocketsVideoStatsWindow(QMainWindow):
             )
             return
         
+        # Check if game is ended
+        if self.db.is_game_ended(game_id):
+            QMessageBox.warning(
+                self,
+                "Game Ended",
+                f"This game has been ended. You cannot resume data entry for ended games."
+            )
+            return
+        
         # Query database for game data using game_id
         if not self.db.conn:
             self.db.connect()
@@ -363,6 +379,11 @@ class RocketsVideoStatsWindow(QMainWindow):
         stats_window.raise_()
         stats_window.activateWindow()
     
+    def list_all_games(self):
+        """Open dialog to list all games with video playback and delete functionality."""
+        dialog = ListGamesDialog(self.db, parent=self)
+        dialog.exec()
+    
     def edit_game_setup(self):
         """Edit game setup - placeholder method."""
         QMessageBox.information(
@@ -372,20 +393,305 @@ class RocketsVideoStatsWindow(QMainWindow):
         )
     
     def refresh_statistics(self):
-        """Refresh statistics - placeholder method."""
-        QMessageBox.information(
-            self,
-            "Not Implemented",
-            "Refresh Statistics - Not yet implemented"
-        )
+        """Reprocess outcomes and calculate statistics for the selected game."""
+        game_id = self.get_selected_game_id()
+        
+        if not game_id:
+            QMessageBox.warning(
+                self,
+                "No Game Selected",
+                "Please select a game from the dropdown before refreshing statistics."
+            )
+            return
+        
+        # Get game info for statistics
+        if not self.db.conn:
+            self.db.connect()
+        
+        cursor = self.db.conn.cursor()
+        cursor.execute("""
+            SELECT g.team_us_id, g.team_them_id,
+                   t1.name as team_us_name, t2.name as team_them_name
+            FROM games g
+            INNER JOIN teams t1 ON g.team_us_id = t1.team_id
+            INNER JOIN teams t2 ON g.team_them_id = t2.team_id
+            WHERE g.game_id = ?
+        """, (game_id,))
+        
+        game_info = cursor.fetchone()
+        if not game_info:
+            QMessageBox.warning(
+                self,
+                "Game Not Found",
+                f"Game {game_id} not found in database."
+            )
+            return
+        
+        team_us_id, team_them_id, team_us_name, team_them_name = game_info
+        
+        try:
+            # Step 1: Reprocess outcomes
+            # Get all completed rallies for this game
+            cursor.execute("""
+                SELECT r.rally_id, r.point_winner_id
+                FROM rallies r
+                WHERE r.game_id = ? AND r.point_winner_id IS NOT NULL
+                ORDER BY r.rally_id
+            """, (game_id,))
+            
+            rallies = cursor.fetchall()
+            
+            if rallies:
+                # Reset all outcomes to 'continue' first (except 'down' and manual outcomes)
+                cursor.execute("""
+                    UPDATE contacts 
+                    SET outcome = 'continue'
+                    WHERE rally_id IN (SELECT rally_id FROM rallies WHERE game_id = ?)
+                      AND outcome != 'down' 
+                      AND COALESCE(outcome_manual, 0) = 0
+                """, (game_id,))
+                self.db.conn.commit()
+                
+                # Process each rally
+                for rally_id, point_winner_id in rallies:
+                    assign_rally_outcomes(self.db, rally_id, point_winner_id, team_us_id, team_them_id)
+                
+                self.db.conn.commit()
+            
+            # Step 2: Calculate statistics
+            stats_calculator = StatsCalculator()
+            stats_calculator.calculate_game_stats(self.db, game_id)
+            
+            # Step 3: Get final statistics for display
+            cursor.execute("SELECT COUNT(*) FROM rallies WHERE game_id = ?", (game_id,))
+            num_rallies = cursor.fetchone()[0] or 0
+            
+            cursor.execute("""
+                SELECT COUNT(*) 
+                FROM contacts c
+                INNER JOIN rallies r ON c.rally_id = r.rally_id
+                WHERE r.game_id = ?
+            """, (game_id,))
+            num_contacts = cursor.fetchone()[0] or 0
+            
+            cursor.execute("""
+                SELECT point_winner_id, COUNT(*) 
+                FROM rallies 
+                WHERE game_id = ? AND point_winner_id IS NOT NULL
+                GROUP BY point_winner_id
+            """, (game_id,))
+            
+            points_us = 0
+            points_them = 0
+            for point_winner_id, count in cursor.fetchall():
+                if point_winner_id == team_us_id:
+                    points_us = count
+                elif point_winner_id == team_them_id:
+                    points_them = count
+            
+            # Show success dialog
+            message = (
+                f"Statistics have been successfully calculated.\n\n"
+                f"Game: {team_us_name} vs {team_them_name}\n\n"
+                f"Statistics:\n"
+                f"- {num_rallies} rallies\n"
+                f"- {num_contacts} contacts\n"
+                f"- Points: {team_us_name} {points_us} - {points_them} {team_them_name}"
+            )
+            
+            QMessageBox.information(
+                self,
+                "Statistics Calculated",
+                message
+            )
+            
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Failed to refresh statistics:\n{str(e)}"
+            )
+    
+    def get_game_statistics_for_dialog(self, game_id: int):
+        """Get statistics for a game to display in dialogs.
+        
+        Returns:
+            Dictionary with game statistics or None if game not found
+        """
+        if not self.db.conn:
+            self.db.connect()
+        
+        cursor = self.db.conn.cursor()
+        
+        # Get game info (team IDs and names)
+        cursor.execute("""
+            SELECT g.team_us_id, g.team_them_id,
+                   t1.name as team_us_name, t2.name as team_them_name
+            FROM games g
+            INNER JOIN teams t1 ON g.team_us_id = t1.team_id
+            INNER JOIN teams t2 ON g.team_them_id = t2.team_id
+            WHERE g.game_id = ?
+        """, (game_id,))
+        
+        game_info = cursor.fetchone()
+        if not game_info:
+            return None
+        
+        team_us_id, team_them_id, team_us_name, team_them_name = game_info
+        
+        # Count rallies
+        cursor.execute("SELECT COUNT(*) FROM rallies WHERE game_id = ?", (game_id,))
+        num_rallies = cursor.fetchone()[0] or 0
+        
+        # Count contacts
+        cursor.execute("""
+            SELECT COUNT(*) 
+            FROM contacts c
+            INNER JOIN rallies r ON c.rally_id = r.rally_id
+            WHERE r.game_id = ?
+        """, (game_id,))
+        num_contacts = cursor.fetchone()[0] or 0
+        
+        # Count points for Us and Them
+        cursor.execute("""
+            SELECT point_winner_id, COUNT(*) 
+            FROM rallies 
+            WHERE game_id = ? AND point_winner_id IS NOT NULL
+            GROUP BY point_winner_id
+        """, (game_id,))
+        
+        points_us = 0
+        points_them = 0
+        for point_winner_id, count in cursor.fetchall():
+            if point_winner_id == team_us_id:
+                points_us = count
+            elif point_winner_id == team_them_id:
+                points_them = count
+        
+        return {
+            'game_id': game_id,
+            'team_us_id': team_us_id,
+            'team_them_id': team_them_id,
+            'team_us_name': team_us_name,
+            'team_them_name': team_them_name,
+            'num_rallies': num_rallies,
+            'num_contacts': num_contacts,
+            'points_us': points_us,
+            'points_them': points_them
+        }
     
     def end_game(self):
-        """End game - placeholder method."""
-        QMessageBox.information(
-            self,
-            "Not Implemented",
-            "End Game - Not yet implemented"
+        """End game with confirmation and automatic stats reprocessing."""
+        game_id = self.get_selected_game_id()
+        
+        if not game_id:
+            QMessageBox.warning(
+                self,
+                "No Game Selected",
+                "Please select a game from the dropdown before ending the game."
+            )
+            return
+        
+        # Check if game is already ended
+        if self.db.is_game_ended(game_id):
+            QMessageBox.information(
+                self,
+                "Game Already Ended",
+                f"Game {game_id} has already been ended."
+            )
+            return
+        
+        # Get game statistics
+        stats = self.get_game_statistics_for_dialog(game_id)
+        if not stats:
+            QMessageBox.warning(
+                self,
+                "Game Not Found",
+                f"Game {game_id} not found in database."
+            )
+            return
+        
+        # Build confirmation message with statistics
+        confirmation_message = (
+            f"Are you sure you want to end this game?\n\n"
+            f"Game: {stats['team_us_name']} vs {stats['team_them_name']}\n\n"
+            f"Game Statistics:\n"
+            f"- {stats['num_rallies']} rallies\n"
+            f"- {stats['num_contacts']} contacts\n"
+            f"- Game Score: {stats['team_us_name']} {stats['points_us']} - {stats['points_them']} {stats['team_them_name']}\n\n"
+            f"After ending the game, statistics will be automatically reprocessed and calculated.\n"
+            f"You will not be able to resume data entry for this game."
         )
+        
+        # Confirm ending the game
+        reply = QMessageBox.question(
+            self,
+            "End Game",
+            confirmation_message,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            try:
+                # Mark game as ended
+                self.db.mark_game_ended(game_id)
+                
+                # Automatically run reprocess stats
+                # Step 1: Reprocess outcomes
+                cursor = self.db.conn.cursor()
+                cursor.execute("""
+                    SELECT r.rally_id, r.point_winner_id
+                    FROM rallies r
+                    WHERE r.game_id = ? AND r.point_winner_id IS NOT NULL
+                    ORDER BY r.rally_id
+                """, (game_id,))
+                
+                rallies = cursor.fetchall()
+                
+                if rallies:
+                    # Reset all outcomes to 'continue' first (except 'down' and manual outcomes)
+                    cursor.execute("""
+                        UPDATE contacts 
+                        SET outcome = 'continue'
+                        WHERE rally_id IN (SELECT rally_id FROM rallies WHERE game_id = ?)
+                          AND outcome != 'down' 
+                          AND COALESCE(outcome_manual, 0) = 0
+                    """, (game_id,))
+                    self.db.conn.commit()
+                    
+                    # Process each rally
+                    for rally_id, point_winner_id in rallies:
+                        assign_rally_outcomes(self.db, rally_id, point_winner_id, 
+                                            stats['team_us_id'], stats['team_them_id'])
+                    
+                    self.db.conn.commit()
+                
+                # Step 2: Calculate statistics
+                stats_calculator = StatsCalculator()
+                stats_calculator.calculate_game_stats(self.db, game_id)
+                
+                # Show success message
+                QMessageBox.information(
+                    self,
+                    "Game Ended",
+                    f"Game {game_id} has been ended successfully.\n\n"
+                    f"Statistics have been automatically reprocessed and calculated.\n\n"
+                    f"Final Statistics:\n"
+                    f"- {stats['num_rallies']} rallies\n"
+                    f"- {stats['num_contacts']} contacts\n"
+                    f"- Final Score: {stats['team_us_name']} {stats['points_us']} - {stats['points_them']} {stats['team_them_name']}"
+                )
+                
+                # Refresh game combo to update any visual indicators
+                self.populate_game_combo()
+                
+            except Exception as e:
+                QMessageBox.critical(
+                    self,
+                    "Error",
+                    f"Failed to end game:\n{str(e)}"
+                )
     
     def close_app(self):
         """Close the application."""
