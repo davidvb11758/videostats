@@ -23,8 +23,17 @@ def assign_rally_outcomes(db, rally_id: int, point_winner_id: int, team_us_id: i
     if not db.conn:
         db.connect()
     
-    # Get all contacts in this rally
-    contacts = db.get_rally_contacts(rally_id)
+    # Get all contacts in this rally WITH outcome_manual flag
+    cursor = db.conn.cursor()
+    cursor.execute("""
+        SELECT contact_id, rally_id, sequence_number, player_id, contact_type, 
+               team_id, x, y, outcome, timestamp,
+               COALESCE(outcome_manual, 0) as outcome_manual
+        FROM contacts 
+        WHERE rally_id = ?
+        ORDER BY sequence_number
+    """, (rally_id,))
+    contacts = cursor.fetchall()
     
     if not contacts:
         return
@@ -62,12 +71,16 @@ def assign_rally_outcomes(db, rally_id: int, point_winner_id: int, team_us_id: i
     # Mark the last losing team contact as error (if it exists)
     if last_losing_team_contact:
         losing_contact_id = last_losing_team_contact[0]
-        db.update_contact_outcome(losing_contact_id, 'error')
+        losing_outcome_manual = last_losing_team_contact[10] if len(last_losing_team_contact) > 10 else 0
+        # Only update if outcome is not manually set
+        if losing_outcome_manual == 0:
+            db.update_contact_outcome(losing_contact_id, 'error')
     
     # Process the last contact by the winning team
     if last_winning_team_contact:
         contact_id = last_winning_team_contact[0]
         contact_type = last_winning_team_contact[4]
+        winning_outcome_manual = last_winning_team_contact[10] if len(last_winning_team_contact) > 10 else 0
         
         # Check if it's a serve (could be an ace)
         if contact_type == 'serve':
@@ -77,15 +90,21 @@ def assign_rally_outcomes(db, rally_id: int, point_winner_id: int, team_us_id: i
                     opponent_contacts_after_serve += 1
             
             if opponent_contacts_after_serve <= 1:
-                db.update_contact_outcome(contact_id, 'ace')
+                # Only update if outcome is not manually set
+                if winning_outcome_manual == 0:
+                    db.update_contact_outcome(contact_id, 'ace')
         
         # Check if it's an attack (could be a kill)
         elif contact_type == 'attack':
-            db.update_contact_outcome(contact_id, 'kill')
+            # Only update if outcome is not manually set
+            if winning_outcome_manual == 0:
+                db.update_contact_outcome(contact_id, 'kill')
         
         # Check if it's a block (could be a stuff)
         elif contact_type == 'block':
-            db.update_contact_outcome(contact_id, 'stuff')
+            # Only update if outcome is not manually set
+            if winning_outcome_manual == 0:
+                db.update_contact_outcome(contact_id, 'stuff')
     
     # Additional rules: Set outcomes for prior contacts based on subsequent errors
     # Refresh contacts to get updated outcomes - ensure we have the latest data
@@ -116,10 +135,13 @@ def assign_rally_outcomes(db, rally_id: int, point_winner_id: int, team_us_id: i
                 prior_contact_id = prior_contact[0]
                 prior_contact_type = prior_contact[4]
                 prior_contact_team_id = prior_contact[5]
+                prior_outcome_manual = prior_contact[10] if len(prior_contact) > 10 else 0
                 
                 # Only mark serve as ace if it was by the winning team
                 if prior_contact_type == 'serve' and prior_contact_team_id == point_winner_id:
-                    db.update_contact_outcome(prior_contact_id, 'ace')
+                    # Only update if outcome is not manually set
+                    if prior_outcome_manual == 0:
+                        db.update_contact_outcome(prior_contact_id, 'ace')
                     break
         
         # Rule 2: If this is a pass with error, find prior attack/freeball/block and mark it as kill
@@ -129,10 +151,13 @@ def assign_rally_outcomes(db, rally_id: int, point_winner_id: int, team_us_id: i
                 prior_contact_id = prior_contact[0]
                 prior_contact_type = prior_contact[4]
                 prior_contact_team_id = prior_contact[5]
+                prior_outcome_manual = prior_contact[10] if len(prior_contact) > 10 else 0
                 
                 # Only mark as kill if the prior contact was by the winning team
                 if prior_contact_type in ['attack', 'freeball', 'block'] and prior_contact_team_id == point_winner_id:
-                    db.update_contact_outcome(prior_contact_id, 'kill')
+                    # Only update if outcome is not manually set
+                    if prior_outcome_manual == 0:
+                        db.update_contact_outcome(prior_contact_id, 'kill')
                     break
         
         # Rule 3: If this is a block with stuff outcome, mark prior contact as error
@@ -141,13 +166,16 @@ def assign_rally_outcomes(db, rally_id: int, point_winner_id: int, team_us_id: i
                 prior_contact = contacts[j]
                 prior_contact_id = prior_contact[0]
                 prior_contact_type = prior_contact[4]
+                prior_outcome_manual = prior_contact[10] if len(prior_contact) > 10 else 0
                 
                 # Skip 'down' contacts
                 if prior_contact_type == 'down':
                     continue
                 
-                # Mark the prior contact as error
-                db.update_contact_outcome(prior_contact_id, 'error')
+                # Only update if outcome is not manually set
+                if prior_outcome_manual == 0:
+                    # Mark the prior contact as error
+                    db.update_contact_outcome(prior_contact_id, 'error')
                 break
         
         # Rule 4: If this is a set, check if next contact by same team is attack/freeball with kill outcome

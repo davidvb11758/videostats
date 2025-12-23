@@ -15,8 +15,8 @@ from PySide6.QtWidgets import (
     QTableWidgetItem, QHeaderView, QAbstractItemView, QPushButton, QSlider,
     QProgressDialog, QFrame, QDialog, QRadioButton, QButtonGroup
 )
-from PySide6.QtCore import Qt, QPointF, QRectF, QUrl, QSize, QThread, Signal, QPoint
-from PySide6.QtGui import QPen, QBrush, QColor, QPainterPath, QPolygonF, QPainter, QFont
+from PySide6.QtCore import Qt, QPointF, QRectF, QUrl, QSize, QThread, Signal, QPoint, QMimeData
+from PySide6.QtGui import QPen, QBrush, QColor, QPainterPath, QPolygonF, QPainter, QFont, QDrag
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
 from PySide6.QtUiTools import QUiLoader
@@ -258,6 +258,211 @@ class ClickableGraphicsScene(QGraphicsScene):
         
         # Call the default scene mouse press handler
         super().mousePressEvent(event)
+
+
+class DragHandleLabel(QLabel):
+    """Custom QLabel for hamburger icon that initiates drag operations."""
+    
+    def __init__(self, row_index: int, parent_table, parent=None):
+        super().__init__(parent)
+        self.row_index = row_index
+        self.parent_table = parent_table
+        self.drag_start_position = None
+        self.setText("☰")
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setFont(QFont('Arial', 14))
+        self.setStyleSheet("color: #666; cursor: move;")
+    
+    def mousePressEvent(self, event):
+        """Start drag operation when clicking on hamburger icon."""
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.drag_start_position = event.position().toPoint()
+        super().mousePressEvent(event)
+    
+    def mouseMoveEvent(self, event):
+        """Handle mouse move to initiate drag."""
+        if not (event.buttons() & Qt.MouseButton.LeftButton):
+            return
+        
+        if self.drag_start_position is None:
+            return
+        
+        # Check if mouse has moved enough to start drag (minimum drag distance)
+        if (event.position().toPoint() - self.drag_start_position).manhattanLength() < 5:
+            return
+        
+        # Create drag object
+        drag = QDrag(self)
+        mime_data = QMimeData()
+        # Store row index as text data
+        mime_data.setText(str(self.row_index))
+        drag.setMimeData(mime_data)
+        
+        # Set drag pixmap (optional - shows visual feedback)
+        pixmap = self.grab()
+        drag.setPixmap(pixmap)
+        drag.setHotSpot(event.position().toPoint())
+        
+        # Execute drag
+        drag.exec(Qt.DropAction.MoveAction)
+        
+        # Reset drag start position
+        self.drag_start_position = None
+
+
+class DraggableContactTable(QTableWidget):
+    """Custom QTableWidget that handles row drag-and-drop."""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.dragged_row = None
+    
+    def dragEnterEvent(self, event):
+        """Handle drag enter event."""
+        if event.mimeData().hasText():
+            try:
+                row_index = int(event.mimeData().text())
+                if 0 <= row_index < self.rowCount():
+                    event.acceptProposedAction()
+                    return
+            except ValueError:
+                pass
+        event.ignore()
+    
+    def dragMoveEvent(self, event):
+        """Handle drag move event."""
+        if event.mimeData().hasText():
+            try:
+                row_index = int(event.mimeData().text())
+                if 0 <= row_index < self.rowCount():
+                    event.acceptProposedAction()
+                    return
+            except ValueError:
+                pass
+        event.ignore()
+    
+    def dropEvent(self, event):
+        """Handle drop event to reorder rows."""
+        if not event.mimeData().hasText():
+            event.ignore()
+            return
+        
+        try:
+            source_row = int(event.mimeData().text())
+        except ValueError:
+            event.ignore()
+            return
+        
+        # Get drop position
+        drop_position = event.position().toPoint()
+        target_row = self.rowAt(drop_position.y())
+        
+        # If dropping on empty area, use last row
+        if target_row < 0:
+            target_row = self.rowCount() - 1
+        
+        # Don't do anything if dropping on the same row
+        if source_row == target_row:
+            event.acceptProposedAction()
+            return
+        
+        # Move the row
+        self.move_row(source_row, target_row)
+        
+        # Update hamburger labels with new row indices
+        for row in range(self.rowCount()):
+            hamburger_widget = self.cellWidget(row, 0)
+            if isinstance(hamburger_widget, DragHandleLabel):
+                hamburger_widget.row_index = row
+        
+        event.acceptProposedAction()
+    
+    def move_row(self, source_row: int, target_row: int):
+        """Move a row from source_row to target_row."""
+        if source_row == target_row:
+            return
+        
+        # Store all data from source row BEFORE any operations
+        source_data = {}
+        for col in range(self.columnCount()):
+            # Store item if it exists
+            source_item = self.item(source_row, col)
+            if source_item:
+                source_data[col] = ('item', QTableWidgetItem(source_item))
+            
+            # Store widget if it exists
+            source_widget = self.cellWidget(source_row, col)
+            if source_widget:
+                if isinstance(source_widget, QCheckBox):
+                    source_data[col] = ('checkbox', {
+                        'checked': source_widget.isChecked(),
+                        'contact_data': source_widget.property("contact_data"),
+                        'style': source_widget.styleSheet()
+                    })
+                elif isinstance(source_widget, DragHandleLabel):
+                    source_data[col] = ('hamburger', None)  # Will create new with target_row
+                elif isinstance(source_widget, QPushButton):
+                    btn_text = source_widget.text()
+                    widget_data = {
+                        'text': btn_text,
+                        'font': source_widget.font()
+                    }
+                    if btn_text == "View":
+                        widget_data['timecode_ms'] = source_widget.property("timecode_ms")
+                        widget_data['contact_info_str'] = source_widget.property("contact_info_str")
+                    source_data[col] = ('button', widget_data)
+        
+        # Remove source row first (this simplifies index calculations)
+        self.removeRow(source_row)
+        
+        # Adjust target_row if we removed a row before it
+        if source_row < target_row:
+            # Moving DOWN: target_row shifts down by 1 after removing source_row
+            insert_row = target_row - 1
+        else:
+            # Moving UP: target_row stays the same
+            insert_row = target_row
+        
+        # Insert a new row at calculated position
+        self.insertRow(insert_row)
+        
+        # Copy all stored data to the new row
+        for col, (data_type, data) in source_data.items():
+            if data_type == 'item':
+                self.setItem(insert_row, col, data)
+            elif data_type == 'checkbox':
+                new_checkbox = QCheckBox()
+                new_checkbox.setChecked(data['checked'])
+                new_checkbox.setProperty("contact_data", data['contact_data'])
+                new_checkbox.setStyleSheet(data['style'])
+                self.setCellWidget(insert_row, col, new_checkbox)
+            elif data_type == 'hamburger':
+                new_label = DragHandleLabel(insert_row, self)
+                self.setCellWidget(insert_row, col, new_label)
+            elif data_type == 'button':
+                new_btn = QPushButton(data['text'])
+                new_btn.setFont(data['font'])
+                if data['text'] == "View":
+                    timecode_ms = data.get('timecode_ms')
+                    contact_info_str = data.get('contact_info_str')
+                    if timecode_ms is not None and contact_info_str:
+                        # Get parent viewer
+                        parent_viewer = None
+                        widget = self.parent()
+                        while widget:
+                            if isinstance(widget, ContactPathViewer):
+                                parent_viewer = widget
+                                break
+                            widget = widget.parent()
+                        
+                        if parent_viewer:
+                            # Store properties and reconnect
+                            new_btn.setProperty("timecode_ms", timecode_ms)
+                            new_btn.setProperty("contact_info_str", contact_info_str)
+                            view_lambda = lambda checked=False, tc=timecode_ms, info=contact_info_str: parent_viewer.open_video_player(tc, info)
+                            new_btn.setProperty("view_lambda", view_lambda)
+                            new_btn.clicked.connect(view_lambda)
+                self.setCellWidget(insert_row, col, new_btn)
 
 
 class ContactInfoPopup(QFrame):
@@ -1596,12 +1801,18 @@ class ContactPathViewer(QMainWindow):
         """Setup table widget for displaying contacts in video mode."""
         # Try to use table from UI file, otherwise create it
         if hasattr(self.ui, 'contactTableWidget'):
-            self.contact_table = self.ui.contactTableWidget
-            print("DEBUG: Using contactTableWidget from UI file")
+            # Replace UI table with our custom draggable table
+            old_table = self.ui.contactTableWidget
+            parent = old_table.parent()
+            geometry = old_table.geometry()
+            self.contact_table = DraggableContactTable(parent)
+            self.contact_table.setGeometry(geometry)
+            # Copy properties from old table if needed
+            print("DEBUG: Replaced contactTableWidget from UI file with DraggableContactTable")
         else:
             print("DEBUG: Creating new contact table widget")
-            # Create table widget if not in UI
-            self.contact_table = QTableWidget()
+            # Create table widget if not in UI (use custom draggable table)
+            self.contact_table = DraggableContactTable()
             
             # Position table in the same place as graphics_view
             # Try to embed in outerCourt if it exists (same as graphics_view)
@@ -1647,8 +1858,8 @@ class ContactPathViewer(QMainWindow):
             return
         
         # Configure table
-        self.contact_table.setColumnCount(7)
-        self.contact_table.setHorizontalHeaderLabels(['Select', 'Player', 'Contact Type', 'Outcome', 'Rally/Seq', 'Timecode', 'View'])
+        self.contact_table.setColumnCount(8)
+        self.contact_table.setHorizontalHeaderLabels(['☰', 'Select', 'Player', 'Contact Type', 'Outcome', 'Rally/Seq', 'Timecode', 'View'])
         
         # Make sure headers are visible
         self.contact_table.horizontalHeader().setVisible(True)
@@ -1659,17 +1870,23 @@ class ContactPathViewer(QMainWindow):
         
         # Set column widths
         header = self.contact_table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)  # Select checkbox
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)  # Player (# + name)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)  # Contact Type
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)  # Outcome
-        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)  # Rally/Seq
-        header.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)  # Timecode
-        header.setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)  # View button
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)  # Hamburger icon
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)  # Select checkbox
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)  # Player (# + name)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)  # Contact Type
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)  # Outcome
+        header.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)  # Rally/Seq
+        header.setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)  # Timecode
+        header.setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)  # View button
         
         # Set selection mode
         self.contact_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.contact_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        
+        # Enable drag-and-drop for row reordering
+        self.contact_table.setDragDropMode(QAbstractItemView.DragDropMode.DropOnly)
+        self.contact_table.setDefaultDropAction(Qt.DropAction.MoveAction)
+        self.contact_table.setAcceptDrops(True)
         
         # Set alternating row colors for better visibility
         self.contact_table.setAlternatingRowColors(True)
@@ -2437,7 +2654,11 @@ class ContactPathViewer(QMainWindow):
             # Format timecode as HH:MM:SS.mmm
             timecode_str = self.format_timecode(timecode_ms) if timecode_ms is not None else "--:--:--.---"
             
-            # Column 0: Checkbox for selection
+            # Column 0: Hamburger icon (for drag & drop)
+            hamburger_label = DragHandleLabel(row_idx, self.contact_table)
+            self.contact_table.setCellWidget(row_idx, 0, hamburger_label)
+            
+            # Column 1: Checkbox for selection
             checkbox_widget = QCheckBox()
             checkbox_widget.setStyleSheet("QCheckBox { margin-left: 10px; }")
             checkbox_widget.setProperty("contact_data", {
@@ -2449,7 +2670,7 @@ class ContactPathViewer(QMainWindow):
                 'player_number': player_number
             })
             
-            # Column 1: Player (# + name concatenated)
+            # Column 2: Player (# + name concatenated)
             if player_number and player_name:
                 player_display = f"{player_number} - {player_name}"
             elif player_number:
@@ -2460,36 +2681,40 @@ class ContactPathViewer(QMainWindow):
                 player_display = "Floor"
             player_item = QTableWidgetItem(player_display)
             
-            # Column 2: Contact Type
+            # Column 3: Contact Type
             contact_type_item = QTableWidgetItem(contact_type)
             
-            # Column 3: Outcome
+            # Column 4: Outcome
             outcome_item = QTableWidgetItem(outcome)
             
-            # Column 4: Rally/Seq (e.g., "5/3")
+            # Column 5: Rally/Seq (e.g., "5/3")
             rally_seq_str = f"{rally_number}/{sequence_number}"
             rally_seq_item = QTableWidgetItem(rally_seq_str)
             
-            # Column 5: Timecode
+            # Column 6: Timecode
             timecode_item = QTableWidgetItem(timecode_str)
             
             # Set items in table
-            self.contact_table.setCellWidget(row_idx, 0, checkbox_widget)
-            self.contact_table.setItem(row_idx, 1, player_item)
-            self.contact_table.setItem(row_idx, 2, contact_type_item)
-            self.contact_table.setItem(row_idx, 3, outcome_item)
-            self.contact_table.setItem(row_idx, 4, rally_seq_item)
-            self.contact_table.setItem(row_idx, 5, timecode_item)
+            self.contact_table.setCellWidget(row_idx, 1, checkbox_widget)
+            self.contact_table.setItem(row_idx, 2, player_item)
+            self.contact_table.setItem(row_idx, 3, contact_type_item)
+            self.contact_table.setItem(row_idx, 4, outcome_item)
+            self.contact_table.setItem(row_idx, 5, rally_seq_item)
+            self.contact_table.setItem(row_idx, 6, timecode_item)
             
-            # Column 6: View button
+            # Column 7: View button
             player_str = f"{player_number}" if player_number else "Floor"
             contact_info_str = f"{contact_type} - {player_str} @ {timecode_str}"
             
             view_btn = QPushButton("View")
             view_btn.setFont(QFont('Arial', 9))
-            view_btn.clicked.connect(lambda checked=False, tc=timecode_ms, info=contact_info_str: 
-                                    self.open_video_player(tc, info))
-            self.contact_table.setCellWidget(row_idx, 6, view_btn)
+            # Store lambda in property for row reordering
+            view_lambda = lambda checked=False, tc=timecode_ms, info=contact_info_str: self.open_video_player(tc, info)
+            view_btn.setProperty("view_lambda", view_lambda)
+            view_btn.setProperty("timecode_ms", timecode_ms)
+            view_btn.setProperty("contact_info_str", contact_info_str)
+            view_btn.clicked.connect(view_lambda)
+            self.contact_table.setCellWidget(row_idx, 7, view_btn)
             
             if row_idx < 3:  # Log first 3 rows
                 print(f"DEBUG: Row {row_idx} - Set all items and button")
@@ -2511,9 +2736,6 @@ class ContactPathViewer(QMainWindow):
         # Check if any items are actually set
         first_item = self.contact_table.item(0, 0)
         print(f"DEBUG: First item (0,0) = {first_item}, checkState = {first_item.checkState() if first_item else 'N/A'}")
-        
-        QMessageBox.information(self, "Contacts Displayed", 
-                               f"Displaying {len(contacts)} contacts in table.")
     
     def format_timecode(self, timecode_ms):
         """Format timecode from milliseconds to HH:MM:SS.mmm"""
@@ -2635,7 +2857,7 @@ class ContactPathViewer(QMainWindow):
         # Get selected rows
         selected_contacts = []
         for row_idx in range(self.contact_table.rowCount()):
-            checkbox_widget = self.contact_table.cellWidget(row_idx, 0)
+            checkbox_widget = self.contact_table.cellWidget(row_idx, 1)  # Checkbox is now in column 1
             if checkbox_widget and isinstance(checkbox_widget, QCheckBox) and checkbox_widget.isChecked():
                 contact_data = checkbox_widget.property("contact_data")
                 if contact_data:
