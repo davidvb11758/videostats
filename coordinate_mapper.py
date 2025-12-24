@@ -8,7 +8,7 @@ import cv2
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGraphicsView, QGraphicsScene,
     QGraphicsEllipseItem, QGraphicsLineItem, QGraphicsTextItem, QApplication, QPushButton,
-    QFileDialog, QSlider, QComboBox, QMessageBox, QDialog, QListWidget, QListWidgetItem
+    QFileDialog, QSlider, QComboBox, QMessageBox, QDialog, QListWidget, QListWidgetItem, QGridLayout
 )
 from PySide6.QtCore import Qt, QPointF, QRectF, Signal, QUrl, QTimer, QPoint, QEvent
 from PySide6.QtGui import QPen, QBrush, QColor, QFont, QPainter
@@ -1358,7 +1358,7 @@ class CoordinateMapper(QMainWindow):
             dialog: The dialog to position
             pixel_x: X coordinate of the click in scene coordinates
             pixel_y: Y coordinate of the click in scene coordinates
-            offset_y: Vertical offset above the click location (default: 10 pixels)
+            offset_y: Vertical offset below the click location (default: 10 pixels)
         """
         # Get the dialog size
         dialog.adjustSize()  # Ensure dialog has its final size
@@ -1374,9 +1374,9 @@ class CoordinateMapper(QMainWindow):
         # Convert view coordinates to global screen coordinates
         global_point = self.view.mapToGlobal(view_point)
         
-        # Calculate initial position: 10 pixels above the click
+        # Calculate initial position: offset_y pixels below the click
         dialog_x = global_point.x()
-        dialog_y = global_point.y() - dialog_height - offset_y
+        dialog_y = global_point.y() + offset_y
         
         # Get screen geometry to check boundaries
         screen = self.screen().availableGeometry()
@@ -1389,17 +1389,17 @@ class CoordinateMapper(QMainWindow):
         if dialog_x + dialog_width > screen.right():
             dialog_x = screen.right() - dialog_width - 5  # 5 pixels margin from right edge
         
-        # Check if dialog goes off the top edge
-        if dialog_y < screen.top():
-            # If it goes off top, position it below the click instead
-            dialog_y = global_point.y() + offset_y
-            # But make sure it doesn't go off bottom either
-            if dialog_y + dialog_height > screen.bottom():
-                dialog_y = screen.bottom() - dialog_height - 5
-        
         # Check if dialog goes off the bottom edge
         if dialog_y + dialog_height > screen.bottom():
-            dialog_y = screen.bottom() - dialog_height - 5
+            # If it goes off bottom, position it above the click instead
+            dialog_y = global_point.y() - dialog_height - offset_y
+            # But make sure it doesn't go off top either
+            if dialog_y < screen.top():
+                dialog_y = screen.top() + 5
+        
+        # Check if dialog goes off the top edge
+        if dialog_y < screen.top():
+            dialog_y = screen.top() + 5
         
         # Move the dialog to the calculated position
         dialog.move(int(dialog_x), int(dialog_y))
@@ -1597,7 +1597,7 @@ class CoordinateMapper(QMainWindow):
         dialog = QDialog(self)
         dialog.setWindowTitle("Libero IN - Select Position")
         dialog.setModal(True)
-        dialog.setMinimumSize(400, 300)
+        dialog.setMinimumSize(500, 300)
         
         layout = QVBoxLayout(dialog)
         
@@ -1607,17 +1607,91 @@ class CoordinateMapper(QMainWindow):
         instructions.setFont(QFont('Arial', 10, QFont.Weight.Bold))
         layout.addWidget(instructions)
         
-        # List of all positions with players
-        positions_list = QListWidget()
-        positions_list.setMinimumHeight(200)
+        # Create grid layout for court positions (2 rows, 3 columns)
+        # Court layout: 
+        # Row 0 (top): positions 4, 3, 2 (left to right)
+        # Row 1 (bottom): positions 5, 6, 1 (left to right)
+        court_grid = QGridLayout()
+        court_grid.setSpacing(10)
+        court_grid.setContentsMargins(10, 10, 10, 10)
         
-        for pos, player_id, player_number, player_name in available_players:
-            display_text = f"Position {pos}: #{player_number} - {player_name}" if player_name else f"Position {pos}: #{player_number}"
-            item = QListWidgetItem(display_text)
-            item.setData(Qt.ItemDataRole.UserRole, (pos, player_id))
-            positions_list.addItem(item)
+        # Create a dictionary mapping position_number to (row, col) in grid
+        position_to_grid = {
+            4: (0, 0),  # top-left
+            3: (0, 1),  # top-middle
+            2: (0, 2),  # top-right
+            5: (1, 0),  # bottom-left
+            6: (1, 1),  # bottom-middle
+            1: (1, 2)   # bottom-right
+        }
         
-        layout.addWidget(positions_list)
+        # Create a dictionary of players by position
+        players_by_position = {pos: (player_id, player_number, player_name) 
+                              for pos, player_id, player_number, player_name in available_players}
+        
+        # Create buttons for each position
+        position_buttons = {}  # {position_number: button}
+        selected_position = [None]  # Use list to allow modification in closure
+        
+        # Add buttons in the correct order for court layout
+        for pos in [4, 3, 2, 5, 6, 1]:
+            row, col = position_to_grid[pos]
+            if pos in players_by_position:
+                player_id, player_number, player_name = players_by_position[pos]
+                player_name = player_name or 'Unknown'
+                # Format: "Name (#)"
+                display_text = f"{player_name} ({player_number})"
+            else:
+                display_text = f"Position {pos}\n(Empty)"
+                player_id = None
+            
+            # Create button for this position
+            pos_btn = QPushButton(display_text)
+            pos_btn.setMinimumSize(125, 60)
+            pos_btn.setMaximumSize(125, 60)
+            pos_btn.setCheckable(True)
+            pos_btn.setStyleSheet("""
+                QPushButton {
+                    border: 2px solid #505050;
+                    border-radius: 10px;
+                    padding: 5px;
+                    text-align: center;
+                    font-size: 11pt;
+                }
+                QPushButton:checked {
+                    background-color: #ADD8E6;
+                    border: 3px solid #0000FF;
+                }
+                QPushButton:hover {
+                    background-color: #E0E0E0;
+                }
+            """)
+            
+            if player_id:
+                # Store player_id and position in button property
+                pos_btn.setProperty('player_id', player_id)
+                pos_btn.setProperty('position', pos)
+                
+                def make_click_handler(btn, pid, ppos):
+                    def handler():
+                        # Uncheck all other position buttons
+                        for other_pos, other_btn in position_buttons.items():
+                            if other_btn != btn:
+                                other_btn.setChecked(False)
+                        # Toggle this button
+                        btn.setChecked(True)
+                        selected_position[0] = (ppos, pid)
+                        enter_btn.setEnabled(True)
+                    return handler
+                
+                pos_btn.clicked.connect(make_click_handler(pos_btn, player_id, pos))
+                position_buttons[pos] = pos_btn
+            else:
+                pos_btn.setEnabled(False)
+            
+            court_grid.addWidget(pos_btn, row, col)
+        
+        layout.addLayout(court_grid)
         
         # Buttons
         button_layout = QHBoxLayout()
@@ -1631,19 +1705,12 @@ class CoordinateMapper(QMainWindow):
         enter_btn.setDefault(True)
         enter_btn.setEnabled(False)
         
-        def on_selection_changed():
-            """Enable enter button when position is selected."""
-            enter_btn.setEnabled(positions_list.currentItem() is not None)
-        
-        positions_list.itemSelectionChanged.connect(on_selection_changed)
-        
         def perform_libero_enter():
             """Perform the libero enter action."""
-            item = positions_list.currentItem()
-            if not item:
+            if selected_position[0] is None:
                 return
             
-            pos, replaced_player_id = item.data(Qt.ItemDataRole.UserRole)
+            pos, replaced_player_id = selected_position[0]
             
             try:
                 if not self.lineup_manager:

@@ -17,6 +17,7 @@ from datetime import datetime
 from pathlib import Path
 from PySide6.QtUiTools import QUiLoader
 from data_entry import DataEntryWindow
+import json
 
 
 class CreateGameDialog(QDialog):
@@ -668,6 +669,55 @@ class CreateGameDialog(QDialog):
                     print(f"Warning: Could not add team_us player {player_id} to game: {e}")
             
             self.db.conn.commit()
+            
+            # Update initial_setup event to use game_role_code instead of role_code
+            # The initial_setup event was created before game_players was populated,
+            # so we need to update it now that game_role_code is available
+            cursor = self.db.conn.cursor()
+            cursor.execute("""
+                SELECT id, payload
+                FROM events
+                WHERE game_id = ? AND team_id = ? AND event_type = 'initial_setup'
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+            """, (self.game_id, team_us_id))
+            event_result = cursor.fetchone()
+            if event_result:
+                event_id, payload_json = event_result
+                try:
+                    payload = json.loads(payload_json) if isinstance(payload_json, str) else payload_json
+                    lineup_snapshot = payload.get('lineup', {})
+                    
+                    # Update each player's role_code in the snapshot to use game_role_code
+                    updated = False
+                    for pos, player_data in lineup_snapshot.items():
+                        player_id = player_data.get('player_id')
+                        if player_id:
+                            # Get game_role_code from game_players
+                            cursor.execute("""
+                                SELECT game_role_code
+                                FROM game_players
+                                WHERE game_id = ? AND team_id = ? AND player_id = ?
+                            """, (self.game_id, team_us_id, player_id))
+                            result = cursor.fetchone()
+                            if result and result[0]:
+                                # Update role_code in snapshot to use game_role_code
+                                player_data['role_code'] = result[0]
+                                updated = True
+                    
+                    # If we updated any roles, save the updated payload back to the event
+                    if updated:
+                        updated_payload_json = json.dumps(payload)
+                        cursor.execute("""
+                            UPDATE events
+                            SET payload = ?
+                            WHERE id = ?
+                        """, (updated_payload_json, event_id))
+                        self.db.conn.commit()
+                        print(f"DEBUG: Updated initial_setup event {event_id} to use game_role_code")
+                except Exception as e:
+                    print(f"Warning: Could not update initial_setup event: {e}")
+                    # Don't fail the whole operation if this update fails
             
             # Populate game_players for team_them (opponent)
             # Default to team_id 12 with player_ids 30, 31, 32, 33

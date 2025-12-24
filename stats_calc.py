@@ -459,7 +459,8 @@ class StatsCalculator:
                 c.contact_id,
                 c.rally_id,
                 c.sequence_number,
-                c.team_id as receive_team_id
+                c.team_id as receive_team_id,
+                COALESCE(c.rating_manual, 0) as rating_manual
             FROM contacts c
             INNER JOIN rallies r ON c.rally_id = r.rally_id
             WHERE r.game_id = ? AND c.contact_type = 'receive'
@@ -475,15 +476,23 @@ class StatsCalculator:
         print(f"DEBUG: Found {len(receive_contacts)} receive contacts to process")
         
         updated_count = 0
+        skipped_count = 0
         
         for idx, receive in enumerate(receive_contacts):
             contact_id = receive['contact_id']
             rally_id = receive['rally_id']
             sequence_number = receive['sequence_number']
             receive_team_id = receive['receive_team_id']
+            rating_manual = receive['rating_manual']
             
             print(f"\nDEBUG: Processing receive contact #{idx+1}/{len(receive_contacts)}")
-            print(f"  contact_id={contact_id}, rally_id={rally_id}, sequence={sequence_number}, receive_team_id={receive_team_id}")
+            print(f"  contact_id={contact_id}, rally_id={rally_id}, sequence={sequence_number}, receive_team_id={receive_team_id}, rating_manual={rating_manual}")
+            
+            # Skip if rating is manually set
+            if rating_manual == 1:
+                print(f"  ⚠ Skipping contact {contact_id} - rating is manually set (rating_manual=1)")
+                skipped_count += 1
+                continue
             
             # Find the next contact in the same rally
             cursor.execute("""
@@ -537,6 +546,8 @@ class StatsCalculator:
         db.conn.commit()
         print(f"\n{'='*80}")
         print(f"DEBUG: Updated {updated_count} receive ratings for game {game_id}")
+        if skipped_count > 0:
+            print(f"DEBUG: Skipped {skipped_count} receive contacts with manually set ratings (rating_manual=1)")
         print(f"{'='*80}\n")
     
     def compute_receive_ratings_for_all_games(self, db: VideoStatsDB):

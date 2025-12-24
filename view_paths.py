@@ -493,6 +493,8 @@ class ContactInfoPopup(QFrame):
         self.contact_type_label = QLabel("Type: -")
         self.outcome_label = QLabel("Outcome: -")
         self.rating_label = QLabel("Rating: -")
+        self.score_label = QLabel("Score: -")
+        self.rally_label = QLabel("Rally: -")
         
         font = QFont('Arial', 9)
         font.setBold(False)
@@ -506,11 +508,17 @@ class ContactInfoPopup(QFrame):
         self.outcome_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
         self.rating_label.setFont(font)
         self.rating_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        self.score_label.setFont(font)
+        self.score_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        self.rally_label.setFont(font)
+        self.rally_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
         
         layout.addWidget(self.player_label)
         layout.addWidget(self.contact_type_label)
         layout.addWidget(self.outcome_label)
         layout.addWidget(self.rating_label)
+        layout.addWidget(self.score_label)
+        layout.addWidget(self.rally_label)
         
         # Add edit button
         self.edit_button = QPushButton("Edit")
@@ -524,7 +532,7 @@ class ContactInfoPopup(QFrame):
         self.contact_data = None
         self.parent_viewer = None
     
-    def set_contact_info(self, player_name: str, contact_type: str, outcome: str, rating: Optional[int], contact_data: dict = None, parent_viewer=None):
+    def set_contact_info(self, player_name: str, contact_type: str, outcome: str, rating: Optional[int], contact_data: dict = None, parent_viewer=None, score_us: int = None, score_them: int = None, rally_number: int = None):
         """Update the popup with contact information."""
         player_display = player_name if player_name else "Floor"
         self.player_label.setText(f"Player: {player_display}")
@@ -532,6 +540,19 @@ class ContactInfoPopup(QFrame):
         self.outcome_label.setText(f"Outcome: {outcome}")
         rating_display = str(rating) if rating is not None else "N/A"
         self.rating_label.setText(f"Rating: {rating_display}")
+        
+        # Display score
+        if score_us is not None and score_them is not None:
+            self.score_label.setText(f"Score: Us: {score_us}, Them: {score_them}")
+        else:
+            self.score_label.setText("Score: -")
+        
+        # Display rally number
+        if rally_number is not None:
+            self.rally_label.setText(f"Rally: {rally_number}")
+        else:
+            self.rally_label.setText("Rally: -")
+        
         self.contact_data = contact_data
         self.parent_viewer = parent_viewer
         self.adjustSize()
@@ -1656,6 +1677,8 @@ class ContactPathViewer(QMainWindow):
         self.setup_graphics_view()
         self.setup_filter_widgets()
         self.setup_contact_table()
+        self.hide_team_labels()
+        self.setup_ratings_filter()
         self.populate_games_dropdown()
         self.connect_signals()
         
@@ -1777,10 +1800,23 @@ class ContactPathViewer(QMainWindow):
         # Use the player list widget from the UI file
         if hasattr(self.ui, 'playerListWidget'):
             self.player_list_widget = self.ui.playerListWidget
+            # Tighten vertical spacing between player names
+            self.player_list_widget.setStyleSheet("""
+                QListWidget::item {
+                    padding: 1px;
+                    margin: 0px;
+                }
+            """)
         else:
             # Fallback: create player list widget if not in UI
             self.player_list_widget = QListWidget()
             self.player_list_widget.setSelectionMode(QListWidget.SelectionMode.MultiSelection)
+            self.player_list_widget.setStyleSheet("""
+                QListWidget::item {
+                    padding: 1px;
+                    margin: 0px;
+                }
+            """)
         
         # Use the team filter checkboxes from the UI file
         if hasattr(self.ui, 'checkBoxShowTeamA'):
@@ -1796,6 +1832,67 @@ class ContactPathViewer(QMainWindow):
             # Fallback: create checkbox if not in UI
             self.team_filter_checkbox_b = QCheckBox("Show Team B")
             self.team_filter_checkbox_b.setChecked(True)
+    
+    def hide_team_labels(self):
+        """Hide Team 1 and Team 2 labels at the top of the screen."""
+        if hasattr(self.ui, 'label_3'):
+            self.ui.label_3.hide()
+        if hasattr(self.ui, 'label_4'):
+            self.ui.label_4.hide()
+        if hasattr(self.ui, 'teamNameUs'):
+            self.ui.teamNameUs.hide()
+        if hasattr(self.ui, 'teamNameThem'):
+            self.ui.teamNameThem.hide()
+    
+    def setup_ratings_filter(self):
+        """Create Ratings Filter groupbox between Outcomes and Team Filters."""
+        # Find the Outcomes groupbox and Team Filters groupbox
+        outcomes_groupbox = None
+        team_filters_groupbox = None
+        
+        if hasattr(self.ui, 'groupBoxOutcomeFilters'):
+            outcomes_groupbox = self.ui.groupBoxOutcomeFilters
+        if hasattr(self.ui, 'groupBoxTeamFilters'):
+            team_filters_groupbox = self.ui.groupBoxTeamFilters
+        
+        if not outcomes_groupbox or not team_filters_groupbox:
+            return
+        
+        # Create Ratings Filter groupbox
+        ratings_groupbox = QGroupBox("Ratings Filter")
+        ratings_groupbox.setFont(QFont('Arial', 8))
+        ratings_layout = QHBoxLayout(ratings_groupbox)
+        ratings_layout.setContentsMargins(5, 5, 5, 5)
+        ratings_layout.setSpacing(5)
+        
+        # Create checkboxes for ratings 0, 1, 2, 3
+        self.rating_checkboxes = {}
+        for rating in [0, 1, 2, 3]:
+            checkbox = QCheckBox(str(rating))
+            checkbox.setFont(QFont('Arial', 8))
+            self.rating_checkboxes[rating] = checkbox
+            ratings_layout.addWidget(checkbox)
+        
+        ratings_layout.addStretch()
+        
+        # Store reference
+        self.ratings_groupbox = ratings_groupbox
+        
+        # Position between Outcomes and Team Filters
+        # Get parent widget
+        parent = outcomes_groupbox.parent()
+        if parent:
+            ratings_groupbox.setParent(parent)
+            # Position: same x and width as team filters, y between outcomes and team filters
+            team_rect = team_filters_groupbox.geometry()
+            outcomes_rect = outcomes_groupbox.geometry()
+            # Position it between outcomes (bottom) and team filters (top)
+            y_pos = outcomes_rect.y() + outcomes_rect.height() + 5
+            ratings_groupbox.setGeometry(team_rect.x(), y_pos, team_rect.width(), 45)
+            ratings_groupbox.show()
+            
+            # Adjust team filters position down to make room
+            team_filters_groupbox.setGeometry(team_rect.x(), y_pos + 50, team_rect.width(), team_rect.height())
     
     def setup_contact_table(self):
         """Setup table widget for displaying contacts in video mode."""
@@ -2028,10 +2125,10 @@ class ContactPathViewer(QMainWindow):
         
         self.player_list_widget.clear()
         
-        # Reduce spacing between rows using stylesheet
+        # Reduce spacing between rows using stylesheet (already set in setup_filter_widgets, but ensure it's applied)
         self.player_list_widget.setStyleSheet("""
             QListWidget::item {
-                padding: 2px;
+                padding: 1px;
                 margin: 0px;
             }
         """)
@@ -2154,26 +2251,34 @@ class ContactPathViewer(QMainWindow):
                     self.ui.teamNameThem.setText('')
                 if self.player_list_widget:
                     self.player_list_widget.clear()
+                # Reset team filter checkbox labels
+                if self.team_filter_checkbox_a:
+                    self.team_filter_checkbox_a.setText("Show Team A")
+                if self.team_filter_checkbox_b:
+                    self.team_filter_checkbox_b.setText("Show Team B")
                 return
             
             self.game_id = item_data['game_id']
             self.team_us_id = item_data['team_us_id']
             self.team_them_id = item_data['team_them_id']
             
-            # Update team name labels
-            if hasattr(self.ui, 'teamNameUs'):
-                self.ui.teamNameUs.setText(item_data['team_us_name'])
-            if hasattr(self.ui, 'teamNameThem'):
-                # Extract opponent alias from notes field
-                notes = item_data.get('notes', '') if item_data.get('notes') else ''
-                opponent_display = item_data['team_them_name']  # Default to team name
-                if notes:
-                    # Check if notes contains "Opponent: " prefix
-                    if notes.startswith("Opponent: "):
-                        opponent_display = notes.replace("Opponent: ", "").strip()
-                    else:
-                        opponent_display = notes.strip()
-                self.ui.teamNameThem.setText(opponent_display)
+            # Update team filter checkbox labels with actual team names
+            team_us_name = item_data.get('team_us_name', 'Team A')
+            if self.team_filter_checkbox_a:
+                self.team_filter_checkbox_a.setText(f"Team A: {team_us_name}")
+            
+            # Extract opponent alias from notes field for team_them
+            notes = item_data.get('notes', '') if item_data.get('notes') else ''
+            opponent_display = item_data.get('team_them_name', 'Team B')  # Default to team name
+            if notes:
+                # Check if notes contains "Opponent: " prefix
+                if notes.startswith("Opponent: "):
+                    opponent_display = notes.replace("Opponent: ", "").strip()
+                else:
+                    opponent_display = notes.strip()
+            
+            if self.team_filter_checkbox_b:
+                self.team_filter_checkbox_b.setText(f"Team B: {opponent_display}")
             
             # Populate player list for our team
             self.populate_player_list()
@@ -2364,12 +2469,24 @@ class ContactPathViewer(QMainWindow):
                 if checkbox.isChecked():
                     selected_outcomes.append(outcome_value)
         
+        # Get selected ratings from checkboxes
+        selected_ratings = []
+        receive_selected = 'receive' in selected_contact_types
+        if hasattr(self, 'rating_checkboxes') and self.rating_checkboxes:
+            for rating, checkbox in self.rating_checkboxes.items():
+                if checkbox.isChecked():
+                    selected_ratings.append(rating)
+        
+        # Rating filter only applies when Receive is selected AND ratings are selected
+        use_rating_filter = receive_selected and len(selected_ratings) > 0
+        
         # Determine if a filter is applied
         has_player_filter = (not all_players_selected) and len(selected_player_ids) > 0
         has_contact_type_filter = len(selected_contact_types) < len(contact_type_mapping.values())
         has_outcome_filter = len(selected_outcomes) > 0 and len(selected_outcomes) < len(outcome_mapping.values())
         has_team_filter = len(team_ids_to_show) < 2
-        has_filter = has_player_filter or has_contact_type_filter or has_outcome_filter or has_team_filter
+        has_rating_filter = use_rating_filter
+        has_filter = has_player_filter or has_contact_type_filter or has_outcome_filter or has_team_filter or has_rating_filter
         
         # If no contact types selected, show all
         if not selected_contact_types:
@@ -2427,6 +2544,11 @@ class ContactPathViewer(QMainWindow):
         if has_player_filter and not all_players_selected:
             query_filtered += " AND c.player_id IN ({})".format(','.join(['?'] * len(selected_player_ids)))
             params_filtered.extend(selected_player_ids)
+        
+        # Add rating filter if Receive is selected and ratings are selected
+        if use_rating_filter:
+            query_filtered += " AND (c.contact_type != 'receive' OR c.rating IN ({}))".format(','.join(['?'] * len(selected_ratings)))
+            params_filtered.extend(selected_ratings)
         
         query_filtered += " ORDER BY r.rally_number, c.sequence_number"
         
@@ -2566,6 +2688,17 @@ class ContactPathViewer(QMainWindow):
                 if checkbox.isChecked():
                     selected_outcomes.append(outcome_value)
         
+        # Get selected ratings from checkboxes
+        selected_ratings = []
+        receive_selected = 'receive' in selected_contact_types
+        if hasattr(self, 'rating_checkboxes') and self.rating_checkboxes:
+            for rating, checkbox in self.rating_checkboxes.items():
+                if checkbox.isChecked():
+                    selected_ratings.append(rating)
+        
+        # Rating filter only applies when Receive is selected AND ratings are selected
+        use_rating_filter = receive_selected and len(selected_ratings) > 0
+        
         # If no contact types selected, show all
         if not selected_contact_types:
             selected_contact_types = list(contact_type_mapping.values())
@@ -2605,6 +2738,11 @@ class ContactPathViewer(QMainWindow):
         if len(team_ids_to_show) < 2:
             query += " AND c.team_id IN ({})".format(','.join(['?'] * len(team_ids_to_show)))
             params.extend(team_ids_to_show)
+        
+        # Add rating filter if Receive is selected and ratings are selected
+        if use_rating_filter:
+            query += " AND (c.contact_type != 'receive' OR c.rating IN ({}))".format(','.join(['?'] * len(selected_ratings)))
+            params.extend(selected_ratings)
         
         # Add player filter
         if not all_players_selected and len(selected_player_ids) > 0:
@@ -3265,6 +3403,8 @@ class ContactPathViewer(QMainWindow):
             # IMPORTANT: Store the original database logical coordinates (x, y), not the scaled drawing coordinates
             contact_data = {
                 'contact_id': contact_id,
+                'rally_id': rally_id,
+                'rally_number': rally_number,
                 'player_id': player_id,
                 'player_name': player_name if player_name else "Floor",
                 'player_number': player_number,
@@ -3417,8 +3557,38 @@ class ContactPathViewer(QMainWindow):
         contact_type = contact_data.get('contact_type', 'Unknown')
         outcome = contact_data.get('outcome', 'Unknown')
         rating = contact_data.get('rating')
+        rally_number = contact_data.get('rally_number')
         
-        self.contact_popup.set_contact_info(player_name, contact_type, outcome, rating, contact_data, self)
+        # Calculate score at the time of this contact
+        score_us = None
+        score_them = None
+        if self.game_id and self.team_us_id and self.team_them_id and rally_number:
+            try:
+                if not self.db.conn:
+                    self.db.connect()
+                cursor = self.db.conn.cursor()
+                # Count completed rallies (with point_winner_id) up to and including this rally
+                cursor.execute("""
+                    SELECT point_winner_id, COUNT(*) 
+                    FROM rallies 
+                    WHERE game_id = ? 
+                      AND point_winner_id IS NOT NULL
+                      AND rally_number <= ?
+                    GROUP BY point_winner_id
+                """, (self.game_id, rally_number))
+                results = cursor.fetchall()
+                
+                score_us = 0
+                score_them = 0
+                for point_winner_id, count in results:
+                    if point_winner_id == self.team_us_id:
+                        score_us = count
+                    elif point_winner_id == self.team_them_id:
+                        score_them = count
+            except Exception as e:
+                print(f"Error calculating score: {e}")
+        
+        self.contact_popup.set_contact_info(player_name, contact_type, outcome, rating, contact_data, self, score_us, score_them, rally_number)
         
         # Connect edit button - use the contact_data stored in the popup to avoid closure issues
         if self.contact_popup.edit_button:

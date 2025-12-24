@@ -4,7 +4,7 @@ Data entry screen for tracking ball contacts during a volleyball game.
 
 from PySide6.QtWidgets import QMainWindow, QMessageBox, QLabel, QDialog, QVBoxLayout, QHBoxLayout, QListWidget, QPushButton, QListWidgetItem, QScrollArea, QWidget, QGroupBox, QGridLayout, QTextEdit
 from PySide6.QtCore import Qt, QEvent, QPoint, Signal, QObject, QThread
-from PySide6.QtGui import QMouseEvent, QFont
+from PySide6.QtGui import QMouseEvent, QFont, QKeyEvent
 from PySide6.QtUiTools import QUiLoader
 from pathlib import Path
 from database import VideoStatsDB
@@ -1954,36 +1954,16 @@ class DataEntryWindow(QMainWindow):
                         # This player is part of a conflicting role - use position-based mapping
                         print(f"DEBUG POPUP:   -> Back row player with conflicting role {role_upper}, using position-based mapping")
                         use_position_based = True
-                    else:
-                        # Try role-based mapping first
-                        role_based_groupbox = self.map_player_to_groupbox(role_code, position_number, has_libero)
-                        print(f"DEBUG POPUP:   -> Role-based mapping: {role_based_groupbox}")
-                        
-                        # Check if this GroupBox already has a DIFFERENT position assigned
-                        if role_based_groupbox and role_based_groupbox in groupbox_to_positions:
-                            existing_positions = groupbox_to_positions[role_based_groupbox]
-                            if position_number not in existing_positions and len(existing_positions) > 0:
-                                # Conflict: GroupBox already assigned to different position(s)
-                                print(f"DEBUG POPUP:   -> Conflict detected: GroupBox {role_based_groupbox} already assigned to position(s) {existing_positions}")
-                                use_position_based = True
+                    # Otherwise, use role-based mapping (no GroupBox conflict check needed - 
+                    # multiple players with same role mapping to same GroupBox is valid)
                 elif position_number in FRONT_ROW:
                     # Front row: check for conflicting roles first
                     if role_upper in conflicting_front_row_roles and position_number in conflicting_front_row_roles[role_upper]:
                         # This player is part of a conflicting role - use position-based mapping
                         print(f"DEBUG POPUP:   -> Front row player with conflicting role {role_upper}, using position-based mapping")
                         use_position_based = True
-                    else:
-                        # Try role-based mapping first
-                        role_based_groupbox = self.map_player_to_groupbox(role_code, position_number, has_libero)
-                        print(f"DEBUG POPUP:   -> Role-based mapping: {role_based_groupbox}")
-                        
-                        # Check if this GroupBox already has a DIFFERENT position assigned
-                        if role_based_groupbox and role_based_groupbox in groupbox_to_positions:
-                            existing_positions = groupbox_to_positions[role_based_groupbox]
-                            if position_number not in existing_positions and len(existing_positions) > 0:
-                                # Conflict: GroupBox already assigned to different position(s)
-                                print(f"DEBUG POPUP:   -> Conflict detected: GroupBox {role_based_groupbox} already assigned to position(s) {existing_positions}")
-                                use_position_based = True
+                    # Otherwise, use role-based mapping (no GroupBox conflict check needed - 
+                    # multiple players with same role mapping to same GroupBox is valid)
                 
                 # Determine final GroupBox assignment
                 if use_position_based:
@@ -3365,11 +3345,46 @@ class DataEntryWindow(QMainWindow):
         
         # Restore state variables
         if sequence_number == 1:
-            # This was the first contact (serve) - rally should be reset
+            # This was the first contact (serve) - rally should be deleted
+            # Get rally_number before deleting the rally
+            cursor.execute("SELECT rally_number FROM rallies WHERE rally_id = ?", (rally_id,))
+            rally_number_result = cursor.fetchone()
+            rally_number = rally_number_result[0] if rally_number_result else None
+            
+            # Delete the rally from the database (since serve is the only contact)
+            cursor.execute("DELETE FROM rallies WHERE rally_id = ?", (rally_id,))
+            self.db.conn.commit()
+            print(f"DEBUG: Deleted rally {rally_id} (rally_number={rally_number})")
+            
+            # Reset rally state
             if self.rally_in_progress and self.current_rally_id == rally_id:
                 self.rally_in_progress = False
                 self.current_rally_id = None
                 self.current_sequence = 0
+            
+            # After deleting a rally, set current_rally_number to MAX + 1 to ensure
+            # the next serve can create a new rally without unique constraint violation
+            # Get MAX rally_number from database
+            cursor.execute(
+                "SELECT MAX(rally_number) FROM rallies WHERE game_id = ?",
+                (self.game_id,)
+            )
+            result = cursor.fetchone()
+            if result and result[0]:
+                # Next rally should be MAX + 1 (we just deleted one, so we can reuse that number or go higher)
+                # To be safe and avoid conflicts, use MAX + 1
+                self.current_rally_number = result[0] + 1
+            else:
+                # No rallies exist, start at 1
+                self.current_rally_number = 1
+            
+            # Reload score (this handles serving_team_id and other state)
+            # But preserve the current_rally_number we just calculated to avoid conflicts
+            saved_rally_number = self.current_rally_number
+            self.load_score()
+            # Restore the rally number we calculated (load_score might try to reuse an incomplete rally)
+            self.current_rally_number = saved_rally_number
+            print(f"DEBUG: After deleting rally {rally_id}, set current_rally_number={self.current_rally_number} (MAX + 1)")
         else:
             # Update current_sequence
             if self.rally_in_progress and self.current_rally_id == rally_id:
@@ -4056,11 +4071,15 @@ class DataEntryWindow(QMainWindow):
                     print(f"DEBUG: Auto-rotated team_us after winning point (team_them had served)")
                     # Update MainWindow player buttons to reflect rotation
                     self.update_mainwindow_player_buttons()
-                    # Show rotation popup
-                    self.show_rotation_popup()
                 except Exception as e:
                     print(f"DEBUG ERROR: Failed to rotate team_us: {e}")
                     auto_rotated = False  # Reset if rotation failed
+                else:
+                    # Show rotation popup only if rotation succeeded
+                    try:
+                        self.show_rotation_popup()
+                    except Exception as e:
+                        print(f"DEBUG ERROR: Failed to show rotation popup: {e}")
             
             # Log point_awarded event for undo functionality
             from datetime import datetime
@@ -4190,11 +4209,15 @@ class DataEntryWindow(QMainWindow):
                     print(f"DEBUG: Auto-rotated team_us after winning point from mapper (team_them had served in previous rally)")
                     # Update MainWindow player buttons to reflect rotation
                     self.update_mainwindow_player_buttons()
-                    # Show rotation popup
-                    self.show_rotation_popup()
                 except Exception as e:
                     print(f"DEBUG ERROR: Failed to rotate team_us: {e}")
                     auto_rotated = False  # Reset if rotation failed
+                else:
+                    # Show rotation popup only if rotation succeeded
+                    try:
+                        self.show_rotation_popup()
+                    except Exception as e:
+                        print(f"DEBUG ERROR: Failed to show rotation popup: {e}")
             
             # Reload score to get updated values
             self.load_score()
@@ -4429,11 +4452,21 @@ class DataEntryWindow(QMainWindow):
                 print(f"DEBUG: Cannot show rotation popup - found {len(players) if players else 0} players (expected 6)")
                 return
             
-            # Create popup dialog
-            dialog = QDialog(self)
+            # Create popup dialog with ESC key support
+            class RotationDialog(QDialog):
+                def __init__(self, parent=None):
+                    super().__init__(parent)
+                
+                def keyPressEvent(self, event):
+                    if event.key() == Qt.Key.Key_Escape:
+                        self.accept()
+                    else:
+                        super().keyPressEvent(event)
+            
+            dialog = RotationDialog(self)
             dialog.setWindowTitle("Team Rotation")
             dialog.setModal(True)
-            dialog.setMinimumSize(400, 350)
+            dialog.setMinimumSize(500, 300)
             
             layout = QVBoxLayout(dialog)
             
@@ -4443,49 +4476,83 @@ class DataEntryWindow(QMainWindow):
             title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             layout.addWidget(title_label)
             
-            # Court diagram with positions
-            # Volleyball court positions:
-            #     4    3    2
-            #     5    6    1
-            # Where 1 is right back (server position), 2 is right front, etc.
+            # Add horizontal line below label: "____________  Net  ___________"
+            net_line = QLabel("____________  Net  ___________")
+            net_line.setFont(QFont('Arial', 10))
+            net_line.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            layout.addWidget(net_line)
             
-            # Create a text display showing the lineup
-            lineup_text = QTextEdit()
-            lineup_text.setReadOnly(True)
-            lineup_text.setFont(QFont('Courier', 10))
-            lineup_text.setMaximumHeight(250)
+            # Create grid layout for court positions (same as substitution dialog)
+            # Court layout: 
+            # Row 0 (top): positions 4, 3, 2 (left to right)
+            # Row 1 (bottom): positions 5, 6, 1 (left to right)
+            court_grid = QGridLayout()
+            court_grid.setSpacing(10)
+            court_grid.setContentsMargins(10, 10, 10, 10)
             
-            # Build the display text
-            # Sort players by position number
+            # Create a dictionary mapping position_number to (row, col) in grid
+            # Position 4 -> (0, 0) top-left, Position 3 -> (0, 1) top-middle, Position 2 -> (0, 2) top-right
+            # Position 5 -> (1, 0) bottom-left, Position 6 -> (1, 1) bottom-middle, Position 1 -> (1, 2) bottom-right
+            position_to_grid = {
+                4: (0, 0),  # top-left
+                3: (0, 1),  # top-middle
+                2: (0, 2),  # top-right
+                5: (1, 0),  # bottom-left
+                6: (1, 1),  # bottom-middle
+                1: (1, 2)   # bottom-right
+            }
+            
+            # Build players_by_pos dictionary
             players_by_pos = {pos: (player_number, name, role_code, is_server) 
                              for pos, player_number, name, role_code, is_server in players}
             
-            # Court layout visualization
-            text_lines = []
-            text_lines.append("Court Positions:")
-            text_lines.append("")
-            text_lines.append("  Front Row:")
-            text_lines.append(f"    Position 4 (Left Front):  #{players_by_pos[4][0]} {players_by_pos[4][1] or 'Unknown'} ({players_by_pos[4][2] or 'N/A'})")
-            text_lines.append(f"    Position 3 (Middle Front): #{players_by_pos[3][0]} {players_by_pos[3][1] or 'Unknown'} ({players_by_pos[3][2] or 'N/A'})")
-            text_lines.append(f"    Position 2 (Right Front):  #{players_by_pos[2][0]} {players_by_pos[2][1] or 'Unknown'} ({players_by_pos[2][2] or 'N/A'})")
-            text_lines.append("")
-            text_lines.append("  Back Row:")
-            text_lines.append(f"    Position 5 (Left Back):    #{players_by_pos[5][0]} {players_by_pos[5][1] or 'Unknown'} ({players_by_pos[5][2] or 'N/A'})")
-            text_lines.append(f"    Position 6 (Middle Back):  #{players_by_pos[6][0]} {players_by_pos[6][1] or 'Unknown'} ({players_by_pos[6][2] or 'N/A'})")
-            server_marker = " [SERVER]" if players_by_pos[1][3] else ""
-            text_lines.append(f"    Position 1 (Right Back):   #{players_by_pos[1][0]} {players_by_pos[1][1] or 'Unknown'} ({players_by_pos[1][2] or 'N/A'}){server_marker}")
+            # Add labels for each position in the correct order for court layout
+            for pos in [4, 3, 2, 5, 6, 1]:
+                row, col = position_to_grid[pos]
+                player_number, name, role_code, is_server = players_by_pos[pos]
+                player_name = name or 'Unknown'
+                
+                # Format: "player name (jersey number)"
+                display_text = f"{player_name} ({player_number})"
+                
+                # Create label for this position
+                pos_label = QLabel(display_text)
+                pos_label.setMinimumSize(125, 60)
+                pos_label.setMaximumSize(125, 60)
+                pos_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                pos_label.setStyleSheet("""
+                    QLabel {
+                        border: 2px solid #505050;
+                        border-radius: 10px;
+                        padding: 5px;
+                        text-align: center;
+                        font-size: 11pt;
+                        background-color: #f0f0f0;
+                    }
+                """)
+                pos_label.setWordWrap(True)
+                
+                court_grid.addWidget(pos_label, row, col)
             
-            lineup_text.setPlainText("\n".join(text_lines))
-            layout.addWidget(lineup_text)
+            # Create a container widget for the grid to ensure proper layout
+            grid_container = QWidget()
+            grid_container.setLayout(court_grid)
             
-            # OK button
+            # Center the grid
+            grid_layout = QVBoxLayout()
+            grid_layout.addWidget(grid_container)
+            grid_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            
+            layout.addLayout(grid_layout)
+            
+            # Close button
             button_layout = QHBoxLayout()
             button_layout.addStretch()
-            ok_btn = QPushButton("OK")
-            ok_btn.setFont(QFont('Arial', 10))
-            ok_btn.clicked.connect(dialog.accept)
-            ok_btn.setDefault(True)
-            button_layout.addWidget(ok_btn)
+            close_btn = QPushButton("Close")
+            close_btn.setFont(QFont('Arial', 10))
+            close_btn.clicked.connect(dialog.accept)
+            close_btn.setDefault(True)
+            button_layout.addWidget(close_btn)
             button_layout.addStretch()
             layout.addLayout(button_layout)
             
