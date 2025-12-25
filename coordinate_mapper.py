@@ -32,6 +32,9 @@ class CoordinateMapper(QMainWindow):
     # Parameters: (point_winner_id)
     point_awarded = Signal(int)
     
+    # Signal emitted when window is closing
+    window_closing = Signal()
+    
     def __init__(self, parent=None, db=None, game_id=None):
         super().__init__(parent)
         self.setWindowTitle("Coordinate Mapper")
@@ -2421,6 +2424,11 @@ class CoordinateMapper(QMainWindow):
             if hasattr(self, 'undo_btn') and self.isActiveWindow():
                 # Use a small delay to ensure contact recording has completed
                 QTimer.singleShot(100, self._update_undo_button_state)
+    
+    def closeEvent(self, event):
+        """Handle window close event - emit signal before closing."""
+        self.window_closing.emit()
+        super().closeEvent(event)
 
 
 def main():

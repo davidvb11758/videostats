@@ -29,12 +29,12 @@ class StatsApp(QMainWindow):
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         main_layout = QVBoxLayout(central_widget)
-        main_layout.setSpacing(10)
-        main_layout.setContentsMargins(15, 10, 15, 10)
+        main_layout.setSpacing(5)
+        main_layout.setContentsMargins(0, 0, 0, 0)
         
         # Controls section - create a container widget
         controls_widget = QWidget()
-        controls_widget.setFixedHeight(150)
+        controls_widget.setFixedHeight(120)
         controls_widget.setStyleSheet("""
             QWidget {
                 background: #f8f9fa;
@@ -42,13 +42,14 @@ class StatsApp(QMainWindow):
             }
         """)
         controls_layout = QHBoxLayout(controls_widget)
-        controls_layout.setSpacing(10)
-        controls_layout.setContentsMargins(10, 8, 10, 8)
+        controls_layout.setSpacing(8)
+        controls_layout.setContentsMargins(8, 5, 8, 5)
         
         # Team selection
         team_label = QLabel('Select Team:')
-        team_label.setFont(QFont('', 11, QFont.Bold))
+        team_label.setFont(QFont('', 9, QFont.Bold))
         team_label.setStyleSheet("color: #333;")
+        team_label.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         self.team_combo = QComboBox()
         self.team_combo.setMinimumWidth(200)
         self.team_combo.setStyleSheet("""
@@ -70,11 +71,12 @@ class StatsApp(QMainWindow):
         
         # Game selection
         game_label = QLabel('Select Games (Ctrl+Click for multiple):')
-        game_label.setFont(QFont('', 11, QFont.Bold))
+        game_label.setFont(QFont('', 9, QFont.Bold))
         game_label.setStyleSheet("color: #333;")
+        game_label.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         self.game_list = QListWidget()
         self.game_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
-        self.game_list.setMinimumWidth(300)
+        self.game_list.setMinimumWidth(400)
         self.game_list.setMaximumHeight(100)
         self.game_list.setStyleSheet("""
             QListWidget {
@@ -84,7 +86,7 @@ class StatsApp(QMainWindow):
                 font-size: 14px;
             }
             QListWidget::item {
-                padding: 5px;
+                padding: 2px;
             }
             QListWidget::item:selected {
                 background: #667eea;
@@ -97,28 +99,30 @@ class StatsApp(QMainWindow):
         self.game_list.itemSelectionChanged.connect(self.on_games_changed)
         
         controls_layout.addWidget(team_label)
-        controls_layout.addWidget(self.team_combo)
+        controls_layout.addWidget(self.team_combo, alignment=Qt.AlignTop)
         controls_layout.addWidget(game_label)
         controls_layout.addWidget(self.game_list)
         controls_layout.addStretch()
         
         # Add close button
         self.btn_close = QPushButton("Close")
+        self.btn_close.setMinimumSize(100, 40)
         self.btn_close.setStyleSheet("""
             QPushButton {
-                background: #dc3545;
-                color: white;
-                border: none;
-                border-radius: 4px;
-                padding: 8px 16px;
+                background: white;
+                color: #333;
+                border: 2px solid #ddd;
+                border-radius: 8px;
+                padding: 10px 20px;
                 font-size: 14px;
                 font-weight: bold;
             }
             QPushButton:hover {
-                background: #c82333;
+                background: #f8f9fa;
+                border-color: #667eea;
             }
             QPushButton:pressed {
-                background: #bd2130;
+                background: #e9ecef;
             }
         """)
         self.btn_close.clicked.connect(self.close)
@@ -130,7 +134,7 @@ class StatsApp(QMainWindow):
         self.tabs = QTabWidget()
         self.tabs.setStyleSheet("""
             QTabWidget::pane {
-                border: 1px solid #ddd;
+                border: none;
                 border-radius: 4px;
                 background: white;
             }
@@ -138,8 +142,7 @@ class StatsApp(QMainWindow):
                 background: #f8f9fa;
                 color: #666;
                 padding: 8px 16px;
-                border: 1px solid #ddd;
-                border-bottom: none;
+                border: none;
                 border-top-left-radius: 4px;
                 border-top-right-radius: 4px;
             }
@@ -168,6 +171,7 @@ class StatsApp(QMainWindow):
             QMainWindow {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
                     stop:0 #667eea, stop:1 #764ba2);
+                border: none;
             }
             QWidget {
                 background: transparent;
@@ -185,11 +189,11 @@ class StatsApp(QMainWindow):
         table.setStyleSheet("""
             QTableWidget {
                 background: white;
-                border: 1px solid #ddd;
+                border: none;
                 gridline-color: #e9ecef;
             }
             QTableWidget::item {
-                padding: 5px;
+                padding: 3px;
                 border-right: 1px solid #e9ecef;
             }
         """)

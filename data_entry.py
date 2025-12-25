@@ -310,6 +310,11 @@ class DataEntryWindow(QMainWindow):
             self.load_score()
             # Update MainWindow player buttons based on active lineup
             self.update_mainwindow_player_buttons()
+            # Load video and court boundaries for the game
+            # Note: coordinate_mapper is created in setup_coordinate_mapper() which is called earlier
+            # Use QTimer to ensure coordinate_mapper is fully initialized before loading game data
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(100, self._initialize_game_data)
         
         # Always update UI state to set button states correctly
         self.update_ui_state()
@@ -884,6 +889,12 @@ class DataEntryWindow(QMainWindow):
             # First rally
             self.current_rally_number = 1
             self.serving_team_id = self.team_us_id
+    
+    def _initialize_game_data(self):
+        """Initialize game data (video and court boundaries) after coordinate mapper is ready."""
+        if self.game_id and self.coordinate_mapper:
+            self.load_game_video()
+            self.load_game_court_boundaries()
     
     def load_game_video(self):
         """Load the video file associated with the current game."""
@@ -5874,7 +5885,7 @@ if __name__ == "__main__":
     teams = cursor.fetchall()
     
     if len(teams) < 2:
-        print("Error: Need at least 2 teams. Please run main.py first to configure teams.")
+        print("Error: Need at least 2 teams. Please run RocketsVideoStats.py first to configure teams.")
         db.close()
         sys.exit(1)
     

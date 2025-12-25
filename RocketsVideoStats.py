@@ -80,6 +80,9 @@ class RocketsVideoStatsWindow(QMainWindow):
         # Track selected game
         self.selected_game_id = None
         
+        # Track data entry window reference
+        self.data_entry_window = None
+        
         # Populate game combo box
         self.populate_game_combo()
         
@@ -353,7 +356,8 @@ class RocketsVideoStatsWindow(QMainWindow):
             )
             return
         
-        # Create and show data entry window
+        # Create data entry window (but don't show it)
+        # The coordinate mapper will be created and shown automatically
         data_entry_window = DataEntryWindow(
             ui_widget=ui_widget,
             db=self.db,
@@ -363,13 +367,34 @@ class RocketsVideoStatsWindow(QMainWindow):
             lock_game_selection=False  # Allow user to change game if needed when resuming
         )
         
-        data_entry_window.show()
-        data_entry_window.raise_()
-        data_entry_window.activateWindow()
-        # Hide main menu when data entry window is opened
+        # Store reference to data entry window
+        self.data_entry_window = data_entry_window
+        
+        # Don't show the data entry window - only coordinate mapper will be visible
+        # Ensure coordinate mapper is visible and active
+        if data_entry_window.coordinate_mapper:
+            # Connect to coordinate mapper's close signal to show main menu
+            data_entry_window.coordinate_mapper.window_closing.connect(self.on_coordinate_mapper_closing)
+            data_entry_window.coordinate_mapper.raise_()
+            data_entry_window.coordinate_mapper.activateWindow()
+        
+        # Hide main menu when coordinate mapper is opened
         self.hide()
         
         self.update_status_label(f"Opened Game {game_id} for data entry")
+    
+    def on_coordinate_mapper_closing(self):
+        """Handle coordinate mapper window closing - re-display main menu."""
+        # Show the main menu again
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        
+        # Clear the data entry window reference
+        self.data_entry_window = None
+        
+        # Update status
+        self.update_status_label("Ready")
     
     def view_reports(self):
         """Open reports dialog."""

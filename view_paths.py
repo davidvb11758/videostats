@@ -3372,11 +3372,19 @@ class ContactPathViewer(QMainWindow):
             # Get color based on outcome (default to medium gray if outcome not recognized)
             dot_color = outcome_colors.get(outcome, QColor(128, 128, 128))
             
-            # Line color: stuff blocks use green (like kills), others use the dot color
-            if outcome == 'stuff':
-                line_color = QColor(0, 200, 0)  # Green for stuff block lines
+            # Line color based on outcome:
+            # - continue: gray
+            # - error: red
+            # - kill, stuff, ace, assist: green
+            # - others: use dot color
+            if outcome == 'continue':
+                line_color = QColor(128, 128, 128)  # Gray
+            elif outcome == 'error':
+                line_color = QColor(255, 0, 0)  # Red
+            elif outcome in ['kill', 'stuff', 'ace', 'assist']:
+                line_color = QColor(0, 200, 0)  # Green
             else:
-                line_color = dot_color  # Use the same color for the line/vector
+                line_color = dot_color  # Use the dot color for other outcomes
             
             # Draw contact dot at the origin of the contact
             # For floor contacts, use a square instead of a circle to make them visually distinct
@@ -3443,18 +3451,39 @@ class ContactPathViewer(QMainWindow):
                 next_point = QPointF(next_draw_x, next_draw_y)
                 
                 # Determine line style based on contact_type
-                # receive, pass, block = medium dash line
-                # set = dotted line
-                # attack, freeball = solid line
+                # For receive contacts, style is based on rating:
+                #   Rating 3: long dash
+                #   Rating 2: short dash
+                #   Rating 1: dash-dot pattern
+                #   Rating 0: dotted line
+                #   No rating: solid line
+                # For SET contacts: always solid line
+                # For all other contact types: solid line
                 pen = QPen(line_color, 2)
-                if contact_type in ['receive', 'pass', 'block']:
-                    pen.setStyle(Qt.PenStyle.DashLine)
+                if contact_type == 'receive':
+                    # Set line style based on receive rating
+                    if rating == 3:
+                        # Long dash
+                        pen.setStyle(Qt.PenStyle.DashLine)
+                        pen.setDashPattern([8, 4])  # 8 units dash, 4 units gap
+                    elif rating == 2:
+                        # Short dash
+                        pen.setStyle(Qt.PenStyle.DashLine)
+                        pen.setDashPattern([4, 4])  # 4 units dash, 4 units gap
+                    elif rating == 1:
+                        # Dash-dot pattern
+                        pen.setStyle(Qt.PenStyle.DashDotLine)
+                    elif rating == 0:
+                        # Dotted line
+                        pen.setStyle(Qt.PenStyle.DotLine)
+                    else:
+                        # No rating or invalid rating - solid line
+                        pen.setStyle(Qt.PenStyle.SolidLine)
                 elif contact_type == 'set':
-                    pen.setStyle(Qt.PenStyle.DotLine)
-                elif contact_type in ['attack', 'freeball']:
+                    # SET contacts always use solid line
                     pen.setStyle(Qt.PenStyle.SolidLine)
                 else:
-                    # Default to solid line for other types (serve, down)
+                    # All other contact types use solid line
                     pen.setStyle(Qt.PenStyle.SolidLine)
                 
                 # Draw vector (line with arrowhead) from current contact to next sequential contact
