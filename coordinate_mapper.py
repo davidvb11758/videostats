@@ -5,6 +5,7 @@ Uses OpenCV homography for accurate perspective transformation.
 
 import numpy as np
 import cv2
+import json
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGraphicsView, QGraphicsScene,
     QGraphicsEllipseItem, QGraphicsLineItem, QGraphicsTextItem, QApplication, QPushButton,
@@ -229,11 +230,29 @@ class CoordinateMapper(QMainWindow):
         
         # Single shared message area (below the button layout) - single text row
         # Displays "Last action: [message]" or "Last Undo: [message]" or other status messages
+        # Show History link on the same row, aligned to the right
+        message_row_layout = QHBoxLayout()
+        message_row_layout.setContentsMargins(0, 0, 0, 0)
+        
         self.message_display = QLabel("")
         self.message_display.setFont(QFont('Arial', 11))
         self.message_display.setStyleSheet("color: black; padding: 2px 0px; margin: 0px;")
         self.message_display.setAlignment(Qt.AlignmentFlag.AlignLeft)
-        layout.addWidget(self.message_display)
+        message_row_layout.addWidget(self.message_display)
+        
+        message_row_layout.addStretch()
+        
+        # Show History link on the right margin
+        self.show_history_link = QLabel('<a href="#">Show History</a>')
+        self.show_history_link.setFont(QFont('Arial', 11))
+        self.show_history_link.setStyleSheet("color: blue; padding: 2px 0px; margin: 0px; text-decoration: underline;")
+        self.show_history_link.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.show_history_link.setOpenExternalLinks(False)
+        self.show_history_link.linkActivated.connect(self.show_history_dialog)
+        self.show_history_link.setEnabled(self.db is not None and self.game_id is not None)
+        message_row_layout.addWidget(self.show_history_link)
+        
+        layout.addLayout(message_row_layout)
         
         # Keep references for backward compatibility
         self.last_action_message = self.message_display
@@ -2410,6 +2429,236 @@ class CoordinateMapper(QMainWindow):
                 
                 status_msg = "Plane defined! Click anywhere inside to get coordinates"
                 self.set_status_message(status_msg)
+    
+    def _get_recent_events(self, limit: int = 10):
+        """Get the most recent events for this game.
+        
+        Args:
+            limit: Maximum number of events to retrieve (default: 5)
+            
+        Returns:
+            List of tuples: (event_id, team_id, event_type, payload, created_at)
+        """
+        if not self.game_id or not self.db:
+            return []
+        
+        if not self.db.conn:
+            self.db.connect()
+        
+        cursor = self.db.conn.cursor()
+        cursor.execute("""
+            SELECT id, team_id, event_type, payload, created_at
+            FROM events
+            WHERE game_id = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT ?
+        """, (self.game_id, limit))
+        
+        return cursor.fetchall()
+    
+    def _get_player_info(self, player_id: int):
+        """Get player name and jersey number for a player_id.
+        
+        Args:
+            player_id: The player ID
+            
+        Returns:
+            Tuple of (player_name, player_number) or (None, None) if not found
+        """
+        if not self.db or not player_id:
+            return (None, None)
+        
+        if not self.db.conn:
+            self.db.connect()
+        
+        cursor = self.db.conn.cursor()
+        cursor.execute("""
+            SELECT COALESCE(p.jersey, p.player_number) as player_number, p.name
+            FROM players p
+            WHERE p.player_id = ?
+        """, (player_id,))
+        
+        result = cursor.fetchone()
+        if result:
+            return (result[1], result[0])  # (name, number)
+        return (None, None)
+    
+    def _format_event_history(self, event_id: int, event_type: str, payload: dict, team_id: int):
+        """Format an event for display in history.
+        
+        Args:
+            event_id: The event ID
+            event_type: Type of event (contact, point_awarded, rotation, substitution, libero, initial_setup)
+            payload: Event payload dictionary
+            team_id: Team ID for the event
+            
+        Returns:
+            Formatted string for the event
+        """
+        # Start with event ID (no ## prefix)
+        result = f"{event_id}  "
+        
+        if event_type == 'contact':
+            # Format: pass: av (4) continue
+            player_id = payload.get('player_id')
+            contact_type = payload.get('contact_type', 'contact')
+            outcome = payload.get('outcome', '')
+            
+            if player_id:
+                player_name, player_number = self._get_player_info(player_id)
+                if player_name and player_number:
+                    player_display = f"{player_name} ({player_number})"
+                elif player_number:
+                    player_display = f"Player {player_number}"
+                else:
+                    player_display = f"Player {player_id}"
+                
+                result += f"{contact_type}: {player_display}"
+            else:
+                result += contact_type
+            
+            # Add outcome if present
+            if outcome:
+                result += f" {outcome}"
+        
+        elif event_type == 'point_awarded':
+            # Format: point: Them=99 (include score)
+            point_winner_id = payload.get('point_winner_id')
+            score_us = payload.get('score_us')
+            score_them = payload.get('score_them')
+            
+            if point_winner_id:
+                if point_winner_id == self.team_us_id:
+                    team_display = "Us"
+                    score = score_us if score_us is not None else "?"
+                elif point_winner_id == self.team_them_id:
+                    team_display = "Them"
+                    score = score_them if score_them is not None else "?"
+                else:
+                    # Get team name or use ID
+                    if not self.db.conn:
+                        self.db.connect()
+                    cursor = self.db.conn.cursor()
+                    cursor.execute("SELECT name FROM teams WHERE team_id = ?", (point_winner_id,))
+                    team_result = cursor.fetchone()
+                    team_display = team_result[0] if team_result else f"Team {point_winner_id}"
+                    score = "?"
+                
+                result += f"point: {team_display}={score}"
+            else:
+                result += "point: Unknown"
+        
+        elif event_type == 'rotation':
+            # Format: rotation: Us
+            if team_id == self.team_us_id:
+                result += "rotation: Us"
+            elif team_id == self.team_them_id:
+                result += "rotation: Them"
+            else:
+                result += "rotation: Unknown"
+        
+        elif event_type == 'substitution':
+            # Format: sub: player name (99) for player name (99)
+            out_player_id = payload.get('out_player_id')
+            in_player_id = payload.get('in_player_id')
+            
+            out_name, out_number = self._get_player_info(out_player_id) if out_player_id else (None, None)
+            in_name, in_number = self._get_player_info(in_player_id) if in_player_id else (None, None)
+            
+            out_display = f"{out_name or 'Unknown'} ({out_number or '?'})" if out_name or out_number else f"Player {out_player_id}"
+            in_display = f"{in_name or 'Unknown'} ({in_number or '?'})" if in_name or in_number else f"Player {in_player_id}"
+            
+            result += f"sub: {in_display} for {out_display}"
+        
+        elif event_type == 'libero':
+            # Format: libero in for player name (99) or libero out
+            action = payload.get('action', 'enter')
+            libero_id = payload.get('libero_id')
+            replaced_player_id = payload.get('replaced_player_id')
+            
+            if action == 'enter' and replaced_player_id:
+                replaced_name, replaced_number = self._get_player_info(replaced_player_id)
+                replaced_display = f"{replaced_name or 'Unknown'} ({replaced_number or '?'})" if replaced_name or replaced_number else f"Player {replaced_player_id}"
+                result += f"libero in for {replaced_display}"
+            elif action == 'exit':
+                result += "libero out"
+            else:
+                result += f"libero {action}"
+        
+        elif event_type == 'initial_setup':
+            # Format: initial_setup
+            result += "initial_setup"
+        
+        else:
+            # Unknown event type
+            result += f"{event_type}"
+        
+        return result
+    
+    def show_history_dialog(self):
+        """Show a modal dialog with the 10 most recent events."""
+        if not self.game_id or not self.db:
+            QMessageBox.warning(self, "No Game", "No game is currently loaded.")
+            return
+        
+        # Create modal dialog with custom keyPressEvent for ESC
+        class HistoryDialog(QDialog):
+            def __init__(self, parent):
+                super().__init__(parent)
+                self.setWindowTitle("Event History")
+                self.setModal(True)
+                self.setMinimumWidth(500)
+                self.setMinimumHeight(400)
+            
+            def keyPressEvent(self, event):
+                if event.key() == Qt.Key.Key_Escape:
+                    self.accept()
+                else:
+                    super().keyPressEvent(event)
+        
+        dialog = HistoryDialog(self)
+        layout = QVBoxLayout(dialog)
+        
+        # Title label
+        title_label = QLabel("Recent Events (Most Recent First)")
+        title_label.setFont(QFont('Arial', 12, QFont.Weight.Bold))
+        layout.addWidget(title_label)
+        
+        # List widget for events
+        events_list = QListWidget()
+        events_list.setFont(QFont('Arial', 10))
+        layout.addWidget(events_list)
+        
+        # Get recent events
+        events = self._get_recent_events(limit=10)
+        
+        if not events:
+            events_list.addItem("No events found")
+        else:
+            for event_row in events:
+                event_id, team_id, event_type, payload_json, created_at = event_row
+                
+                # Parse payload
+                try:
+                    payload = json.loads(payload_json) if isinstance(payload_json, str) else payload_json
+                except (json.JSONDecodeError, TypeError):
+                    payload = {}
+                
+                # Format event
+                formatted_text = self._format_event_history(event_id, event_type, payload, team_id)
+                events_list.addItem(formatted_text)
+        
+        # Close button
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        close_btn = QPushButton("Close")
+        close_btn.setDefault(True)
+        close_btn.clicked.connect(dialog.accept)
+        button_layout.addWidget(close_btn)
+        layout.addLayout(button_layout)
+        
+        # Show dialog (modal - blocks other activities)
+        dialog.exec()
     
     def showEvent(self, event):
         """Handle window show event - update undo button state when window is shown."""
