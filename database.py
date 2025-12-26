@@ -13,7 +13,7 @@ from typing import Optional
 class VideoStatsDB:
     """Database manager for VideoStats volleyball tracking."""
     
-    def __init__(self, db_path: str = "videostats.db"):
+    def __init__(self, db_path: str = "data/videostats.db"):
         self.db_path = db_path
         self.conn = None
         

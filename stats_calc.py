@@ -22,7 +22,7 @@ class StatsCalculator:
     
     def _load_receive_rating_configs(self):
         """Load receive rating configuration file into a 2D array."""
-        config_path = "config_receive_rating.json"
+        config_path = "data/config_receive_rating.json"
         if os.path.exists(config_path):
             with open(config_path, 'r') as f:
                 content = f.read()
