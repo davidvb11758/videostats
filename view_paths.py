@@ -22,6 +22,7 @@ from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
 from PySide6.QtUiTools import QUiLoader
 from database import VideoStatsDB
 from coordinate_mapper import CoordinateMapper
+from utils import resource_path
 from typing import Optional, List, Tuple
 
 
@@ -2963,7 +2964,7 @@ class ContactPathViewer(QMainWindow):
             from pathlib import Path
             
             # Get the path to highlight_title_creator.py (same directory as this file)
-            script_path = Path(__file__).parent / "highlight_title_creator.py"
+            script_path = resource_path("highlight_title_creator.py")
             
             if not script_path.exists():
                 QMessageBox.warning(self, "File Not Found", 
@@ -3792,7 +3793,7 @@ if __name__ == "__main__":
     db.connect()
     
     # Load UI
-    ui_file = Path(__file__).parent / "viewPaths.ui"
+    ui_file = resource_path("viewpaths.ui")
     loader = QUiLoader()
     ui_widget = loader.load(str(ui_file))
     

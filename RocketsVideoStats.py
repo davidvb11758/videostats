@@ -30,6 +30,7 @@ from list_games_dialog import ListGamesDialog
 from reprocess_outcomes import assign_rally_outcomes
 from stats_calc import StatsCalculator
 from PySide6.QtUiTools import QUiLoader
+from utils import resource_path, initialize_app
 
 
 class RocketsVideoStatsWindow(QMainWindow):
@@ -42,7 +43,7 @@ class RocketsVideoStatsWindow(QMainWindow):
         self.db.connect()
         
         # Load UI file
-        ui_file = Path(__file__).parent / "RocketsVideoStats.ui"
+        ui_file = resource_path("RocketsVideoStats.ui")
         if not ui_file.exists():
             QMessageBox.critical(
                 None,
@@ -249,7 +250,7 @@ class RocketsVideoStatsWindow(QMainWindow):
         
         try:
             # Load UI file
-            ui_file = Path(__file__).parent / "viewpaths.ui"
+            ui_file = resource_path("viewpaths.ui")
             if not ui_file.exists():
                 QMessageBox.critical(
                     self,
@@ -335,7 +336,7 @@ class RocketsVideoStatsWindow(QMainWindow):
         game_id_db, game_date, team_us_name, team_them_name, team_us_id, team_them_id, notes = result
         
         # Load data entry UI
-        ui_file = Path(__file__).parent / "inputTouchesVoice.ui"
+        ui_file = resource_path("inputTouchesVoice.ui")
         if not ui_file.exists():
             QMessageBox.critical(
                 self,
@@ -733,6 +734,9 @@ class RocketsVideoStatsWindow(QMainWindow):
 
 def main():
     """Main entry point for VideoStats application."""
+    # One-time initialization for PyInstaller compatibility
+    initialize_app()
+    
     app = QApplication(sys.argv)
     
     window = RocketsVideoStatsWindow()

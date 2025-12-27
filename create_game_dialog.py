@@ -17,6 +17,7 @@ from datetime import datetime
 from pathlib import Path
 from PySide6.QtUiTools import QUiLoader
 from data_entry import DataEntryWindow
+from utils import resource_path
 import json
 
 
@@ -45,7 +46,7 @@ class CreateGameDialog(QDialog):
         }
         
         # Load UI file
-        ui_file = Path(__file__).parent / "create_game_dialog.ui"
+        ui_file = resource_path("create_game_dialog.ui")
         if not ui_file.exists():
             QMessageBox.critical(
                 parent,
@@ -762,7 +763,7 @@ class CreateGameDialog(QDialog):
         """Launch the data entry window."""
         try:
             # Load data entry UI
-            ui_file = Path(__file__).parent / "inputTouchesVoice.ui"
+            ui_file = resource_path("inputTouchesVoice.ui")
             if not ui_file.exists():
                 QMessageBox.warning(
                     self,

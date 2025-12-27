@@ -7,6 +7,7 @@ import json
 import os
 from database import VideoStatsDB
 from typing import Dict, Optional
+from utils import resource_path
 
 
 class StatsCalculator:
@@ -22,8 +23,8 @@ class StatsCalculator:
     
     def _load_receive_rating_configs(self):
         """Load receive rating configuration file into a 2D array."""
-        config_path = "data/config_receive_rating.json"
-        if os.path.exists(config_path):
+        config_path = resource_path("data/config_receive_rating.json")
+        if config_path.exists():
             with open(config_path, 'r') as f:
                 content = f.read()
                 # Fix malformed JSON by adding commas between array elements

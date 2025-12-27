@@ -13,6 +13,7 @@ from typing import Optional
 from coordinate_mapper import CoordinateMapper
 from lineup_manager import LineupManager
 from lineup_models import BACK_ROW_POSITIONS
+from utils import resource_path
 import json
 import threading
 
@@ -1471,7 +1472,7 @@ class DataEntryWindow(QMainWindow):
                 if server_player_id and team_id == self.team_them_id:
                     # Show player-action popup for team_them serves using contact-popup1.ui
                     # Load the new UI file
-                    ui_file = Path(__file__).parent / "contact-popup1.ui"
+                    ui_file = resource_path("contact-popup1.ui")
                     loader = QUiLoader()
                     dialog_widget = loader.load(str(ui_file))
                     
@@ -1873,7 +1874,7 @@ class DataEntryWindow(QMainWindow):
         # Use new UI for team_us, old UI for team_them
         if use_new_ui:
             # Load the new UI file
-            ui_file = Path(__file__).parent / "contact-popup1.ui"
+            ui_file = resource_path("contact-popup1.ui")
             loader = QUiLoader()
             dialog_widget = loader.load(str(ui_file))
             
@@ -5903,7 +5904,7 @@ if __name__ == "__main__":
     db.close()
     
     # Load UI
-    ui_file = Path(__file__).parent / "inputTouchesVoice.ui"
+    ui_file = resource_path("inputTouchesVoice.ui")
     loader = QUiLoader()
     ui_widget = loader.load(str(ui_file))
     

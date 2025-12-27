@@ -8,12 +8,15 @@ import re
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
+from utils import get_database_path
 
 
 class VideoStatsDB:
     """Database manager for VideoStats volleyball tracking."""
     
-    def __init__(self, db_path: str = "data/videostats.db"):
+    def __init__(self, db_path: str = None):
+        if db_path is None:
+            db_path = str(get_database_path())
         self.db_path = db_path
         self.conn = None
         
