@@ -507,6 +507,27 @@ class VideoStatsDB:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_libero_actions_team ON libero_actions(team_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_libero_actions_game ON libero_actions(game_id)")
         
+        # Ensure players table has role_code, is_active, and jersey columns for seed data
+        # (These are also added by migrations, but we need them here for seeding)
+        cursor.execute("PRAGMA table_info(players)")
+        columns = [row[1] for row in cursor.fetchall()]
+        
+        if 'role_code' not in columns:
+            try:
+                cursor.execute("ALTER TABLE players ADD COLUMN role_code TEXT")
+            except sqlite3.OperationalError:
+                pass  # Column might already exist
+        if 'is_active' not in columns:
+            try:
+                cursor.execute("ALTER TABLE players ADD COLUMN is_active BOOLEAN DEFAULT 0")
+            except sqlite3.OperationalError:
+                pass  # Column might already exist
+        if 'jersey' not in columns:
+            try:
+                cursor.execute("ALTER TABLE players ADD COLUMN jersey INTEGER")
+            except sqlite3.OperationalError:
+                pass  # Column might already exist
+        
         # Populate positions table with static data if empty
         cursor.execute("SELECT COUNT(*) FROM positions")
         if cursor.fetchone()[0] == 0:
@@ -523,6 +544,39 @@ class VideoStatsDB:
                 positions_data
             )
         
+        # Seed default team_them team and players if database is new
+        cursor.execute("SELECT COUNT(*) FROM teams")
+        if cursor.fetchone()[0] == 0:
+            # Insert default opponent team (team_them)
+            cursor.execute("""
+                INSERT INTO teams (team_id, name, created_at) 
+                VALUES (12, 'Opp1', datetime('now'))
+            """)
+            
+            # Insert default players for team_them with all columns
+            players_data = [
+                (30, 12, 'o1', 'o1', None, 0, None),
+                (31, 12, 'o2', 'o2', None, 0, None),
+                (32, 12, 'o3', 'o3', None, 0, None),
+                (33, 12, 'o0', 'o0', None, 0, None)
+            ]
+            cursor.executemany("""
+                INSERT INTO players (player_id, team_id, player_number, name, role_code, is_active, jersey) 
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, players_data)
+            
+            # Update sqlite_sequence to reflect the highest IDs used
+            cursor.execute("""
+                INSERT OR REPLACE INTO sqlite_sequence (name, seq) 
+                VALUES ('teams', 12)
+            """)
+            cursor.execute("""
+                INSERT OR REPLACE INTO sqlite_sequence (name, seq) 
+                VALUES ('players', 33)
+            """)
+            
+            print("Seeded default team_them team (ID=12) and 4 players (IDs=30,31,32,33)")
+        
         self.conn.commit()
         print("Database tables created successfully!")
     
@@ -536,6 +590,17 @@ class VideoStatsDB:
     def add_constraints_to_existing_tables(self):
         """Add constraints to existing tables if they don't have them."""
         cursor = self.conn.cursor()
+        
+        # Check if games table exists first
+        cursor.execute("""
+            SELECT name FROM sqlite_master 
+            WHERE type='table' AND name='games'
+        """)
+        games_table_exists = cursor.fetchone() is not None
+        
+        if not games_table_exists:
+            # Tables don't exist yet, skip constraint checks
+            return
         
         # Check if games table exists and if it has the constraint
         # SQLite doesn't support adding CHECK constraints to existing tables easily

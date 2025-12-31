@@ -4,12 +4,17 @@ PyInstaller spec file for VideoStats application.
 Build with: pyinstaller VideoStats.spec
 """
 
+from PyInstaller.utils.hooks import collect_dynamic_libs
+
 block_cipher = None
+
+# Collect all Vosk dynamic libraries (DLLs) and binaries
+vosk_binaries = collect_dynamic_libs('vosk')
 
 a = Analysis(
     ['RocketsVideoStats.py'],
     pathex=[],
-    binaries=[],
+    binaries=vosk_binaries,
     datas=[
         # Include all UI files
         ('RocketsVideoStats.ui', '.'),
@@ -22,6 +27,8 @@ a = Analysis(
         ('data/config_receive_rating.json', 'data'),
         # Include highlight_title_creator.py as a data file (it's launched as a subprocess)
         ('highlight_title_creator.py', '.'),
+        # Include Vosk speech recognition model directory
+        ('vosk-model-smEng', 'vosk-model-smEng'),
     ],
     hiddenimports=[
         'PySide6.QtCore',
@@ -48,6 +55,9 @@ a = Analysis(
         'reprocess_outcomes',
         'stats_app',
         'config_screen',
+        # Vosk speech recognition
+        'vosk',
+        'vosk.vosk_cffi',
     ],
     hookspath=[],
     hooksconfig={},

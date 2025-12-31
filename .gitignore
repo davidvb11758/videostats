@@ -31,6 +31,16 @@ __pycache__/
 *.swo
 *~
 
+# vosk folder
+vosk-model-smEng/
+
+# ffmpeg folder
+ffmpeg/
+
+# build folder
+build/
+dist/
+
 # Database (uncomment if you want to exclude)
 # videostats.db
 

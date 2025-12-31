@@ -61,8 +61,11 @@ class VoiceRecognizer(QObject):
         "net": "net", "fault": "fault"
     }
     
-    def __init__(self, model_path: str = r"C:\vosk-model-smEng"):
+    def __init__(self, model_path: str = None):
         super().__init__()
+        if model_path is None:
+            # Use resource_path to find model in project directory (works in dev and PyInstaller)
+            model_path = str(resource_path("vosk-model-smEng"))
         self.model_path = model_path
         self.model = None
         self.recognizer = None
