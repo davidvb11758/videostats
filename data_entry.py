@@ -14,6 +14,7 @@ from coordinate_mapper import CoordinateMapper
 from lineup_manager import LineupManager
 from lineup_models import BACK_ROW_POSITIONS
 from utils import resource_path
+from logging_config import get_logger
 import json
 import threading
 
@@ -63,6 +64,7 @@ class VoiceRecognizer(QObject):
     
     def __init__(self, model_path: str = None):
         super().__init__()
+        self.logger = get_logger('data_entry.voice')
         if model_path is None:
             # Use resource_path to find model in project directory (works in dev and PyInstaller)
             model_path = str(resource_path("vosk-model-smEng"))
@@ -177,10 +179,10 @@ class VoiceRecognizer(QObject):
     def _process_recognized_text(self, text: str):
         """Process recognized text and emit signals when a valid pair is found."""
         words = text.lower().split()
-        print(f"DEBUG VOICE: Heard raw text: '{text}'")
-        print(f"DEBUG VOICE: Split words: {words}")
+        self.logger.debug(f"VOICE: Heard raw text: '{text}'")
+        self.logger.debug(f"VOICE: Split words: {words}")
         self._words_buffer.extend(words)
-        print(f"DEBUG VOICE: Buffer now: {self._words_buffer}")
+        self.logger.debug(f"VOICE: Buffer now: {self._words_buffer}")
         
         # Try to form a player-action pair from the buffer
         while len(self._words_buffer) >= 2:
@@ -192,23 +194,23 @@ class VoiceRecognizer(QObject):
             # Check if second word is an action
             action = self.VALID_ACTIONS.get(second_word)
             
-            print(f"DEBUG VOICE: Checking pair: '{first_word}' -> player={player_number}, '{second_word}' -> action={action}")
+            self.logger.debug(f"VOICE: Checking pair: '{first_word}' -> player={player_number}, '{second_word}' -> action={action}")
             
             if player_number and action:
                 # Valid pair found
                 self._words_buffer = self._words_buffer[2:]  # Remove used words
-                print(f"DEBUG VOICE: *** VALID PAIR FOUND: Player {player_number}, Action {action} ***")
+                self.logger.debug(f"VOICE: *** VALID PAIR FOUND: Player {player_number}, Action {action} ***")
                 self.pair_recognized.emit(player_number, action)
                 self.status_update.emit(f"Recognized: Player {player_number} - {action}")
                 return
             else:
                 # First word is not a valid number, skip it
                 if not player_number:
-                    print(f"DEBUG VOICE: Skipping '{first_word}' - not a valid number")
+                    self.logger.debug(f"VOICE: Skipping '{first_word}' - not a valid number")
                     self._words_buffer.pop(0)
                 # Or second word is not a valid action, skip first word
                 elif not action:
-                    print(f"DEBUG VOICE: Skipping '{first_word}' - '{second_word}' is not a valid action")
+                    self.logger.debug(f"VOICE: Skipping '{first_word}' - '{second_word}' is not a valid action")
                     self._words_buffer.pop(0)
     
     def is_listening(self) -> bool:
@@ -228,6 +230,7 @@ class DataEntryWindow(QMainWindow):
     
     def __init__(self, ui_widget, db: VideoStatsDB, team_us_id: Optional[int] = None, team_them_id: Optional[int] = None, game_id: Optional[int] = None, lock_game_selection: bool = False):
         super().__init__()
+        self.logger = get_logger('data_entry')
         # Copy properties from loaded UI
         self.setWindowTitle(ui_widget.windowTitle())
         self.setGeometry(ui_widget.geometry())
@@ -355,7 +358,7 @@ class DataEntryWindow(QMainWindow):
         """Handle voice input checkbox state change."""
         # In PySide6, stateChanged emits int: 0=Unchecked, 2=Checked
         self.use_voice_input = (state == Qt.CheckState.Checked.value)
-        print(f"DEBUG VOICE: Checkbox state changed to {state}, use_voice_input={self.use_voice_input}")
+        self.logger.debug(f"VOICE: Checkbox state changed to {state}, use_voice_input={self.use_voice_input}")
         
         if self.use_voice_input:
             # Initialize voice recognizer if not already done
@@ -387,24 +390,24 @@ class DataEntryWindow(QMainWindow):
     
     def on_voice_pair_recognized(self, player_number: str, action: str):
         """Handle recognized player-action pair from voice input."""
-        print(f"DEBUG VOICE_HANDLER: ========================================")
-        print(f"DEBUG VOICE_HANDLER: Voice pair recognized - Player: '{player_number}', Action: '{action}'")
-        print(f"DEBUG VOICE_HANDLER: game_id={self.game_id}, rally_in_progress={self.rally_in_progress}")
-        print(f"DEBUG VOICE_HANDLER: pending coords: x={self.pending_voice_contact_x}, y={self.pending_voice_contact_y}")
+        self.logger.debug(f"VOICE_HANDLER: ========================================")
+        self.logger.debug(f"VOICE_HANDLER: Voice pair recognized - Player: '{player_number}', Action: '{action}'")
+        self.logger.debug(f"VOICE_HANDLER: game_id={self.game_id}, rally_in_progress={self.rally_in_progress}")
+        self.logger.debug(f"VOICE_HANDLER: pending coords: x={self.pending_voice_contact_x}, y={self.pending_voice_contact_y}")
         
         if not self.game_id:
-            print(f"DEBUG VOICE_HANDLER: REJECTED - No game selected")
+            self.logger.debug(f"VOICE_HANDLER: REJECTED - No game selected")
             self.status_label.setText("No game selected - cannot record contact")
             return
         
         if not self.rally_in_progress and action != "serve":
-            print(f"DEBUG VOICE_HANDLER: REJECTED - Rally not started and action is not serve")
+            self.logger.debug(f"VOICE_HANDLER: REJECTED - Rally not started and action is not serve")
             self.status_label.setText("Rally must start with a serve")
             return
         
         # Check if we have pending coordinates
         if self.pending_voice_contact_x is None or self.pending_voice_contact_y is None:
-            print(f"DEBUG VOICE_HANDLER: REJECTED - No pending coordinates")
+            self.logger.debug(f"VOICE_HANDLER: REJECTED - No pending coordinates")
             self.status_label.setText(f"Recognized: {player_number} {action} - but no location set. Click on court first.")
             return
         
@@ -412,7 +415,7 @@ class DataEntryWindow(QMainWindow):
         self.last_clicked_x = self.pending_voice_contact_x
         self.last_clicked_y = self.pending_voice_contact_y
         self.last_clicked_timecode = self.pending_voice_contact_timecode
-        print(f"DEBUG VOICE_HANDLER: Using coords: x={self.last_clicked_x}, y={self.last_clicked_y}, timecode={self.last_clicked_timecode}")
+        self.logger.debug(f"VOICE_HANDLER: Using coords: x={self.last_clicked_x}, y={self.last_clicked_y}, timecode={self.last_clicked_timecode}")
         
         # Look up the player - for team_us, check active_lineup first
         if not self.db.conn:
@@ -421,7 +424,7 @@ class DataEntryWindow(QMainWindow):
         # Determine team - for now assume "our team" (team_us_id) for voice input
         # The Y coordinate could be used to determine team, but voice is simpler with our team
         team_id = self.team_us_id
-        print(f"DEBUG VOICE_HANDLER: Looking up player #{player_number} in team_id={team_id}, game_id={self.game_id}")
+        self.logger.debug(f"VOICE_HANDLER: Looking up player #{player_number} in team_id={team_id}, game_id={self.game_id}")
         
         # For team_us, check active_lineup first
         player = None
@@ -447,7 +450,7 @@ class DataEntryWindow(QMainWindow):
         if not player:
             player = self.db.get_player_by_number_for_game(self.game_id, team_id, player_number)
         if not player:
-            print(f"DEBUG VOICE_HANDLER: REJECTED - Player #{player_number} not found in game roster!")
+            self.logger.debug(f"VOICE_HANDLER: REJECTED - Player #{player_number} not found in game roster!")
             self.status_label.setText(f"Player #{player_number} not found in game roster")
             # Clear pending coordinates since we couldn't use them
             self.pending_voice_contact_x = None
@@ -455,7 +458,7 @@ class DataEntryWindow(QMainWindow):
             self.pending_voice_contact_timecode = None
             return
         
-        print(f"DEBUG VOICE_HANDLER: Player found! player_id={player['player_id']}")
+        self.logger.debug(f"VOICE_HANDLER: Player found! player_id={player['player_id']}")
         self.selected_player_id = player['player_id']
         self.selected_player_number = player_number
         self.selected_team_id = team_id
@@ -463,11 +466,11 @@ class DataEntryWindow(QMainWindow):
         # Handle special actions: "net" and "fault" have outcome "down"
         # These contacts end the rally
         if action in ("net", "fault"):
-            print(f"DEBUG VOICE_HANDLER: Recording net/fault contact...")
+            self.logger.debug(f"VOICE_HANDLER: Recording net/fault contact...")
             self.status_label.setText(f"Recording #{player_number} {action} (results in down)...")
             self.record_contact(action)
         else:
-            print(f"DEBUG VOICE_HANDLER: Recording {action} contact...")
+            self.logger.debug(f"VOICE_HANDLER: Recording {action} contact...")
             self.status_label.setText(f"Recording #{player_number} {action}...")
             self.record_contact(action)
         
@@ -475,7 +478,7 @@ class DataEntryWindow(QMainWindow):
         self.pending_voice_contact_x = None
         self.pending_voice_contact_y = None
         self.pending_voice_contact_timecode = None
-        print(f"DEBUG VOICE_HANDLER: Pending coordinates cleared")
+        self.logger.debug(f"VOICE_HANDLER: Pending coordinates cleared")
         
         # Clear pending coordinates after recording
         self.pending_voice_contact_x = None
@@ -491,7 +494,7 @@ class DataEntryWindow(QMainWindow):
             self.last_clicked_y = logical_y
             self.last_clicked_timecode = timecode_ms
             
-            print(f"DEBUG: on_coordinate_mapped - stored coordinates: x={logical_x}, y={logical_y}, timecode={timecode_ms}ms")
+            self.logger.debug(f"on_coordinate_mapped - stored coordinates: x={logical_x}, y={logical_y}, timecode={timecode_ms}ms")
             
             # Format timecode for display (MM:SS.mmm)
             seconds = timecode_ms // 1000
@@ -549,7 +552,7 @@ class DataEntryWindow(QMainWindow):
                         self.pending_voice_contact_x = logical_x
                         self.pending_voice_contact_y = logical_y
                         self.pending_voice_contact_timecode = timecode_ms
-                        print(f"DEBUG COORD: Voice mode - stored pending coords: x={logical_x}, y={logical_y}, timecode={timecode_ms}")
+                        self.logger.debug(f"COORD: Voice mode - stored pending coords: x={logical_x}, y={logical_y}, timecode={timecode_ms}")
                         self.status_label.setText(f"Location captured ({logical_x:.0f}, {logical_y:.0f}). Now speak: [player number] [action]")
                     else:
                         # Show player selection dialog for team A
@@ -618,13 +621,13 @@ class DataEntryWindow(QMainWindow):
             if not self.db.conn:
                 self.db.connect()
             
-            print(f"DEBUG: Creating rally for DOWN contact - game_id={self.game_id}, rally_number={self.current_rally_number}, serving_team_id={serving_team_id}")
+            self.logger.debug(f"Creating rally for DOWN contact - game_id={self.game_id}, rally_number={self.current_rally_number}, serving_team_id={serving_team_id}")
             self.current_rally_id = self.db.start_rally(
                 game_id=self.game_id,
                 rally_number=self.current_rally_number,
                 serving_team_id=serving_team_id
             )
-            print(f"DEBUG: Rally created! rally_id={self.current_rally_id}")
+            self.logger.debug(f"Rally created! rally_id={self.current_rally_id}")
             self.rally_in_progress = True
             self.current_sequence = 1
         
@@ -634,11 +637,11 @@ class DataEntryWindow(QMainWindow):
             # Double-click on team_us side - always allow DOWN contact (even on 4th contact)
             # because the ball contacted the floor, not a player
             losing_team_id = self.team_us_id
-            print(f"DEBUG: on_double_click_mapped - DOWN contact at x={logical_x}, y={logical_y}, timecode={timecode_ms}ms (team_us side)")
+            self.logger.debug(f"on_double_click_mapped - DOWN contact at x={logical_x}, y={logical_y}, timecode={timecode_ms}ms (team_us side)")
         else:
             # Double-click on team_them side
             losing_team_id = self.team_them_id
-            print(f"DEBUG: on_double_click_mapped - DOWN contact at x={logical_x}, y={logical_y}, timecode={timecode_ms}ms (opponent side)")
+            self.logger.debug(f"on_double_click_mapped - DOWN contact at x={logical_x}, y={logical_y}, timecode={timecode_ms}ms (opponent side)")
         
         # Store the coordinates and timecode
         self.last_clicked_x = logical_x
@@ -780,7 +783,7 @@ class DataEntryWindow(QMainWindow):
             # Clear coordinate mapper's game_id as well
             if self.coordinate_mapper:
                 self.coordinate_mapper.game_id = None
-                print(f"DEBUG: Cleared coordinate_mapper.game_id")
+                self.logger.debug(f"Cleared coordinate_mapper.game_id")
             
             return
         
@@ -797,7 +800,7 @@ class DataEntryWindow(QMainWindow):
         # Update coordinate mapper's game_id so it saves to the correct game
         if self.coordinate_mapper:
             self.coordinate_mapper.game_id = self.game_id
-            print(f"DEBUG: Updated coordinate_mapper.game_id to {self.game_id}")
+            self.logger.debug(f"Updated coordinate_mapper.game_id to {self.game_id}")
         
         # Update team name labels
         if hasattr(self.ui, 'team_1_name'):
@@ -909,12 +912,12 @@ class DataEntryWindow(QMainWindow):
         video_path = self.db.get_game_video_path(self.game_id)
         
         if video_path:
-            print(f"DEBUG: Loading video for game {self.game_id}: {video_path}")
+            self.logger.debug(f"Loading video for game {self.game_id}: {video_path}")
             # Load video in coordinate mapper
             if self.coordinate_mapper:
                 self.coordinate_mapper.load_video_from_path(video_path)
         else:
-            print(f"DEBUG: No video path stored for game {self.game_id}")
+            self.logger.debug(f"No video path stored for game {self.game_id}")
     
     def load_game_court_boundaries(self):
         """Load the court boundaries associated with the current game."""
@@ -925,7 +928,7 @@ class DataEntryWindow(QMainWindow):
         court_boundaries = self.db.get_game_court_boundaries(self.game_id)
         
         if court_boundaries:
-            print(f"DEBUG: Loading court boundaries for game {self.game_id}")
+            self.logger.debug(f"Loading court boundaries for game {self.game_id}")
             # Convert to the format expected by coordinate mapper
             # Database returns: corner_tl, corner_tr, corner_bl, corner_br, centerline_top, centerline_bottom,
             #                  y200_left, y200_right, y400_left, y400_right
@@ -951,9 +954,9 @@ class DataEntryWindow(QMainWindow):
             
             if self.coordinate_mapper:
                 self.coordinate_mapper.set_corner_points(corner_points)
-                print(f"DEBUG: Court boundaries loaded successfully ({len(corner_points)} points)")
+                self.logger.debug(f"Court boundaries loaded successfully ({len(corner_points)} points)")
         else:
-            print(f"DEBUG: No court boundaries stored for game {self.game_id}")
+            self.logger.debug(f"No court boundaries stored for game {self.game_id}")
     
     def connect_signals(self):
         """Connect all button signals to handlers."""
@@ -1041,11 +1044,11 @@ class DataEntryWindow(QMainWindow):
         # Substitution button
         if hasattr(self.ui, 'pushButton_substitution'):
             def on_substitution_button_clicked():
-                print("=" * 60)
-                print("DEBUG SUBSTITUTION: Substitution button clicked")
-                print(f"DEBUG SUBSTITUTION: Calling method: show_substitution_dialog")
-                print(f"DEBUG SUBSTITUTION: game_id={self.game_id}, team_us_id={self.team_us_id}")
-                print("=" * 60)
+                self.logger.debug("=" * 60)
+                self.logger.debug("SUBSTITUTION: Substitution button clicked")
+                self.logger.debug(f"SUBSTITUTION: Calling method: show_substitution_dialog")
+                self.logger.debug(f"SUBSTITUTION: game_id={self.game_id}, team_us_id={self.team_us_id}")
+                self.logger.debug("=" * 60)
                 self.show_substitution_dialog()
             self.ui.pushButton_substitution.clicked.connect(on_substitution_button_clicked)
         
@@ -1255,11 +1258,11 @@ class DataEntryWindow(QMainWindow):
             """, (self.game_id, team_id))
             results = cursor.fetchall()
             # Debug: print all players including libero
-            print(f"DEBUG get_active_lineup_with_roles: Found {len(results)} players")
+            self.logger.debug(f"get_active_lineup_with_roles: Found {len(results)} players")
             for row in results:
                 player_id, player_number, player_name, role_code, position_number, is_server = row
                 server_marker = " [SERVER]" if is_server else ""
-                print(f"  Player #{player_number} ({player_name}) - Role: '{role_code}', Position: {position_number}{server_marker}")
+                self.logger.debug(f"  Player #{player_number} ({player_name}) - Role: '{role_code}', Position: {position_number}{server_marker}")
             
             # Validate we have exactly 6 players
             if len(results) != 6:
@@ -1382,11 +1385,11 @@ class DataEntryWindow(QMainWindow):
         # If click is on team_us side, automatically use team_us for the contact
         if is_team_us_side is True:
             team_id = self.team_us_id
-            print(f"DEBUG: Click on team_us side (Y={y_coord}) - using team_us")
+            self.logger.debug(f"Click on team_us side (Y={y_coord}) - using team_us")
         elif is_team_us_side is False:
             # Click is on team_them side - use team_them
             team_id = self.team_them_id
-            print(f"DEBUG: Click on team_them side (Y={y_coord}) - using team_them")
+            self.logger.debug(f"Click on team_them side (Y={y_coord}) - using team_them")
         
         # Check if this is a serve location (no rally in progress and click is at serve location)
         # Serve locations: y <= 50 for team_us, y >= 550 for team_them
@@ -1402,7 +1405,7 @@ class DataEntryWindow(QMainWindow):
                 is_serve_location = True
                 team_id = self.team_them_id
         
-        print(f"DEBUG SERVE CHECK: rally_in_progress={self.rally_in_progress}, is_serve_location={is_serve_location}, team_id={team_id}, y_coord={y_coord}, serving_team_id={self.serving_team_id}, expected_next_server_team_id={self.expected_next_server_team_id}")
+        self.logger.debug(f"SERVE CHECK: rally_in_progress={self.rally_in_progress}, is_serve_location={is_serve_location}, team_id={team_id}, y_coord={y_coord}, serving_team_id={self.serving_team_id}, expected_next_server_team_id={self.expected_next_server_team_id}")
         
         if not self.rally_in_progress and is_serve_location:
             # Check if this team should be serving
@@ -1437,7 +1440,7 @@ class DataEntryWindow(QMainWindow):
                     
                     if result:
                         server_player_id, server_player_number, server_player_name = result
-                        print(f"DEBUG: Serve detected (team_us) - Server: #{server_player_number} {server_player_name} (ID:{server_player_id})")
+                        self.logger.debug(f"Serve detected (team_us) - Server: #{server_player_number} {server_player_name} (ID:{server_player_id})")
                     else:
                         # Fallback: position 1 is the server
                         cursor.execute("""
@@ -1449,7 +1452,7 @@ class DataEntryWindow(QMainWindow):
                         result = cursor.fetchone()
                         if result:
                             server_player_id, server_player_number, server_player_name = result
-                            print(f"DEBUG: Serve detected (team_us, fallback to position 1) - Server: #{server_player_number} {server_player_name} (ID:{server_player_id})")
+                            self.logger.debug(f"Serve detected (team_us, fallback to position 1) - Server: #{server_player_number} {server_player_name} (ID:{server_player_id})")
                 elif team_id == self.team_them_id:
                     # For team_them serves, always use player_id=33
                     server_player_id = 33
@@ -1466,11 +1469,11 @@ class DataEntryWindow(QMainWindow):
                     if result:
                         server_player_number = result[0] or '33'
                         server_player_name = result[1] or 'Unknown'
-                        print(f"DEBUG: Serve detected (team_them) - Server: #{server_player_number} {server_player_name} (ID:{server_player_id})")
+                        self.logger.debug(f"Serve detected (team_them) - Server: #{server_player_number} {server_player_name} (ID:{server_player_id})")
                     else:
                         server_player_number = '33'
                         server_player_name = 'Unknown'
-                        print(f"DEBUG: Serve detected (team_them) - Server: #{server_player_number} (ID:{server_player_id}) - player not found in database")
+                        self.logger.debug(f"Serve detected (team_them) - Server: #{server_player_number} (ID:{server_player_id}) - player not found in database")
                 
                 if server_player_id and team_id == self.team_them_id:
                     # Show player-action popup for team_them serves using contact-popup1.ui
@@ -1679,13 +1682,13 @@ class DataEntryWindow(QMainWindow):
         if last_contact_was_opponent:
             contact_count = 0
             contact_number = 1
-            print(f"DEBUG: Last contact was by opponent - treating as {team_id}'s first contact (new possession)")
+            self.logger.debug(f"Last contact was by opponent - treating as {team_id}'s first contact (new possession)")
         else:
             # Last contact was by the same team - continue their possession
             # Count only contacts in the current possession (since last opponent contact or since serve)
             contact_count = self.get_current_possession_contact_count(team_id)
             contact_number = contact_count + 1
-            print(f"DEBUG: Last contact was by same team - current possession contact count={contact_count}, contact number={contact_number}")
+            self.logger.debug(f"Last contact was by same team - current possession contact count={contact_count}, contact number={contact_number}")
         
         # Special case: If click is on team_us side, ensure we're using team_us
         if is_team_us_side is True:
@@ -1698,10 +1701,10 @@ class DataEntryWindow(QMainWindow):
         # Don't show error if contact_number is 3 (team is making their 3rd contact, which is allowed)
         # Also don't show error if we're currently recording a contact (prevents error from showing during contact recording)
         _recording_flag = getattr(self, '_recording_contact', False)
-        print(f"DEBUG 4TH CONTACT CHECK: contact_count={contact_count}, contact_number={contact_number}, _recording_contact={_recording_flag}, team_id={team_id}")
+        self.logger.debug(f"4TH CONTACT CHECK: contact_count={contact_count}, contact_number={contact_number}, _recording_contact={_recording_flag}, team_id={team_id}")
         if contact_number > 3 and not _recording_flag:
             # Team already has 3 contacts - this would be a 4th contact
-            print(f"DEBUG 4TH CONTACT CHECK: Triggering 4th contact handling for team {team_id}")
+            self.logger.debug(f"4TH CONTACT CHECK: Triggering 4th contact handling for team {team_id}")
             # For team_us, show special "Down (Error)" dialog
             # For team_them, show error message
             if team_id == self.team_us_id:
@@ -1817,7 +1820,7 @@ class DataEntryWindow(QMainWindow):
         # Initialize allowed_actions early to avoid UnboundLocalError in closures
         # Ensure allowed_actions is always assigned (defensive programming)
         allowed_actions = []
-        print(f"DEBUG ALLOWED_ACTIONS: Starting - contact_number={contact_number}, prior_contact_was_opponent_serve={prior_contact_was_opponent_serve}, team_id={team_id}")
+        self.logger.debug(f"ALLOWED_ACTIONS: Starting - contact_number={contact_number}, prior_contact_was_opponent_serve={prior_contact_was_opponent_serve}, team_id={team_id}")
         
         if prior_contact_was_opponent_serve:
             # After opponent's serve: receive, then set/attack/free, then attack/free
@@ -1848,7 +1851,7 @@ class DataEntryWindow(QMainWindow):
                 # Fallback for unexpected contact_number
                 allowed_actions = ['pass', 'set', 'attack', 'freeball']
         
-        print(f"DEBUG ALLOWED_ACTIONS: After initial assignment - allowed_actions={allowed_actions}")
+        self.logger.debug(f"ALLOWED_ACTIONS: After initial assignment - allowed_actions={allowed_actions}")
         
         # Add block as allowed action if opponent has 1st or 2nd contact
         # Block can happen after opponent's 1st or 2nd contact
@@ -1856,13 +1859,13 @@ class DataEntryWindow(QMainWindow):
         if allowed_actions and (opponent_contact_count == 1 or opponent_contact_count == 2):
             if 'block' not in allowed_actions:
                 allowed_actions.append('block')
-                print(f"DEBUG ALLOWED_ACTIONS: Added block - allowed_actions={allowed_actions}")
+                self.logger.debug(f"ALLOWED_ACTIONS: Added block - allowed_actions={allowed_actions}")
         
         # Safety check: if allowed_actions is still empty, something went wrong
         if not allowed_actions:
             QMessageBox.warning(self, "Invalid Contact", 
                               f"Cannot determine allowed actions for contact #{contact_number}.")
-            print(f"DEBUG ERROR: allowed_actions is empty - contact_number={contact_number}, prior_serve={prior_contact_was_opponent_serve}, team_id={team_id}")
+            self.logger.error(f"allowed_actions is empty - contact_number={contact_number}, prior_serve={prior_contact_was_opponent_serve}, team_id={team_id}")
             return
         
         # Ensure allowed_actions is a list (defensive programming)
@@ -1872,7 +1875,7 @@ class DataEntryWindow(QMainWindow):
         # Store allowed_actions in a safe variable to avoid UnboundLocalError in nested scopes
         # This ensures the value is captured after all modifications (including block addition)
         safe_allowed_actions = list(allowed_actions) if allowed_actions else []
-        print(f"DEBUG ALLOWED_ACTIONS: Created safe_allowed_actions={safe_allowed_actions}")
+        self.logger.debug(f"ALLOWED_ACTIONS: Created safe_allowed_actions={safe_allowed_actions}")
         
         # Use new UI for team_us, old UI for team_them
         if use_new_ui:
@@ -1944,10 +1947,10 @@ class DataEntryWindow(QMainWindow):
             conflicting_front_row_roles = {role: positions for role, positions in front_row_roles.items() 
                                           if len(positions) > 1}
             
-            print(f"DEBUG POPUP: Back row role conflicts: {conflicting_back_row_roles}")
-            print(f"DEBUG POPUP: Front row role conflicts: {conflicting_front_row_roles}")
+            self.logger.debug(f"POPUP: Back row role conflicts: {conflicting_back_row_roles}")
+            self.logger.debug(f"POPUP: Front row role conflicts: {conflicting_front_row_roles}")
             
-            print(f"DEBUG POPUP: Active players count: {len(active_players)}")
+            self.logger.debug(f"POPUP: Active players count: {len(active_players)}")
             for player_data in active_players:
                 # Handle both old format (5 elements) and new format (6 elements with is_server)
                 if len(player_data) == 6:
@@ -1955,7 +1958,7 @@ class DataEntryWindow(QMainWindow):
                 else:
                     player_id, player_number, player_name, role_code, position_number = player_data
                     is_server = False
-                print(f"DEBUG POPUP: Player #{player_number} ({player_name}) - Role: {role_code}, Position: {position_number}, Has Libero: {has_libero}")
+                self.logger.debug(f"POPUP: Player #{player_number} ({player_name}) - Role: {role_code}, Position: {position_number}, Has Libero: {has_libero}")
                 
                 # Determine if we should use position-based mapping
                 use_position_based = False
@@ -1967,7 +1970,7 @@ class DataEntryWindow(QMainWindow):
                 if position_number in BACK_ROW:
                     if role_upper in conflicting_back_row_roles and position_number in conflicting_back_row_roles[role_upper]:
                         # This player is part of a conflicting role - use position-based mapping
-                        print(f"DEBUG POPUP:   -> Back row player with conflicting role {role_upper}, using position-based mapping")
+                        self.logger.debug(f"POPUP:   -> Back row player with conflicting role {role_upper}, using position-based mapping")
                         use_position_based = True
                     # Otherwise, use role-based mapping (no GroupBox conflict check needed - 
                     # multiple players with same role mapping to same GroupBox is valid)
@@ -1975,7 +1978,7 @@ class DataEntryWindow(QMainWindow):
                     # Front row: check for conflicting roles first
                     if role_upper in conflicting_front_row_roles and position_number in conflicting_front_row_roles[role_upper]:
                         # This player is part of a conflicting role - use position-based mapping
-                        print(f"DEBUG POPUP:   -> Front row player with conflicting role {role_upper}, using position-based mapping")
+                        self.logger.debug(f"POPUP:   -> Front row player with conflicting role {role_upper}, using position-based mapping")
                         use_position_based = True
                     # Otherwise, use role-based mapping (no GroupBox conflict check needed - 
                     # multiple players with same role mapping to same GroupBox is valid)
@@ -1983,7 +1986,7 @@ class DataEntryWindow(QMainWindow):
                 # Determine final GroupBox assignment
                 if use_position_based:
                     groupbox_name = self.map_player_to_groupbox_by_position(position_number)
-                    print(f"DEBUG POPUP:   -> Using position-based mapping: {groupbox_name}")
+                    self.logger.debug(f"POPUP:   -> Using position-based mapping: {groupbox_name}")
                 else:
                     # Use role-based mapping
                     groupbox_name = self.map_player_to_groupbox(role_code, position_number, has_libero)
@@ -2000,15 +2003,15 @@ class DataEntryWindow(QMainWindow):
                     groupbox_assignments[groupbox_name].append(player_data)
                     assigned_positions.add(position_number)
                 else:
-                    print(f"DEBUG POPUP:   -> ERROR: Still no GroupBox mapping for player #{player_number} (Role: {role_code}, Position: {position_number})")
+                    self.logger.error(f"POPUP:   -> ERROR: Still no GroupBox mapping for player #{player_number} (Role: {role_code}, Position: {position_number})")
             
             # Validate all 6 positions are assigned
             if len(assigned_positions) != 6:
                 missing_positions = set(range(1, 7)) - assigned_positions
-                print(f"WARNING: Not all positions assigned to GroupBoxes. Missing positions: {missing_positions}")
+                self.logger.warning(f"Not all positions assigned to GroupBoxes. Missing positions: {missing_positions}")
             
-            print(f"DEBUG POPUP: GroupBox assignments: {list(groupbox_assignments.keys())}")
-            print(f"DEBUG POPUP: Assigned positions: {sorted(assigned_positions)}")
+            self.logger.debug(f"POPUP: GroupBox assignments: {list(groupbox_assignments.keys())}")
+            self.logger.debug(f"POPUP: Assigned positions: {sorted(assigned_positions)}")
             
             # Define button configurations by contact number
             # Button order: 1st contact row (buttons 1-3), 2nd contact row (buttons 4-5), 3rd contact row (buttons 6-7)
@@ -2053,9 +2056,9 @@ class DataEntryWindow(QMainWindow):
             # Use the safe copy we created earlier to avoid UnboundLocalError
             try:
                 local_allowed_actions = list(safe_allowed_actions)
-                print(f"DEBUG ALLOWED_ACTIONS: In new UI - local_allowed_actions={local_allowed_actions}")
+                self.logger.debug(f"ALLOWED_ACTIONS: In new UI - local_allowed_actions={local_allowed_actions}")
             except (NameError, UnboundLocalError) as e:
-                print(f"DEBUG ERROR: Failed to access safe_allowed_actions in new UI: {e}")
+                self.logger.error(f"Failed to access safe_allowed_actions in new UI: {e}")
                 # Fallback based on contact_number
                 if contact_number == 3:
                     local_allowed_actions = ['attack', 'freeball']
@@ -2063,7 +2066,7 @@ class DataEntryWindow(QMainWindow):
                     local_allowed_actions = ['set', 'attack', 'freeball']
                 else:
                     local_allowed_actions = ['receive', 'pass', 'set', 'attack', 'freeball']
-                print(f"DEBUG ALLOWED_ACTIONS: Using fallback - local_allowed_actions={local_allowed_actions}")
+                self.logger.debug(f"ALLOWED_ACTIONS: Using fallback - local_allowed_actions={local_allowed_actions}")
             
             # Process each GroupBox
             # Wrap in try-except to prevent exceptions from closing dialog
@@ -2071,7 +2074,7 @@ class DataEntryWindow(QMainWindow):
                 for groupbox_name, players_in_groupbox in groupbox_assignments.items():
                     groupbox = dialog_widget.findChild(QGroupBox, groupbox_name)
                     if not groupbox:
-                        print(f"DEBUG: GroupBox {groupbox_name} not found in UI")
+                        self.logger.debug(f"GroupBox {groupbox_name} not found in UI")
                         continue
                     
                     # Set GroupBox width to 66px
@@ -2195,11 +2198,11 @@ class DataEntryWindow(QMainWindow):
                                     return lambda: (selected_action.__setitem__(0, [pid, atype]), dialog.accept())
                                 btn.clicked.connect(make_handler(player_id, btn_action))
                                 buttons_connected += 1
-                                print(f"DEBUG BUTTON: Connected button {btn_name} ({btn_label}) for player {player_id}")
+                                self.logger.debug(f"BUTTON: Connected button {btn_name} ({btn_label}) for player {player_id}")
                             else:
-                                print(f"DEBUG BUTTON: Button {btn_name} not found")
+                                self.logger.debug(f"BUTTON: Button {btn_name} not found")
                         if buttons_connected == 0:
-                            print(f"DEBUG WARNING: No buttons connected for GroupBox {groupbox_name}, buttons_to_show={buttons_to_show}")
+                            self.logger.warning(f"No buttons connected for GroupBox {groupbox_name}, buttons_to_show={buttons_to_show}")
                         
                         # If there are multiple players in this GroupBox, log a warning
                         if len(players_in_groupbox) > 1:
@@ -2211,9 +2214,9 @@ class DataEntryWindow(QMainWindow):
                                     _, pnum, _, _, ppos = p
                                 if ppos != position_number:
                                     other_players.append(f"#{pnum} (Pos {ppos})")
-                            print(f"DEBUG POPUP: WARNING: Multiple players in {groupbox_name}: Primary=#{player_number} (Pos {position_number}), Others={other_players}")
+                            self.logger.warning(f"POPUP: WARNING: Multiple players in {groupbox_name}: Primary=#{player_number} (Pos {position_number}), Others={other_players}")
             except Exception as e:
-                print(f"DEBUG ERROR: Exception during GroupBox processing: {e}")
+                self.logger.error(f"Exception during GroupBox processing: {e}")
                 import traceback
                 traceback.print_exc()
                 # Continue anyway - dialog should still work
@@ -2224,7 +2227,7 @@ class DataEntryWindow(QMainWindow):
             all_positions = set(range(1, 7))
             missing_positions = all_positions - assigned_positions
             if missing_positions:
-                print(f"DEBUG POPUP: Missing positions in GroupBox assignments: {missing_positions}")
+                self.logger.debug(f"POPUP: Missing positions in GroupBox assignments: {missing_positions}")
                 
                 # Find players for missing positions and assign using position-based mapping
                 for missing_pos in missing_positions:
@@ -2256,9 +2259,9 @@ class DataEntryWindow(QMainWindow):
                             groupbox_to_positions[assigned_gb].add(missing_pos)
                             position_to_groupbox[missing_pos] = assigned_gb
                             
-                            print(f"DEBUG POPUP: Assigned missing position {missing_pos} to {assigned_gb} (position-based)")
+                            self.logger.debug(f"POPUP: Assigned missing position {missing_pos} to {assigned_gb} (position-based)")
                         else:
-                            print(f"DEBUG POPUP: ERROR: Could not map position {missing_pos} to GroupBox")
+                            self.logger.error(f"POPUP: ERROR: Could not map position {missing_pos} to GroupBox")
             
             # Ensure position 1 (server) is always visible and active
             # Find which GroupBox has position 1
@@ -2342,7 +2345,7 @@ class DataEntryWindow(QMainWindow):
                                         # Insert container at the same position
                                         parent_layout.insertWidget(layout_index, container)
             except Exception as e:
-                print(f"DEBUG ERROR: Exception during down/fault button setup: {e}")
+                self.logger.error(f"Exception during down/fault button setup: {e}")
                 import traceback
                 traceback.print_exc()
                 # Continue anyway - dialog should still work
@@ -2377,25 +2380,25 @@ class DataEntryWindow(QMainWindow):
                         btn = dialog_widget.findChild(QPushButton, btn_name)
                         if btn and btn.isVisible() and btn.isEnabled():
                             total_buttons += 1
-            print(f"DEBUG: Total visible/enabled buttons before showing dialog: {total_buttons}")
+            self.logger.debug(f"Total visible/enabled buttons before showing dialog: {total_buttons}")
             
             # Show dialog and get result (for new UI)
             # Use safe_allowed_actions instead of allowed_actions to avoid UnboundLocalError
             try:
                 _allowed_actions_backup = list(safe_allowed_actions)
-                print(f"DEBUG ALLOWED_ACTIONS: In new UI - _allowed_actions_backup={_allowed_actions_backup}")
+                self.logger.debug(f"ALLOWED_ACTIONS: In new UI - _allowed_actions_backup={_allowed_actions_backup}")
             except (NameError, UnboundLocalError) as e:
-                print(f"DEBUG ERROR: Failed to create _allowed_actions_backup: {e}")
+                self.logger.error(f"Failed to create _allowed_actions_backup: {e}")
                 _allowed_actions_backup = []
             
             try:
-                print(f"DEBUG: About to show dialog for team {team_id}, contact_number={contact_number}, action_type will be selected")
-                print(f"DEBUG: Dialog setup complete, showing dialog...")
+                self.logger.debug(f"About to show dialog for team {team_id}, contact_number={contact_number}, action_type will be selected")
+                self.logger.debug(f"Dialog setup complete, showing dialog...")
                 dialog_result = dialog.exec()
-                print(f"DEBUG: Dialog returned with result: {dialog_result}, selected_action={selected_action[0]}")
+                self.logger.debug(f"Dialog returned with result: {dialog_result}, selected_action={selected_action[0]}")
                 if dialog_result == QDialog.Accepted and selected_action[0]:
                     player_id_or_down, action_type = selected_action[0]
-                    print(f"DEBUG: Dialog accepted, action_type={action_type}, player_id={player_id_or_down}")
+                    self.logger.debug(f"Dialog accepted, action_type={action_type}, player_id={player_id_or_down}")
                     
                     # Set flag BEFORE calling record_contact to prevent error dialogs from showing
                     self._recording_contact = True
@@ -2473,21 +2476,21 @@ class DataEntryWindow(QMainWindow):
                         self.record_contact(action_type)
             except UnboundLocalError as e:
                 error_msg = str(e)
-                print(f"DEBUG ERROR: UnboundLocalError in show_player_selection_dialog (new UI): {error_msg}")
-                print(f"DEBUG ERROR: Traceback: {e.__traceback__}")
+                self.logger.error(f"UnboundLocalError in show_player_selection_dialog (new UI): {error_msg}")
+                self.logger.error(f"Traceback: {e.__traceback__}")
                 if 'allowed_actions' in error_msg or 'safe_allowed_actions' in error_msg:
-                    print(f"DEBUG ERROR: Scoping issue with allowed_actions. Backup value: {_allowed_actions_backup}")
-                    print(f"DEBUG ERROR: contact_number={contact_number}, team_id={team_id}")
+                    self.logger.error(f"Scoping issue with allowed_actions. Backup value: {_allowed_actions_backup}")
+                    self.logger.error(f"contact_number={contact_number}, team_id={team_id}")
                     # Don't show error popup - this is a scoping issue that's been handled
                     return
                 # Re-raise if it's not an allowed_actions issue
                 raise
             except NameError as e:
                 error_msg = str(e)
-                print(f"DEBUG ERROR: NameError in show_player_selection_dialog (new UI): {error_msg}")
+                self.logger.error(f"NameError in show_player_selection_dialog (new UI): {error_msg}")
                 if 'allowed_actions' in error_msg or 'safe_allowed_actions' in error_msg:
-                    print(f"DEBUG ERROR: NameError with allowed_actions. Backup value: {_allowed_actions_backup}")
-                    print(f"DEBUG ERROR: contact_number={contact_number}, team_id={team_id}")
+                    self.logger.error(f"NameError with allowed_actions. Backup value: {_allowed_actions_backup}")
+                    self.logger.error(f"contact_number={contact_number}, team_id={team_id}")
                     # Don't show error popup - this is a scoping issue that's been handled
                     return
                 # Re-raise if it's not an allowed_actions issue
@@ -2495,17 +2498,17 @@ class DataEntryWindow(QMainWindow):
             except Exception as e:
                 error_msg = str(e)
                 import traceback
-                print(f"DEBUG ERROR: Exception in show_player_selection_dialog (new UI): {error_msg}")
-                print(f"DEBUG ERROR: Exception type: {type(e).__name__}")
-                print(f"DEBUG ERROR: Full traceback:")
+                self.logger.error(f"Exception in show_player_selection_dialog (new UI): {error_msg}")
+                self.logger.error(f"Exception type: {type(e).__name__}")
+                self.logger.error(f"Full traceback:")
                 traceback.print_exc()
                 if 'allowed_actions' in error_msg or 'safe_allowed_actions' in error_msg:
                     # Don't show error popup for allowed_actions scoping issues
-                    print(f"DEBUG ERROR: Allowed actions issue detected, returning silently")
+                    self.logger.error(f"Allowed actions issue detected, returning silently")
                     return
                 # Only re-raise if it's not an allowed_actions issue
                 # But wrap it to prevent it from showing an error dialog
-                print(f"DEBUG ERROR: Re-raising exception (not allowed_actions related)")
+                self.logger.error(f"Re-raising exception (not allowed_actions related)")
                 raise
             
         else:
@@ -2559,9 +2562,9 @@ class DataEntryWindow(QMainWindow):
             # Use the safe copy we created earlier to avoid UnboundLocalError
             try:
                 local_allowed_actions = list(safe_allowed_actions)
-                print(f"DEBUG ALLOWED_ACTIONS: In old UI - local_allowed_actions={local_allowed_actions}")
+                self.logger.debug(f"ALLOWED_ACTIONS: In old UI - local_allowed_actions={local_allowed_actions}")
             except (NameError, UnboundLocalError) as e:
-                print(f"DEBUG ERROR: Failed to access safe_allowed_actions in old UI: {e}")
+                self.logger.error(f"Failed to access safe_allowed_actions in old UI: {e}")
                 # Fallback based on contact_number
                 if contact_number == 3:
                     local_allowed_actions = ['attack', 'freeball']
@@ -2569,9 +2572,9 @@ class DataEntryWindow(QMainWindow):
                     local_allowed_actions = ['set', 'attack', 'freeball']
                 else:
                     local_allowed_actions = ['receive', 'pass', 'set', 'attack', 'freeball']
-                print(f"DEBUG ALLOWED_ACTIONS: Using fallback - local_allowed_actions={local_allowed_actions}")
+                self.logger.debug(f"ALLOWED_ACTIONS: Using fallback - local_allowed_actions={local_allowed_actions}")
             except (AttributeError, TypeError) as e:
-                print(f"DEBUG ERROR: Failed to copy safe_allowed_actions: {e}")
+                self.logger.error(f"Failed to copy safe_allowed_actions: {e}")
                 local_allowed_actions = ['attack', 'freeball'] if contact_number == 3 else []
             
             for action_label, action_type in actions:
@@ -2643,7 +2646,7 @@ class DataEntryWindow(QMainWindow):
             # Show dialog and get result
             # Use safe_allowed_actions instead of allowed_actions to avoid UnboundLocalError
             _allowed_actions_backup = list(safe_allowed_actions)
-            print(f"DEBUG ALLOWED_ACTIONS: In old UI - _allowed_actions_backup={_allowed_actions_backup}")
+            self.logger.debug(f"ALLOWED_ACTIONS: In old UI - _allowed_actions_backup={_allowed_actions_backup}")
             
             try:
                 if dialog.exec() == QDialog.Accepted and selected_action[0]:
@@ -2721,16 +2724,16 @@ class DataEntryWindow(QMainWindow):
             except UnboundLocalError as e:
                 # Catch scoping errors - this shouldn't happen, but if it does, log and continue
                 error_msg = str(e)
-                print(f"DEBUG ERROR: UnboundLocalError in show_player_selection_dialog: {error_msg}")
+                self.logger.error(f"UnboundLocalError in show_player_selection_dialog: {error_msg}")
                 if 'allowed_actions' in error_msg:
-                    print(f"DEBUG ERROR: Scoping issue with allowed_actions. Backup value: {_allowed_actions_backup}")
+                    self.logger.error(f"Scoping issue with allowed_actions. Backup value: {_allowed_actions_backup}")
                     # Don't show error popup - this is a scoping issue that's been handled
                     return
                 # Don't re-raise - the contact may have already been recorded
             except Exception as e:
                 # Log other exceptions but don't show error popup if contact was already recorded
                 error_msg = str(e)
-                print(f"DEBUG ERROR: Exception in show_player_selection_dialog: {error_msg}")
+                self.logger.error(f"Exception in show_player_selection_dialog: {error_msg}")
                 # Don't show error popup for allowed_actions scoping issues
                 if 'allowed_actions' in error_msg:
                     return
@@ -3001,17 +3004,17 @@ class DataEntryWindow(QMainWindow):
         # If not set, set it here as a safety measure
         if not getattr(self, '_recording_contact', False):
             self._recording_contact = True
-        print(f"DEBUG RECORD: ========================================")
-        print(f"DEBUG RECORD: record_contact called for contact_type='{contact_type}'")
-        print(f"DEBUG RECORD: game_id={self.game_id}, rally_in_progress={self.rally_in_progress}")
-        print(f"DEBUG RECORD: selected_team_id={self.selected_team_id}, selected_player_id={getattr(self, 'selected_player_id', None)}")
-        print(f"DEBUG RECORD: selected_player_number={self.selected_player_number}")
+        self.logger.debug(f"RECORD: ========================================")
+        self.logger.debug(f"RECORD: record_contact called for contact_type='{contact_type}'")
+        self.logger.debug(f"RECORD: game_id={self.game_id}, rally_in_progress={self.rally_in_progress}")
+        self.logger.debug(f"RECORD: selected_team_id={self.selected_team_id}, selected_player_id={getattr(self, 'selected_player_id', None)}")
+        self.logger.debug(f"RECORD: selected_player_number={self.selected_player_number}")
         
         if not self.game_id:
             QMessageBox.warning(self, "No Game Selected", "Please select a game first!")
             return
         
-        print(f"DEBUG RECORD: last_clicked_x={self.last_clicked_x}, last_clicked_y={self.last_clicked_y}")
+        self.logger.debug(f"RECORD: last_clicked_x={self.last_clicked_x}, last_clicked_y={self.last_clicked_y}")
         
         # If rally not started, must start with serve
         if not self.rally_in_progress:
@@ -3033,13 +3036,13 @@ class DataEntryWindow(QMainWindow):
             if not self.db.conn:
                 self.db.connect()
             
-            print(f"DEBUG RECORD: Starting new rally - game_id={self.game_id}, rally_number={self.current_rally_number}, serving_team_id={serving_team_id}")
+            self.logger.debug(f"RECORD: Starting new rally - game_id={self.game_id}, rally_number={self.current_rally_number}, serving_team_id={serving_team_id}")
             self.current_rally_id = self.db.start_rally(
                 game_id=self.game_id,
                 rally_number=self.current_rally_number,
                 serving_team_id=serving_team_id
             )
-            print(f"DEBUG RECORD: Rally started! rally_id={self.current_rally_id}")
+            self.logger.debug(f"RECORD: Rally started! rally_id={self.current_rally_id}")
             self.rally_in_progress = True
             self.current_sequence = 1
             # Clear expected server since rally has started
@@ -3048,7 +3051,7 @@ class DataEntryWindow(QMainWindow):
             # For serve, use selected team and player
             team_id = self.selected_team_id
             player_id = getattr(self, 'selected_player_id', None)
-            print(f"DEBUG RECORD: Serve contact - team_id={team_id}, player_id={player_id}")
+            self.logger.debug(f"RECORD: Serve contact - team_id={team_id}, player_id={player_id}")
         else:
             # Regular contact - must have selected a player/team
             if not self.selected_team_id:
@@ -3090,7 +3093,7 @@ class DataEntryWindow(QMainWindow):
             timecode_ms = self.last_clicked_timecode
             
             # Debug output
-            print(f"DEBUG: Recording contact with coordinates: x={x_coord}, y={y_coord}, timecode={timecode_ms}ms")
+            self.logger.debug(f"Recording contact with coordinates: x={x_coord}, y={y_coord}, timecode={timecode_ms}ms")
             
             # Detect court side based on Y coordinate
             # Y <= 300 is team_us side, Y > 300 is team_them side
@@ -3105,7 +3108,7 @@ class DataEntryWindow(QMainWindow):
                 # Reset player selection since we're switching teams
                 player_id = None
                 self.selected_player_id = None
-                print(f"DEBUG: Click on team_us side (Y={y_coord}) - switching to team_us first contact")
+                self.logger.debug(f"Click on team_us side (Y={y_coord}) - switching to team_us first contact")
             
             # Block detection based on Y coordinate
             # If contact_type is block, check Y coordinate to determine team
@@ -3115,13 +3118,13 @@ class DataEntryWindow(QMainWindow):
                 if 301 <= y_coord <= 315:
                     # team_them blocked and sent back to team_us side
                     team_id = self.team_them_id
-                    print(f"DEBUG: Block detected at Y={y_coord} - team_them blocked")
+                    self.logger.debug(f"Block detected at Y={y_coord} - team_them blocked")
                     # Update selected_team_id to match for consistency
                     self.selected_team_id = team_id
                 elif 285 <= y_coord < 301:
                     # team_us blocked and sent back to team_them side
                     team_id = self.team_us_id
-                    print(f"DEBUG: Block detected at Y={y_coord} - team_us blocked")
+                    self.logger.debug(f"Block detected at Y={y_coord} - team_us blocked")
                     # Update selected_team_id to match for consistency
                     self.selected_team_id = team_id
                 # Note: If Y is outside these ranges, use the originally selected team_id
@@ -3138,15 +3141,15 @@ class DataEntryWindow(QMainWindow):
             else:
                 outcome = "continue"
             
-            print(f"DEBUG RECORD: >>> WRITING TO DATABASE <<<")
-            print(f"DEBUG RECORD:   rally_id={self.current_rally_id}")
-            print(f"DEBUG RECORD:   sequence_number={self.current_sequence}")
-            print(f"DEBUG RECORD:   contact_type='{contact_type}'")
-            print(f"DEBUG RECORD:   team_id={team_id}")
-            print(f"DEBUG RECORD:   player_id={player_id}")
-            print(f"DEBUG RECORD:   x={x_coord}, y={y_coord}")
-            print(f"DEBUG RECORD:   timecode={timecode_ms}")
-            print(f"DEBUG RECORD:   outcome='{outcome}'")
+            self.logger.debug(f"RECORD: >>> WRITING TO DATABASE <<<")
+            self.logger.debug(f"RECORD:   rally_id={self.current_rally_id}")
+            self.logger.debug(f"RECORD:   sequence_number={self.current_sequence}")
+            self.logger.debug(f"RECORD:   contact_type='{contact_type}'")
+            self.logger.debug(f"RECORD:   team_id={team_id}")
+            self.logger.debug(f"RECORD:   player_id={player_id}")
+            self.logger.debug(f"RECORD:   x={x_coord}, y={y_coord}")
+            self.logger.debug(f"RECORD:   timecode={timecode_ms}")
+            self.logger.debug(f"RECORD:   outcome='{outcome}'")
             
             contact_id = self.db.add_contact(
                 rally_id=self.current_rally_id,
@@ -3160,7 +3163,7 @@ class DataEntryWindow(QMainWindow):
                 outcome=outcome
             )
             
-            print(f"DEBUG RECORD: *** SUCCESS! Contact saved with contact_id={contact_id} ***")
+            self.logger.debug(f"RECORD: *** SUCCESS! Contact saved with contact_id={contact_id} ***")
             
             # Log contact event for undo functionality
             contact_event_payload = {
@@ -3206,7 +3209,7 @@ class DataEntryWindow(QMainWindow):
                     if prev_contact_type == "block":
                         # Previous contact was a block - update its outcome to "stuff"
                         self.db.update_contact_outcome(prev_contact_id, "stuff")
-                        print(f"DEBUG: Updated block contact {prev_contact_id} outcome to 'stuff' (next contact was 'down')")
+                        self.logger.debug(f"Updated block contact {prev_contact_id} outcome to 'stuff' (next contact was 'down')")
             
             # Reset opponent contact count if this was a team A contact (not opponent)
             if team_id == self.team_us_id:
@@ -3308,7 +3311,7 @@ class DataEntryWindow(QMainWindow):
                 if prev_contact_type == "block":
                     # Revert block's outcome from "stuff" back to "continue"
                     self.db.update_contact_outcome(prev_contact_id, "continue")
-                    print(f"DEBUG: Reverted block contact {prev_contact_id} outcome from 'stuff' back to 'continue'")
+                    self.logger.debug(f"Reverted block contact {prev_contact_id} outcome from 'stuff' back to 'continue'")
         
         # Handle outcome reversals for cascaded outcomes
         # If this contact was a "receive" with error, check if prior serve was marked as "ace"
@@ -3344,7 +3347,7 @@ class DataEntryWindow(QMainWindow):
             print(f"ERROR: Failed to delete contact {contact_id}")
             return None
         
-        print(f"DEBUG: Deleted contact {contact_id} ({contact_type})")
+        self.logger.debug(f"Deleted contact {contact_id} ({contact_type})")
         
         # Check if rally was ended (has point_winner_id)
         cursor.execute("SELECT point_winner_id FROM rallies WHERE rally_id = ?", (rally_id,))
@@ -3354,7 +3357,7 @@ class DataEntryWindow(QMainWindow):
             rally_was_ended = True
             # Un-end the rally
             self.db.unend_rally(rally_id)
-            print(f"DEBUG: Un-ended rally {rally_id}")
+            self.logger.debug(f"Un-ended rally {rally_id}")
             # Reload score from database
             self.load_score()
         
@@ -3369,7 +3372,7 @@ class DataEntryWindow(QMainWindow):
             # Delete the rally from the database (since serve is the only contact)
             cursor.execute("DELETE FROM rallies WHERE rally_id = ?", (rally_id,))
             self.db.conn.commit()
-            print(f"DEBUG: Deleted rally {rally_id} (rally_number={rally_number})")
+            self.logger.debug(f"Deleted rally {rally_id} (rally_number={rally_number})")
             
             # Reset rally state
             if self.rally_in_progress and self.current_rally_id == rally_id:
@@ -3399,7 +3402,7 @@ class DataEntryWindow(QMainWindow):
             self.load_score()
             # Restore the rally number we calculated (load_score might try to reuse an incomplete rally)
             self.current_rally_number = saved_rally_number
-            print(f"DEBUG: After deleting rally {rally_id}, set current_rally_number={self.current_rally_number} (MAX + 1)")
+            self.logger.debug(f"After deleting rally {rally_id}, set current_rally_number={self.current_rally_number} (MAX + 1)")
         else:
             # Update current_sequence
             if self.rally_in_progress and self.current_rally_id == rally_id:
@@ -3540,7 +3543,7 @@ class DataEntryWindow(QMainWindow):
                 result = self._undo_rotation_event(payload, team_id)
             elif event_type == 'server_change':
                 # Server change undo not implemented yet, skip for now
-                print(f"DEBUG: Server change undo not implemented, skipping event {event_id}")
+                self.logger.debug(f"Server change undo not implemented, skipping event {event_id}")
                 return None
             else:
                 print(f"WARNING: Unknown event type '{event_type}' for event {event_id}")
@@ -3598,7 +3601,7 @@ class DataEntryWindow(QMainWindow):
         
         # Un-end the rally
         self.db.unend_rally(rally_id)
-        print(f"DEBUG: Un-ended rally {rally_id}")
+        self.logger.debug(f"Un-ended rally {rally_id}")
         
         # Restore score
         if score_us is not None:
@@ -3812,7 +3815,7 @@ class DataEntryWindow(QMainWindow):
         if last_contact and last_contact[4] == 'down':
             # Last contact is a manually recorded "down" - skip automatic error assignment
             last_contact_is_manual_down = True
-            print(f"DEBUG: Last contact is manually recorded 'down' - will skip automatic error assignment")
+            self.logger.debug(f"Last contact is manually recorded 'down' - will skip automatic error assignment")
         
         # Get the very last player contact (not floor contact)
         last_player_contact = None
@@ -3831,7 +3834,7 @@ class DataEntryWindow(QMainWindow):
         
         # Preserve "fault" outcome - don't overwrite manually set faults
         if current_outcome == 'fault':
-            print(f"DEBUG: Contact {contact_id} ({contact_type}) already has outcome 'fault' - preserving it")
+            self.logger.debug(f"Contact {contact_id} ({contact_type}) already has outcome 'fault' - preserving it")
             return  # Exit early to preserve the fault outcome
         
         outcome = 'continue'  # Default
@@ -3840,10 +3843,10 @@ class DataEntryWindow(QMainWindow):
         # BUT: skip this if the last contact was a manually recorded "down"
         if team_id == losing_team_id and not last_contact_is_manual_down:
             outcome = 'error'
-            print(f"DEBUG: Contact {contact_id} ({contact_type}) assigned outcome 'error' (losing team contact)")
+            self.logger.debug(f"Contact {contact_id} ({contact_type}) assigned outcome 'error' (losing team contact)")
         elif team_id == losing_team_id and last_contact_is_manual_down:
             # Skip automatic error assignment when "down" was manually recorded
-            print(f"DEBUG: Contact {contact_id} ({contact_type}) - skipping error assignment (manual 'down' recorded)")
+            self.logger.debug(f"Contact {contact_id} ({contact_type}) - skipping error assignment (manual 'down' recorded)")
         
         # If the last contact was by the winning team
         elif team_id == point_winner_id:
@@ -3860,24 +3863,24 @@ class DataEntryWindow(QMainWindow):
                 # If opponent had 0 or 1 contacts, it's an ace
                 if opponent_contacts_after_serve <= 1:
                     outcome = 'ace'
-                    print(f"DEBUG: Contact {contact_id} (serve) assigned outcome 'ace' (winning serve with {opponent_contacts_after_serve} opponent contacts)")
+                    self.logger.debug(f"Contact {contact_id} (serve) assigned outcome 'ace' (winning serve with {opponent_contacts_after_serve} opponent contacts)")
             
             # Check if it's an attack (could be a kill)
             elif contact_type == 'attack':
                 outcome = 'kill'
-                print(f"DEBUG: Contact {contact_id} (attack) assigned outcome 'kill' (winning attack)")
+                self.logger.debug(f"Contact {contact_id} (attack) assigned outcome 'kill' (winning attack)")
             
             # Check if it's a block (could be a stuff)
             elif contact_type == 'block':
                 outcome = 'stuff'
-                print(f"DEBUG: Contact {contact_id} (block) assigned outcome 'stuff' (winning block)")
+                self.logger.debug(f"Contact {contact_id} (block) assigned outcome 'stuff' (winning block)")
         
         # Update the outcome for this contact
         # Only update if outcome is not 'continue' AND current outcome is not 'fault'
         if outcome != 'continue' and current_outcome != 'fault':
             self.db.update_contact_outcome(contact_id, outcome)
         elif current_outcome == 'fault':
-            print(f"DEBUG: Preserving 'fault' outcome for contact {contact_id}")
+            self.logger.debug(f"Preserving 'fault' outcome for contact {contact_id}")
         
         # Additional rules: Set outcomes for prior contacts based on subsequent errors
         # Rule 1: If receive has error, mark prior serve as ace
@@ -3903,7 +3906,7 @@ class DataEntryWindow(QMainWindow):
                     if prior_contact_type == 'serve':
                         # Mark this serve as an ace
                         self.db.update_contact_outcome(prior_contact_id, 'ace')
-                        print(f"DEBUG: Contact {prior_contact_id} (serve) assigned outcome 'ace' (subsequent receive error)")
+                        self.logger.debug(f"Contact {prior_contact_id} (serve) assigned outcome 'ace' (subsequent receive error)")
                         break  # Only mark the immediate prior serve
             
             # Rule 2: If this is a pass with error, find prior attack/freeball/block and mark it as kill
@@ -3922,7 +3925,7 @@ class DataEntryWindow(QMainWindow):
                     if prior_contact_type in ['attack', 'freeball', 'block']:
                         # Mark this attack/freeball/block as a kill
                         self.db.update_contact_outcome(prior_contact_id, 'kill')
-                        print(f"DEBUG: Contact {prior_contact_id} ({prior_contact_type}) assigned outcome 'kill' (subsequent pass error)")
+                        self.logger.debug(f"Contact {prior_contact_id} ({prior_contact_type}) assigned outcome 'kill' (subsequent pass error)")
                         break  # Only mark the immediate prior attack/freeball/block
             
             # Rule 3: If this is a block with stuff outcome, mark prior contact as error
@@ -3939,7 +3942,7 @@ class DataEntryWindow(QMainWindow):
                     
                     # Mark the prior contact as error
                     self.db.update_contact_outcome(prior_contact_id, 'error')
-                    print(f"DEBUG: Contact {prior_contact_id} ({prior_contact_type}) assigned outcome 'error' (subsequent stuff block)")
+                    self.logger.debug(f"Contact {prior_contact_id} ({prior_contact_type}) assigned outcome 'error' (subsequent stuff block)")
                     break  # Only mark the immediate prior player contact
     
     def end_rally(self, point_winner_id: int):
@@ -3975,7 +3978,7 @@ class DataEntryWindow(QMainWindow):
             result = cursor.fetchone()
             if result:
                 rally_id_to_update = result[0]
-                print(f"DEBUG: Found rally {rally_id_to_update} without point_winner_id to update")
+                self.logger.debug(f"Found rally {rally_id_to_update} without point_winner_id to update")
             else:
                 # If no incomplete rally, find the most recent rally overall (the one that just ended)
                 cursor.execute("""
@@ -3988,7 +3991,7 @@ class DataEntryWindow(QMainWindow):
                 result = cursor.fetchone()
                 if result:
                     rally_id_to_update = result[0]
-                    print(f"DEBUG: Found most recent rally {rally_id_to_update} to update with point_winner_id")
+                    self.logger.debug(f"Found most recent rally {rally_id_to_update} to update with point_winner_id")
                 else:
                     QMessageBox.warning(self, "No Rally", "No rally found to update!")
                     return
@@ -4024,7 +4027,7 @@ class DataEntryWindow(QMainWindow):
                     outcome="down"  # Floor contact outcome is always "down"
                 )
                 
-                print(f"DEBUG: Floor contact recorded at ({x_coord}, {y_coord}, timecode={timecode_ms}ms) for losing team {losing_team_id}")
+                self.logger.debug(f"Floor contact recorded at ({x_coord}, {y_coord}, timecode={timecode_ms}ms) for losing team {losing_team_id}")
                 
                 # Clear the stored coordinates and timecode after recording
                 self.last_clicked_x = None
@@ -4083,18 +4086,18 @@ class DataEntryWindow(QMainWindow):
                 try:
                     self.lineup_manager.rotate(self.game_id, self.team_us_id)
                     auto_rotated = True
-                    print(f"DEBUG: Auto-rotated team_us after winning point (team_them had served)")
+                    self.logger.debug(f"Auto-rotated team_us after winning point (team_them had served)")
                     # Update MainWindow player buttons to reflect rotation
                     self.update_mainwindow_player_buttons()
                 except Exception as e:
-                    print(f"DEBUG ERROR: Failed to rotate team_us: {e}")
+                    self.logger.error(f"Failed to rotate team_us: {e}")
                     auto_rotated = False  # Reset if rotation failed
                 else:
                     # Show rotation popup only if rotation succeeded
                     try:
                         self.show_rotation_popup()
                     except Exception as e:
-                        print(f"DEBUG ERROR: Failed to show rotation popup: {e}")
+                        self.logger.error(f"Failed to show rotation popup: {e}")
             
             # Log point_awarded event for undo functionality
             from datetime import datetime
@@ -4177,7 +4180,7 @@ class DataEntryWindow(QMainWindow):
                     serve_contact_type, serve_team_id = serve_contact
                     if serve_team_id == self.team_them_id:
                         team_them_served_previous = True
-                        print(f"DEBUG: Rally {rally_number} (rally_id={completed_rally_id}) had a serve by team_them")
+                        self.logger.debug(f"Rally {rally_number} (rally_id={completed_rally_id}) had a serve by team_them")
                 else:
                     # No serve contact in this rally (empty rally from mapper)
                     # Check the PREVIOUS rally to see who served there
@@ -4203,11 +4206,11 @@ class DataEntryWindow(QMainWindow):
                                 prev_serve_team_id = prev_serve_contact[1]
                                 if prev_serve_team_id == self.team_them_id:
                                     team_them_served_previous = True
-                                    print(f"DEBUG: Previous rally {rally_number - 1} (rally_id={prev_rally_id}) had a serve by team_them")
+                                    self.logger.debug(f"Previous rally {rally_number - 1} (rally_id={prev_rally_id}) had a serve by team_them")
                             elif prev_serving_team_id == self.team_them_id:
                                 # Fallback to serving_team_id if no serve contact found
                                 team_them_served_previous = True
-                                print(f"DEBUG: Previous rally {rally_number - 1} serving_team_id was team_them")
+                                self.logger.debug(f"Previous rally {rally_number - 1} serving_team_id was team_them")
             
             # Auto-rotate team_us if team_them served in previous rally and team_us won the point
             auto_rotated = False
@@ -4221,18 +4224,18 @@ class DataEntryWindow(QMainWindow):
                 try:
                     self.lineup_manager.rotate(self.game_id, self.team_us_id)
                     auto_rotated = True
-                    print(f"DEBUG: Auto-rotated team_us after winning point from mapper (team_them had served in previous rally)")
+                    self.logger.debug(f"Auto-rotated team_us after winning point from mapper (team_them had served in previous rally)")
                     # Update MainWindow player buttons to reflect rotation
                     self.update_mainwindow_player_buttons()
                 except Exception as e:
-                    print(f"DEBUG ERROR: Failed to rotate team_us: {e}")
+                    self.logger.error(f"Failed to rotate team_us: {e}")
                     auto_rotated = False  # Reset if rotation failed
                 else:
                     # Show rotation popup only if rotation succeeded
                     try:
                         self.show_rotation_popup()
                     except Exception as e:
-                        print(f"DEBUG ERROR: Failed to show rotation popup: {e}")
+                        self.logger.error(f"Failed to show rotation popup: {e}")
             
             # Reload score to get updated values
             self.load_score()
@@ -4294,7 +4297,7 @@ class DataEntryWindow(QMainWindow):
             self.update_status()
             self.update_ui_state()
             
-            print(f"DEBUG: Point awarded from mapper to team {point_winner_id}. State refreshed - rally_in_progress=False, only serve available.")
+            self.logger.debug(f"Point awarded from mapper to team {point_winner_id}. State refreshed - rally_in_progress=False, only serve available.")
         except Exception as e:
             print(f"ERROR: Failed to refresh state after point awarded from mapper: {e}")
     
@@ -4351,7 +4354,7 @@ class DataEntryWindow(QMainWindow):
             result = cursor.fetchone()
             if result:
                 replaced_player_id = result[0]
-                print(f"DEBUG: Found libero_actions for position 5, using replaced_player_id={replaced_player_id}")
+                self.logger.debug(f"Found libero_actions for position 5, using replaced_player_id={replaced_player_id}")
             else:
                 # Fallback: Query libero_actions table for the most recent enter action at position 4
                 cursor.execute("""
@@ -4364,7 +4367,7 @@ class DataEntryWindow(QMainWindow):
                 result = cursor.fetchone()
                 if result:
                     replaced_player_id = result[0]
-                    print(f"DEBUG: Found libero_actions for position 4, using replaced_player_id={replaced_player_id}")
+                    self.logger.debug(f"Found libero_actions for position 4, using replaced_player_id={replaced_player_id}")
                 else:
                     # Last fallback: find the most recent libero_actions record for this game overall
                     cursor.execute("""
@@ -4377,7 +4380,7 @@ class DataEntryWindow(QMainWindow):
                     result = cursor.fetchone()
                     if result:
                         replaced_player_id = result[0]
-                        print(f"DEBUG: Found most recent libero_actions record, using replaced_player_id={replaced_player_id}")
+                        self.logger.debug(f"Found most recent libero_actions record, using replaced_player_id={replaced_player_id}")
         
         if not replaced_player_id:
             print(f"WARNING: Could not find original player replaced by libero at position {position}")
@@ -4428,7 +4431,7 @@ class DataEntryWindow(QMainWindow):
                 f"Original player {player_display} has been restored to position 4."
             )
             
-            print(f"DEBUG: Automatically removed libero from position 4, restored player #{player_number}")
+            self.logger.debug(f"Automatically removed libero from position 4, restored player #{player_number}")
             return True
             
         except Exception as e:
@@ -4464,7 +4467,7 @@ class DataEntryWindow(QMainWindow):
             players = cursor.fetchall()
             
             if not players or len(players) != 6:
-                print(f"DEBUG: Cannot show rotation popup - found {len(players) if players else 0} players (expected 6)")
+                self.logger.debug(f"Cannot show rotation popup - found {len(players) if players else 0} players (expected 6)")
                 return
             
             # Create popup dialog with ESC key support
@@ -4602,7 +4605,7 @@ class DataEntryWindow(QMainWindow):
             
             if players:
                 print("\n" + "="*60)
-                print("DEBUG: Team_US Lineup After Point:")
+                self.logger.debug("Team_US Lineup After Point:")
                 print("="*60)
                 for position_number, player_id, player_number, player_name, role_code in players:
                     name_display = player_name if player_name else "Unknown"
@@ -4612,7 +4615,7 @@ class DataEntryWindow(QMainWindow):
                 # Also print bench players
                 bench_players = self.get_bench_players(self.team_us_id)
                 if bench_players:
-                    print("DEBUG: Team_US Bench Players:")
+                    self.logger.debug("Team_US Bench Players:")
                     print("-"*60)
                     for player_id, player_number, player_name in bench_players:
                         name_display = player_name if player_name else "Unknown"
@@ -4625,12 +4628,12 @@ class DataEntryWindow(QMainWindow):
                         print(f"  Bench: Player #{player_number} (ID:{player_id}) - {name_display} ({role_code})")
                     print("-"*60)
                 else:
-                    print("DEBUG: No bench players available")
+                    self.logger.debug("No bench players available")
                 print("="*60 + "\n")
             else:
-                print("DEBUG: No active lineup found for team_us")
+                self.logger.debug("No active lineup found for team_us")
         except Exception as e:
-            print(f"DEBUG ERROR: Failed to print team_us lineup: {e}")
+            self.logger.error(f"Failed to print team_us lineup: {e}")
     
     def get_bench_players(self, team_id: int):
         """Get bench players (players in game_players but not in active_lineup).
@@ -4713,36 +4716,36 @@ class DataEntryWindow(QMainWindow):
     
     def show_substitution_dialog(self):
         """Show dialog for player substitution."""
-        print("=" * 60)
-        print("DEBUG SUBSTITUTION: Method show_substitution_dialog() called")
-        print(f"DEBUG SUBSTITUTION: game_id={self.game_id}, team_us_id={self.team_us_id}")
-        print("=" * 60)
+        self.logger.debug("=" * 60)
+        self.logger.debug("SUBSTITUTION: Method show_substitution_dialog() called")
+        self.logger.debug(f"SUBSTITUTION: game_id={self.game_id}, team_us_id={self.team_us_id}")
+        self.logger.debug("=" * 60)
         
         if not self.game_id or not self.team_us_id:
-            print("DEBUG SUBSTITUTION: ERROR - No game or team selected")
+            self.logger.error("SUBSTITUTION: ERROR - No game or team selected")
             QMessageBox.warning(self, "No Game", "Please select a game first.")
             return
         
         # Get bench players and active players
-        print("DEBUG SUBSTITUTION: Calling get_bench_players()...")
+        self.logger.debug("SUBSTITUTION: Calling get_bench_players()...")
         bench_players = self.get_bench_players(self.team_us_id)
-        print(f"DEBUG SUBSTITUTION: get_bench_players() returned {len(bench_players)} bench players")
+        self.logger.debug(f"SUBSTITUTION: get_bench_players() returned {len(bench_players)} bench players")
         for idx, (player_id, player_number, player_name) in enumerate(bench_players, 1):
-            print(f"  Bench Player {idx}: ID={player_id}, Number={player_number}, Name={player_name}")
+            self.logger.debug(f"  Bench Player {idx}: ID={player_id}, Number={player_number}, Name={player_name}")
         
-        print("DEBUG SUBSTITUTION: Calling get_active_players_with_positions()...")
+        self.logger.debug("SUBSTITUTION: Calling get_active_players_with_positions()...")
         active_players = self.get_active_players_with_positions(self.team_us_id)
-        print(f"DEBUG SUBSTITUTION: get_active_players_with_positions() returned {len(active_players)} active players")
+        self.logger.debug(f"SUBSTITUTION: get_active_players_with_positions() returned {len(active_players)} active players")
         for idx, (player_id, player_number, player_name, position) in enumerate(active_players, 1):
-            print(f"  Active Player {idx}: ID={player_id}, Number={player_number}, Name={player_name}, Position={position}")
+            self.logger.debug(f"  Active Player {idx}: ID={player_id}, Number={player_number}, Name={player_name}, Position={position}")
         
         if not bench_players:
-            print("DEBUG SUBSTITUTION: ERROR - No bench players available")
+            self.logger.error("SUBSTITUTION: ERROR - No bench players available")
             QMessageBox.information(self, "No Bench Players", "No bench players available for substitution.")
             return
         
         if not active_players:
-            print("DEBUG SUBSTITUTION: ERROR - No active players on court")
+            self.logger.error("SUBSTITUTION: ERROR - No active players on court")
             QMessageBox.information(self, "No Active Players", "No active players on court.")
             return
         
@@ -4805,7 +4808,7 @@ class DataEntryWindow(QMainWindow):
         
         # Sort bench players alphabetically by name
         bench_players_sorted = sorted(bench_players, key=lambda x: (x[2] or '').lower() if x[2] else 'zzz')
-        print(f"DEBUG SUBSTITUTION: Bench players sorted alphabetically: {[(p[2], p[1]) for p in bench_players_sorted]}")
+        self.logger.debug(f"SUBSTITUTION: Bench players sorted alphabetically: {[(p[2], p[1]) for p in bench_players_sorted]}")
         
         # Create substitution dialog
         dialog = QDialog(self)
@@ -4825,7 +4828,7 @@ class DataEntryWindow(QMainWindow):
         main_layout = QHBoxLayout()
         
         # Bench players list (left)
-        print("DEBUG SUBSTITUTION: Creating bench players list...")
+        self.logger.debug("SUBSTITUTION: Creating bench players list...")
         bench_label = QLabel("Bench Players:")
         bench_label.setFont(QFont('Arial', 12, QFont.Weight.Bold))
         bench_list = QListWidget()
@@ -4840,12 +4843,12 @@ class DataEntryWindow(QMainWindow):
                 display_text = f"{player_name} ({jersey}-{role})"
             else:
                 display_text = f"{player_name} ({jersey})"
-            print(f"DEBUG SUBSTITUTION: Adding bench player to list: '{display_text}' (ID={player_id})")
+            self.logger.debug(f"SUBSTITUTION: Adding bench player to list: '{display_text}' (ID={player_id})")
             item = QListWidgetItem(display_text)
             item.setFont(QFont('Arial', 11))  # 11pt font for player data
             item.setData(Qt.ItemDataRole.UserRole, player_id)
             bench_list.addItem(item)
-        print(f"DEBUG SUBSTITUTION: Bench list created with {bench_list.count()} items")
+        self.logger.debug(f"SUBSTITUTION: Bench list created with {bench_list.count()} items")
         
         bench_layout = QVBoxLayout()
         bench_layout.addWidget(bench_label)
@@ -4856,7 +4859,7 @@ class DataEntryWindow(QMainWindow):
         # Court layout: 
         # Row 0 (top): positions 4, 3, 2 (left to right)
         # Row 1 (bottom): positions 5, 6, 1 (left to right)
-        print("DEBUG SUBSTITUTION: Creating court positions grid...")
+        self.logger.debug("SUBSTITUTION: Creating court positions grid...")
         active_label = QLabel("Active Players (on court):")
         active_label.setFont(QFont('Arial', 12, QFont.Weight.Bold))
         active_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -4870,7 +4873,7 @@ class DataEntryWindow(QMainWindow):
         court_grid = QGridLayout()
         court_grid.setSpacing(10)
         court_grid.setContentsMargins(10, 10, 10, 10)
-        print("DEBUG SUBSTITUTION: QGridLayout created with spacing=10, margins=10")
+        self.logger.debug("SUBSTITUTION: QGridLayout created with spacing=10, margins=10")
         
         # Create a dictionary mapping position_number to (row, col) in grid
         # Position 4 -> (0, 0) top-left, Position 3 -> (0, 1) top-middle, Position 2 -> (0, 2) top-right
@@ -4883,7 +4886,7 @@ class DataEntryWindow(QMainWindow):
             6: (1, 1),  # bottom-middle
             1: (1, 2)   # bottom-right
         }
-        print(f"DEBUG SUBSTITUTION: Position to grid mapping: {position_to_grid}")
+        self.logger.debug(f"SUBSTITUTION: Position to grid mapping: {position_to_grid}")
         
         # Create buttons for each position
         position_buttons = {}  # {position_number: button}
@@ -4892,10 +4895,10 @@ class DataEntryWindow(QMainWindow):
         # Create a dictionary of players by position
         players_by_position = {pos: (player_id, player_number, player_name) 
                               for player_id, player_number, player_name, pos in active_players}
-        print(f"DEBUG SUBSTITUTION: Players by position: {players_by_position}")
+        self.logger.debug(f"SUBSTITUTION: Players by position: {players_by_position}")
         
         # Add buttons in the correct order for court layout
-        print("DEBUG SUBSTITUTION: Creating position buttons...")
+        self.logger.debug("SUBSTITUTION: Creating position buttons...")
         for pos in [4, 3, 2, 5, 6, 1]:
             row, col = position_to_grid[pos]
             if pos in players_by_position:
@@ -4908,11 +4911,11 @@ class DataEntryWindow(QMainWindow):
                     display_text = f"{player_name} ({jersey}-{role})"
                 else:
                     display_text = f"{player_name} ({jersey})"
-                print(f"DEBUG SUBSTITUTION: Position {pos} (row={row}, col={col}): Player '{display_text}' (ID={player_id})")
+                self.logger.debug(f"SUBSTITUTION: Position {pos} (row={row}, col={col}): Player '{display_text}' (ID={player_id})")
             else:
                 display_text = f"Position {pos}\n(Empty)"
                 player_id = None
-                print(f"DEBUG SUBSTITUTION: Position {pos} (row={row}, col={col}): Empty")
+                self.logger.debug(f"SUBSTITUTION: Position {pos} (row={row}, col={col}): Empty")
             
             # Create button for this position
             pos_btn = QPushButton(display_text)
@@ -4935,7 +4938,7 @@ class DataEntryWindow(QMainWindow):
                     background-color: #E0E0E0;
                 }
             """)
-            print(f"DEBUG SUBSTITUTION: Created button for position {pos} with text '{display_text}', size 125x60")
+            self.logger.debug(f"SUBSTITUTION: Created button for position {pos} with text '{display_text}', size 125x60")
             
             if player_id:
                 # Store player_id in button property
@@ -4958,15 +4961,15 @@ class DataEntryWindow(QMainWindow):
             
             position_buttons[pos] = pos_btn
             court_grid.addWidget(pos_btn, row, col)
-            print(f"DEBUG SUBSTITUTION: Added button to grid at row={row}, col={col}")
+            self.logger.debug(f"SUBSTITUTION: Added button to grid at row={row}, col={col}")
         
-        print(f"DEBUG SUBSTITUTION: Total buttons created: {len(position_buttons)}")
-        print(f"DEBUG SUBSTITUTION: Grid layout item count: {court_grid.count()}")
+        self.logger.debug(f"SUBSTITUTION: Total buttons created: {len(position_buttons)}")
+        self.logger.debug(f"SUBSTITUTION: Grid layout item count: {court_grid.count()}")
         
         # Create a container widget for the grid to ensure proper layout
         grid_container = QWidget()
         grid_container.setLayout(court_grid)
-        print("DEBUG SUBSTITUTION: Created grid_container QWidget and set grid layout")
+        self.logger.debug("SUBSTITUTION: Created grid_container QWidget and set grid layout")
         
         active_layout = QVBoxLayout()
         active_layout.addWidget(active_label)
@@ -4974,8 +4977,8 @@ class DataEntryWindow(QMainWindow):
         active_layout.addWidget(grid_container)
         active_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         main_layout.addLayout(active_layout)
-        print("DEBUG SUBSTITUTION: Added active_label and grid_container to active_layout")
-        print("DEBUG SUBSTITUTION: Added active_layout to main_layout")
+        self.logger.debug("SUBSTITUTION: Added active_label and grid_container to active_layout")
+        self.logger.debug("SUBSTITUTION: Added active_layout to main_layout")
         
         layout.addLayout(main_layout)
         
@@ -5072,13 +5075,13 @@ class DataEntryWindow(QMainWindow):
         
         layout.addLayout(button_layout)
         
-        print("DEBUG SUBSTITUTION: Dialog layout complete, showing dialog...")
-        print(f"DEBUG SUBSTITUTION: Dialog size: {dialog.width()}x{dialog.height()}")
-        print(f"DEBUG SUBSTITUTION: Main layout item count: {main_layout.count()}")
-        print("=" * 60)
+        self.logger.debug("SUBSTITUTION: Dialog layout complete, showing dialog...")
+        self.logger.debug(f"SUBSTITUTION: Dialog size: {dialog.width()}x{dialog.height()}")
+        self.logger.debug(f"SUBSTITUTION: Main layout item count: {main_layout.count()}")
+        self.logger.debug("=" * 60)
         dialog.exec()
-        print("DEBUG SUBSTITUTION: Dialog closed")
-        print("=" * 60)
+        self.logger.debug("SUBSTITUTION: Dialog closed")
+        self.logger.debug("=" * 60)
     
     def setup_libero_buttons(self):
         """Create and position Libero IN and Libero OUT buttons next to substitution button."""

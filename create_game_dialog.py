@@ -184,15 +184,48 @@ class CreateGameDialog(QDialog):
             
             # Clear all combos
             for player_combo, _ in self.position_widgets.values():
+                player_combo.blockSignals(True)
                 player_combo.clear()
                 player_combo.addItem("-- Select Player --", None)
+                player_combo.blockSignals(False)
             
+            self.libero_combo.blockSignals(True)
             self.libero_combo.clear()
             self.libero_combo.addItem("-- No Libero --", None)
+            self.libero_combo.blockSignals(False)
             
-            # Populate with players
+            # Populate with players - use a set to track added player_ids per combo to prevent duplicates
+            for player_combo, _ in self.position_widgets.values():
+                added_player_ids = set()
+                player_combo.blockSignals(True)
+                for player in players:
+                    player_id, name, jersey, player_number = player
+                    # Skip if already added (safety check)
+                    if player_id in added_player_ids:
+                        continue
+                    added_player_ids.add(player_id)
+                    player_name = name or 'Unknown'
+                    jersey_number = jersey or player_number
+                    role = ''
+                    
+                    # Format: "player name (jersey # role)"
+                    if role:
+                        display_name = f"{player_name} ({jersey_number} {role})"
+                    else:
+                        display_name = f"{player_name} ({jersey_number})"
+                    
+                    player_combo.addItem(display_name, player_id)
+                player_combo.blockSignals(False)
+            
+            # Populate libero combo
+            added_libero_ids = set()
+            self.libero_combo.blockSignals(True)
             for player in players:
                 player_id, name, jersey, player_number = player
+                # Skip if already added (safety check)
+                if player_id in added_libero_ids:
+                    continue
+                added_libero_ids.add(player_id)
                 player_name = name or 'Unknown'
                 jersey_number = jersey or player_number
                 role = ''
@@ -203,12 +236,8 @@ class CreateGameDialog(QDialog):
                 else:
                     display_name = f"{player_name} ({jersey_number})"
                 
-                # Add to all position combos
-                for player_combo, _ in self.position_widgets.values():
-                    player_combo.addItem(display_name, player_id)
-                
-                # Add to libero combo (all players available)
                 self.libero_combo.addItem(display_name, player_id)
+            self.libero_combo.blockSignals(False)
         
         except Exception as e:
             QMessageBox.warning(self, "Error", f"Failed to load roster: {str(e)}")
@@ -745,8 +774,8 @@ class CreateGameDialog(QDialog):
             self.team_us_name = cursor.fetchone()[0]
             self.team_them_name = opponent_alias
             
-            # Launch data entry window
-            self.launch_data_entry()
+            # Launch coordinate mapper (data entry window created but not shown)
+            self.launch_coordinate_mapper()
             
             # Accept dialog
             self.accept()
@@ -759,8 +788,8 @@ class CreateGameDialog(QDialog):
                 f"Failed to create game:\n{str(e)}"
             )
     
-    def launch_data_entry(self):
-        """Launch the data entry window."""
+    def launch_coordinate_mapper(self):
+        """Launch the coordinate mapper window (data entry window created but not shown)."""
         try:
             # Load data entry UI
             ui_file = resource_path("inputTouchesVoice.ui")
@@ -769,7 +798,7 @@ class CreateGameDialog(QDialog):
                     self,
                     "UI File Not Found",
                     f"Data entry UI file not found: {ui_file}\n"
-                    "The game has been created, but data entry cannot be launched."
+                    "The game has been created, but coordinate mapper cannot be launched."
                 )
                 return
             
@@ -781,11 +810,12 @@ class CreateGameDialog(QDialog):
                     self,
                     "UI Load Error",
                     "Failed to load data entry UI file.\n"
-                    "The game has been created, but data entry cannot be launched."
+                    "The game has been created, but coordinate mapper cannot be launched."
                 )
                 return
             
-            # Create and show data entry window with locked game selection
+            # Create data entry window (but don't show it)
+            # The coordinate mapper will be created and shown automatically
             data_entry_window = DataEntryWindow(
                 ui_widget=ui_widget,
                 db=self.db,
@@ -795,12 +825,16 @@ class CreateGameDialog(QDialog):
                 lock_game_selection=True
             )
             
-            data_entry_window.show()
+            # Don't show the data entry window - only coordinate mapper will be visible
+            # Ensure coordinate mapper is visible and active
+            if data_entry_window.coordinate_mapper:
+                data_entry_window.coordinate_mapper.raise_()
+                data_entry_window.coordinate_mapper.activateWindow()
             
         except Exception as e:
             QMessageBox.warning(
                 self,
                 "Launch Error",
-                f"Failed to launch data entry window:\n{str(e)}\n\n"
+                f"Failed to launch coordinate mapper:\n{str(e)}\n\n"
                 "The game has been created successfully."
             )

@@ -9,6 +9,9 @@ from pathlib import Path
 from datetime import datetime
 from typing import Optional
 from utils import get_database_path
+from logging_config import get_logger
+
+logger = get_logger('database')
 
 
 class VideoStatsDB:
@@ -320,7 +323,7 @@ class VideoStatsDB:
         cursor.execute("PRAGMA table_info(active_lineup)")
         active_lineup_columns = [row[1] for row in cursor.fetchall()]
         if 'game_id' not in active_lineup_columns:
-            print("Adding game_id column to active_lineup table...")
+            logger.info("Adding game_id column to active_lineup table...")
             try:
                 # SQLite doesn't support adding NOT NULL columns easily, so we'll add it as nullable first
                 cursor.execute("ALTER TABLE active_lineup ADD COLUMN game_id INTEGER REFERENCES games(game_id)")
@@ -331,9 +334,9 @@ class VideoStatsDB:
                     WHERE game_id IS NULL
                 """)
                 self.conn.commit()
-                print("game_id column added to active_lineup successfully!")
+                logger.info("game_id column added to active_lineup successfully!")
             except Exception as e:
-                print(f"Failed to add game_id to active_lineup: {e}")
+                logger.warning(f"Failed to add game_id to active_lineup: {e}")
         
         # Migration: Fix UNIQUE constraint on active_lineup to include game_id
         # Check if the constraint needs to be updated
@@ -375,7 +378,7 @@ class VideoStatsDB:
                                 break
             
             if needs_migration:
-                print("Migrating active_lineup table to fix UNIQUE constraint (adding game_id)...")
+                logger.info("Migrating active_lineup table to fix UNIQUE constraint (adding game_id)...")
                 try:
                     # Create new table with correct constraint
                     cursor.execute("""
@@ -410,16 +413,16 @@ class VideoStatsDB:
                     cursor.execute("CREATE INDEX IF NOT EXISTS idx_active_lineup_player ON active_lineup(player_id)")
                     
                     self.conn.commit()
-                    print("active_lineup table migrated successfully!")
+                    logger.info("active_lineup table migrated successfully!")
                 except Exception as e:
                     self.conn.rollback()
-                    print(f"Migration of active_lineup failed: {e}. You may need to manually migrate the database.")
+                    logger.error(f"Migration of active_lineup failed: {e}. You may need to manually migrate the database.")
         
         # Migration: Add game_id to rotation_state if it doesn't exist
         cursor.execute("PRAGMA table_info(rotation_state)")
         rotation_state_columns = [row[1] for row in cursor.fetchall()]
         if 'game_id' not in rotation_state_columns:
-            print("Adding game_id column to rotation_state table...")
+            logger.info("Adding game_id column to rotation_state table...")
             try:
                 # SQLite doesn't support changing PRIMARY KEY easily, so we'll add game_id as nullable first
                 cursor.execute("ALTER TABLE rotation_state ADD COLUMN game_id INTEGER REFERENCES games(game_id)")
@@ -432,9 +435,9 @@ class VideoStatsDB:
                 # Note: We can't easily change PRIMARY KEY in SQLite without recreating the table
                 # The application code will need to ensure game_id is provided for new records
                 self.conn.commit()
-                print("game_id column added to rotation_state successfully!")
+                logger.info("game_id column added to rotation_state successfully!")
             except Exception as e:
-                print(f"Failed to add game_id to rotation_state: {e}")
+                logger.warning(f"Failed to add game_id to rotation_state: {e}")
         
         # Create indexes for better query performance
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_contacts_rally ON contacts(rally_id)")
@@ -462,7 +465,7 @@ class VideoStatsDB:
                 sql_def = result[0]
                 # Check if constraint doesn't include new event types
                 if "'contact'" not in sql_def or "'point_awarded'" not in sql_def:
-                    print("Migrating events table to support new event types (contact, point_awarded)...")
+                    logger.info("Migrating events table to support new event types (contact, point_awarded)...")
                     try:
                         # Create new table with updated constraint
                         cursor.execute("""
@@ -494,10 +497,10 @@ class VideoStatsDB:
                         cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type)")
                         
                         self.conn.commit()
-                        print("Events table migrated successfully!")
+                        logger.info("Events table migrated successfully!")
                     except Exception as e:
                         self.conn.rollback()
-                        print(f"Migration of events table failed: {e}. You may need to manually migrate the database.")
+                        logger.error(f"Migration of events table failed: {e}. You may need to manually migrate the database.")
         
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_game ON events(game_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_team ON events(team_id)")
@@ -575,10 +578,10 @@ class VideoStatsDB:
                 VALUES ('players', 33)
             """)
             
-            print("Seeded default team_them team (ID=12) and 4 players (IDs=30,31,32,33)")
+            logger.info("Seeded default team_them team (ID=12) and 4 players (IDs=30,31,32,33)")
         
         self.conn.commit()
-        print("Database tables created successfully!")
+        logger.info("Database tables created successfully!")
     
     def initialize_database(self):
         """Initialize the database with tables."""
@@ -615,7 +618,7 @@ class VideoStatsDB:
         """)
         violations = cursor.fetchall()
         if violations:
-            print(f"Warning: Found {len(violations)} games with duplicate teams. These should be fixed manually.")
+            logger.warning(f"Found {len(violations)} games with duplicate teams. These should be fixed manually.")
         
         # Migrate player_number from INTEGER to TEXT if needed
         # Check if players table exists and has INTEGER player_number
@@ -626,7 +629,7 @@ class VideoStatsDB:
         result = cursor.fetchone()
         if result and result[0] and 'player_number INTEGER' in result[0]:
             # Need to migrate - SQLite doesn't support ALTER COLUMN, so recreate table
-            print("Migrating player_number column from INTEGER to TEXT...")
+            logger.info("Migrating player_number column from INTEGER to TEXT...")
             try:
                 # Create new table with TEXT column
                 cursor.execute("""
@@ -656,10 +659,10 @@ class VideoStatsDB:
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_players_team ON players(team_id)")
                 
                 self.conn.commit()
-                print("Migration completed successfully!")
+                logger.info("Migration completed successfully!")
             except Exception as e:
                 self.conn.rollback()
-                print(f"Migration failed: {e}. You may need to manually migrate the database.")
+                logger.error(f"Migration failed: {e}. You may need to manually migrate the database.")
         
         # Migrate contact_type constraint if needed
         # Check if contacts table exists and has old constraint
@@ -672,7 +675,7 @@ class VideoStatsDB:
             # Check if it has the old constraint with 'opp' or missing 'receive'/'freeball'/'down'
             sql = result[0]
             if "'opp'" in sql or "'receive'" not in sql or "'freeball'" not in sql or "'down'" not in sql or "'net'" not in sql:
-                print("Migrating contact_type constraint in contacts table...")
+                logger.info("Migrating contact_type constraint in contacts table...")
                 try:
                     # Create new table with updated constraint
                     cursor.execute("""
@@ -749,97 +752,97 @@ class VideoStatsDB:
                     cursor.execute("CREATE INDEX IF NOT EXISTS idx_contacts_type ON contacts(contact_type)")
                     
                     self.conn.commit()
-                    print("Contact type constraint migration completed successfully!")
+                    logger.info("Contact type constraint migration completed successfully!")
                 except Exception as e:
                     self.conn.rollback()
-                    print(f"Migration failed: {e}. You may need to manually migrate the database.")
+                    logger.error(f"Migration failed: {e}. You may need to manually migrate the database.")
         
         # Add x, y coordinate columns to contacts table if they don't exist
         cursor.execute("PRAGMA table_info(contacts)")
         columns = [row[1] for row in cursor.fetchall()]
         if 'x' not in columns:
-            print("Adding x coordinate column to contacts table...")
+            logger.info("Adding x coordinate column to contacts table...")
             try:
                 cursor.execute("ALTER TABLE contacts ADD COLUMN x INTEGER")
                 self.conn.commit()
-                print("x coordinate column added successfully!")
+                logger.info("x coordinate column added successfully!")
             except Exception as e:
-                print(f"Failed to add x column: {e}")
+                logger.warning(f"Failed to add x column: {e}")
         if 'y' not in columns:
-            print("Adding y coordinate column to contacts table...")
+            logger.info("Adding y coordinate column to contacts table...")
             try:
                 cursor.execute("ALTER TABLE contacts ADD COLUMN y INTEGER")
                 self.conn.commit()
-                print("y coordinate column added successfully!")
+                logger.info("y coordinate column added successfully!")
             except Exception as e:
-                print(f"Failed to add y column: {e}")
+                logger.warning(f"Failed to add y column: {e}")
         
         # Add timecode column to contacts table if it doesn't exist
         # Need to refresh columns list after adding x and y
         cursor.execute("PRAGMA table_info(contacts)")
         columns = [row[1] for row in cursor.fetchall()]
         if 'timecode' not in columns:
-            print("Adding timecode column to contacts table...")
+            logger.info("Adding timecode column to contacts table...")
             try:
                 cursor.execute("ALTER TABLE contacts ADD COLUMN timecode INTEGER")
                 self.conn.commit()
-                print("timecode column added successfully!")
+                logger.info("timecode column added successfully!")
             except Exception as e:
-                print(f"Failed to add timecode column: {e}")
+                logger.warning(f"Failed to add timecode column: {e}")
         
         # Add rating column to contacts table if it doesn't exist
         cursor.execute("PRAGMA table_info(contacts)")
         columns = [row[1] for row in cursor.fetchall()]
         if 'rating' not in columns:
-            print("Adding rating column to contacts table...")
+            logger.info("Adding rating column to contacts table...")
             try:
                 cursor.execute("ALTER TABLE contacts ADD COLUMN rating INTEGER")
                 self.conn.commit()
-                print("rating column added successfully!")
+                logger.info("rating column added successfully!")
             except Exception as e:
-                print(f"Failed to add rating column: {e}")
+                logger.warning(f"Failed to add rating column: {e}")
         
         # Add outcome column to contacts table if it doesn't exist
         if 'outcome' not in columns:
-            print("Adding outcome column to contacts table...")
+            logger.info("Adding outcome column to contacts table...")
             try:
                 cursor.execute("ALTER TABLE contacts ADD COLUMN outcome TEXT DEFAULT 'continue' CHECK(outcome IN ('continue', 'ace', 'kill', 'error', 'down', 'stuff', 'assist', 'fault'))")
                 self.conn.commit()
-                print("outcome column added successfully!")
+                logger.info("outcome column added successfully!")
             except Exception as e:
-                print(f"Failed to add outcome column: {e}")
+                logger.warning(f"Failed to add outcome column: {e}")
         
         # Add outcome_manual and rating_manual columns to contacts table if they don't exist
         cursor.execute("PRAGMA table_info(contacts)")
         columns = [row[1] for row in cursor.fetchall()]
         if 'outcome_manual' not in columns:
-            print("Adding outcome_manual column to contacts table...")
+            logger.info("Adding outcome_manual column to contacts table...")
             try:
                 cursor.execute("ALTER TABLE contacts ADD COLUMN outcome_manual INTEGER DEFAULT 0")
                 self.conn.commit()
-                print("outcome_manual column added successfully!")
+                logger.info("outcome_manual column added successfully!")
             except Exception as e:
-                print(f"Failed to add outcome_manual column: {e}")
+                logger.warning(f"Failed to add outcome_manual column: {e}")
         if 'rating_manual' not in columns:
-            print("Adding rating_manual column to contacts table...")
+            logger.info("Adding rating_manual column to contacts table...")
             try:
                 cursor.execute("ALTER TABLE contacts ADD COLUMN rating_manual INTEGER DEFAULT 0")
                 self.conn.commit()
-                print("rating_manual column added successfully!")
+                logger.info("rating_manual column added successfully!")
             except Exception as e:
-                print(f"Failed to add rating_manual column: {e}")
+                logger.warning(f"Failed to add rating_manual column: {e}")
         
         # Migration: Add game_role_code column to game_players table if it doesn't exist
         cursor.execute("PRAGMA table_info(game_players)")
         game_players_columns = [row[1] for row in cursor.fetchall()]
         if 'game_role_code' not in game_players_columns:
-            print("Adding game_role_code column to game_players table...")
+            logger.info("Adding game_role_code column to game_players table...")
             try:
                 cursor.execute("ALTER TABLE game_players ADD COLUMN game_role_code TEXT")
                 self.conn.commit()
-                print("game_role_code column added successfully!")
+                logger.info("game_role_code column added successfully!")
             except Exception as e:
-                print(f"Failed to add game_role_code column: {e}")
+                logger.warning(f"Failed to add game_role_code column: {e}")
         
         if 'outcome' in columns:
             # Check if the outcome column has the old constraint (without 'stuff', 'assist', or 'fault')
@@ -856,7 +859,7 @@ class VideoStatsDB:
                         missing.append("'assist'")
                     if "'fault'" not in sql:
                         missing.append("'fault'")
-                    print(f"Migrating outcome column constraint to include {', '.join(missing)}...")
+                    logger.info(f"Migrating outcome column constraint to include {', '.join(missing)}...")
                     try:
                         # Create new table with updated constraint
                         cursor.execute("""
@@ -920,45 +923,45 @@ class VideoStatsDB:
                         cursor.execute("CREATE INDEX IF NOT EXISTS idx_contacts_type ON contacts(contact_type)")
                         
                         self.conn.commit()
-                        print("Outcome column constraint migration completed successfully!")
+                        logger.info("Outcome column constraint migration completed successfully!")
                     except Exception as e:
                         self.conn.rollback()
-                        print(f"Migration failed: {e}. You may need to manually migrate the database.")
+                        logger.error(f"Migration failed: {e}. You may need to manually migrate the database.")
         
         # Add video_file_path column to games table if it doesn't exist
         cursor.execute("PRAGMA table_info(games)")
         columns = [row[1] for row in cursor.fetchall()]
         if 'video_file_path' not in columns:
-            print("Adding video_file_path column to games table...")
+            logger.info("Adding video_file_path column to games table...")
             try:
                 cursor.execute("ALTER TABLE games ADD COLUMN video_file_path TEXT")
                 self.conn.commit()
-                print("video_file_path column added successfully!")
+                logger.info("video_file_path column added successfully!")
             except Exception as e:
-                print(f"Failed to add video_file_path column: {e}")
+                logger.warning(f"Failed to add video_file_path column: {e}")
         
         # Add still_image_path column to games table if it doesn't exist
         if 'still_image_path' not in columns:
-            print("Adding still_image_path column to games table...")
+            logger.info("Adding still_image_path column to games table...")
             try:
                 cursor.execute("ALTER TABLE games ADD COLUMN still_image_path TEXT")
                 self.conn.commit()
-                print("still_image_path column added successfully!")
+                logger.info("still_image_path column added successfully!")
             except Exception as e:
-                print(f"Failed to add still_image_path column: {e}")
+                logger.warning(f"Failed to add still_image_path column: {e}")
         
         # Add is_ended column to games table if it doesn't exist
         # Refresh columns list after previous additions
         cursor.execute("PRAGMA table_info(games)")
         columns = [row[1] for row in cursor.fetchall()]
         if 'is_ended' not in columns:
-            print("Adding is_ended column to games table...")
+            logger.info("Adding is_ended column to games table...")
             try:
                 cursor.execute("ALTER TABLE games ADD COLUMN is_ended BOOLEAN DEFAULT 0")
                 self.conn.commit()
-                print("is_ended column added successfully!")
+                logger.info("is_ended column added successfully!")
             except Exception as e:
-                print(f"Failed to add is_ended column: {e}")
+                logger.warning(f"Failed to add is_ended column: {e}")
         
         # Add court boundary columns to games table if they don't exist
         court_columns = [
@@ -975,23 +978,23 @@ class VideoStatsDB:
         ]
         for col in court_columns:
             if col not in columns:
-                print(f"Adding {col} column to games table...")
+                logger.info(f"Adding {col} column to games table...")
                 try:
                     cursor.execute(f"ALTER TABLE games ADD COLUMN {col} REAL")
                     self.conn.commit()
-                    print(f"{col} column added successfully!")
+                    logger.info(f"{col} column added successfully!")
                 except Exception as e:
-                    print(f"Failed to add {col} column: {e}")
+                    logger.warning(f"Failed to add {col} column: {e}")
         
         # Add homography_matrix column to games table if it doesn't exist
         if 'homography_matrix' not in columns:
-            print("Adding homography_matrix column to games table...")
+            logger.info("Adding homography_matrix column to games table...")
             try:
                 cursor.execute("ALTER TABLE games ADD COLUMN homography_matrix TEXT")
                 self.conn.commit()
-                print("homography_matrix column added successfully!")
+                logger.info("homography_matrix column added successfully!")
             except Exception as e:
-                print(f"Failed to add homography_matrix column: {e}")
+                logger.warning(f"Failed to add homography_matrix column: {e}")
         
         # Add scroll offset columns to games table if they don't exist
         scroll_columns = ['scroll_offset_x', 'scroll_offset_y', 'video_offset_x', 'video_offset_y',
@@ -999,13 +1002,13 @@ class VideoStatsDB:
         for col in scroll_columns:
             col_type = 'REAL' if col in ['video_width', 'video_height', 'scene_width', 'scene_height'] else 'INTEGER'
             if col not in columns:
-                print(f"Adding {col} column to games table...")
+                logger.info(f"Adding {col} column to games table...")
                 try:
                     cursor.execute(f"ALTER TABLE games ADD COLUMN {col} {col_type} DEFAULT 0")
                     self.conn.commit()
-                    print(f"{col} column added successfully!")
+                    logger.info(f"{col} column added successfully!")
                 except Exception as e:
-                    print(f"Failed to add {col} column: {e}")
+                    logger.warning(f"Failed to add {col} column: {e}")
         
         # The game_players table will be created automatically if it doesn't exist
         # No migration needed as it's a new table
@@ -1016,7 +1019,7 @@ class VideoStatsDB:
             WHERE type='table' AND name='player_stats'
         """)
         if not cursor.fetchone():
-            print("Creating player_stats table...")
+            logger.info("Creating player_stats table...")
             cursor.execute("""
                 CREATE TABLE player_stats (
                     stat_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1060,43 +1063,43 @@ class VideoStatsDB:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_player_stats_game ON player_stats(game_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_player_stats_player ON player_stats(player_id)")
             self.conn.commit()
-            print("player_stats table created successfully!")
+            logger.info("player_stats table created successfully!")
         
         # Add new columns to players table for lineup management
         cursor.execute("PRAGMA table_info(players)")
         columns = [row[1] for row in cursor.fetchall()]
         
         if 'role_code' not in columns:
-            print("Adding role_code column to players table...")
+            logger.info("Adding role_code column to players table...")
             try:
                 cursor.execute("ALTER TABLE players ADD COLUMN role_code TEXT")
                 self.conn.commit()
-                print("role_code column added successfully!")
+                logger.info("role_code column added successfully!")
             except Exception as e:
-                print(f"Failed to add role_code column: {e}")
+                logger.warning(f"Failed to add role_code column: {e}")
         
         if 'is_active' not in columns:
-            print("Adding is_active column to players table...")
+            logger.info("Adding is_active column to players table...")
             try:
                 cursor.execute("ALTER TABLE players ADD COLUMN is_active BOOLEAN DEFAULT 0")
                 self.conn.commit()
-                print("is_active column added successfully!")
+                logger.info("is_active column added successfully!")
             except Exception as e:
-                print(f"Failed to add is_active column: {e}")
+                logger.warning(f"Failed to add is_active column: {e}")
         
         if 'jersey' not in columns:
-            print("Adding jersey column to players table...")
+            logger.info("Adding jersey column to players table...")
             try:
                 cursor.execute("ALTER TABLE players ADD COLUMN jersey INTEGER")
                 self.conn.commit()
-                print("jersey column added successfully!")
+                logger.info("jersey column added successfully!")
             except Exception as e:
-                print(f"Failed to add jersey column: {e}")
+                logger.warning(f"Failed to add jersey column: {e}")
         
         # Ensure positions table is populated
         cursor.execute("SELECT COUNT(*) FROM positions")
         if cursor.fetchone()[0] == 0:
-            print("Populating positions table...")
+            logger.info("Populating positions table...")
             positions_data = [
                 (1, 'Right Back', 'RB', 'Back', 'Right', 299, 0),
                 (2, 'Right Front', 'RF', 'Front', 'Right', 299, 299),
@@ -1110,7 +1113,7 @@ class VideoStatsDB:
                 positions_data
             )
             self.conn.commit()
-            print("Positions table populated successfully!")
+            logger.info("Positions table populated successfully!")
     
     # Helper methods for common operations
     
@@ -1294,7 +1297,7 @@ class VideoStatsDB:
             self.conn.commit()
             return cursor.rowcount > 0
         except Exception as e:
-            print(f"Error deleting contact {contact_id}: {e}")
+            logger.error(f"Error deleting contact {contact_id}: {e}")
             return False
     
     def get_rally_contacts(self, rally_id: int) -> list:
@@ -1634,7 +1637,7 @@ class VideoStatsDB:
               homography_json, scroll_offset_x, scroll_offset_y, video_offset_x, video_offset_y,
               video_width, video_height, scene_width, scene_height, game_id))
         self.conn.commit()
-        print(f"DEBUG: Court boundaries saved for game {game_id} with scroll offsets X:{scroll_offset_x}, Y:{scroll_offset_y}")
+        logger.debug(f"Court boundaries saved for game {game_id} with scroll offsets X:{scroll_offset_x}, Y:{scroll_offset_y}")
     
     def get_game_court_boundaries(self, game_id: int) -> Optional[dict]:
         """Get court boundary coordinates for a game.
@@ -1680,7 +1683,7 @@ class VideoStatsDB:
                 homography_list = json.loads(result[20])
                 homography_matrix = np.array(homography_list, dtype=np.float32)
             except Exception as e:
-                print(f"Warning: Failed to deserialize homography matrix: {e}")
+                logger.warning(f"Failed to deserialize homography matrix: {e}")
         
         # Get scroll offsets and dimensions (default to 0 if not present or None)
         scroll_offset_x = result[21] if len(result) > 21 and result[21] is not None else 0
@@ -1871,5 +1874,5 @@ if __name__ == "__main__":
     # Initialize the database
     db = VideoStatsDB()
     db.initialize_database()
-    print("VideoStats database initialized successfully!")
+    logger.info("VideoStats database initialized successfully!")
 
