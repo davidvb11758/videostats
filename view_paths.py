@@ -22,7 +22,7 @@ from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
 from PySide6.QtUiTools import QUiLoader
 from database import VideoStatsDB
 from coordinate_mapper import CoordinateMapper
-from utils import resource_path
+from utils import resource_path, get_ffmpeg_path
 from typing import Optional, List, Tuple
 
 
@@ -41,6 +41,9 @@ class VideoClipExtractor(QThread):
     def run(self):
         """Extract video clip using ffmpeg."""
         try:
+            # Get bundled ffmpeg path
+            ffmpeg_exe = get_ffmpeg_path()
+            
             # Convert milliseconds to seconds for ffmpeg
             start_seconds = self.start_ms / 1000.0
             duration_seconds = self.duration_ms / 1000.0
@@ -48,7 +51,7 @@ class VideoClipExtractor(QThread):
             # ffmpeg command to extract clip
             # -ss: start time, -t: duration, -c copy: copy codec (fast, no re-encoding)
             cmd = [
-                'ffmpeg',
+                str(ffmpeg_exe),
                 '-ss', str(start_seconds),
                 '-i', self.input_path,
                 '-t', str(duration_seconds),
@@ -73,7 +76,7 @@ class VideoClipExtractor(QThread):
                 self.finished.emit(False, f"FFmpeg error:\n{error_msg}")
                 
         except FileNotFoundError:
-            self.finished.emit(False, "FFmpeg not found. Please install FFmpeg and add it to your PATH.")
+            self.finished.emit(False, f"FFmpeg not found at: {get_ffmpeg_path()}")
         except Exception as e:
             self.finished.emit(False, f"Error extracting clip:\n{str(e)}")
 
@@ -3068,11 +3071,12 @@ class ContactPathViewer(QMainWindow):
                 clip_path = temp_dir / clip_filename
                 
                 # Extract clip using ffmpeg
+                ffmpeg_exe = get_ffmpeg_path()
                 start_seconds = start_ms / 1000.0
                 duration_seconds = duration_ms / 1000.0
                 
                 cmd = [
-                    'ffmpeg',
+                    str(ffmpeg_exe),
                     '-ss', str(start_seconds),
                     '-i', video_path,
                     '-t', str(duration_seconds),
@@ -3132,7 +3136,8 @@ class ContactPathViewer(QMainWindow):
             
             # Build ffmpeg command with filter_complex pattern
             # Pattern: -i for each file, then filter_complex with fps filters and concat
-            cmd = ['ffmpeg']
+            ffmpeg_exe = get_ffmpeg_path()
+            cmd = [str(ffmpeg_exe)]
             
             # Add -i for each input file
             for input_file in input_files:
@@ -3194,7 +3199,7 @@ class ContactPathViewer(QMainWindow):
         except FileNotFoundError:
             progress.close()
             QMessageBox.warning(self, "FFmpeg Not Found", 
-                              "FFmpeg not found. Please install FFmpeg and add it to your PATH.")
+                              f"FFmpeg not found at: {get_ffmpeg_path()}")
         except Exception as e:
             progress.close()
             QMessageBox.warning(self, "Error", f"Error creating highlight video:\n{str(e)}")

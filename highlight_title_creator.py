@@ -12,6 +12,7 @@ import os
 import json
 import subprocess
 from pathlib import Path
+from utils import get_ffmpeg_path
 
 # ---------------------------
 # Video settings
@@ -452,9 +453,10 @@ class MovieMakerGUI(QMainWindow):
             final_video.write_videofile(temp_output, fps=fps, audio=False)  # Generate without audio first
             
             # Add audio channel using ffmpeg with anullsrc filter
+            ffmpeg_exe = get_ffmpeg_path()
             output_file = "output.mp4"
             cmd = [
-                'ffmpeg',
+                str(ffmpeg_exe),
                 '-i', temp_output,  # Input video
                 '-f', 'lavfi',  # Use libavfilter input
                 '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000',  # Generate silent audio

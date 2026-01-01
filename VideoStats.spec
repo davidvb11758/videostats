@@ -29,6 +29,8 @@ a = Analysis(
         ('highlight_title_creator.py', '.'),
         # Include Vosk speech recognition model directory
         ('vosk-model-smEng', 'vosk-model-smEng'),
+        # Include ffmpeg directory with executable
+        ('ffmpeg', 'ffmpeg'),
     ],
     hiddenimports=[
         'PySide6.QtCore',

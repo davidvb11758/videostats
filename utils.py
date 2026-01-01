@@ -78,6 +78,23 @@ def get_database_path():
     return user_data_dir / 'videostats.db'
 
 
+def get_ffmpeg_path():
+    """
+    Get the path to the bundled ffmpeg executable.
+    Works in both development and PyInstaller frozen mode.
+    
+    Returns:
+        Path: Path to ffmpeg.exe
+    """
+    if sys.platform == 'win32':
+        ffmpeg_path = resource_path("ffmpeg/bin/ffmpeg.exe")
+    else:
+        # Linux/macOS - use ffmpeg from PATH or bundled location
+        ffmpeg_path = resource_path("ffmpeg/bin/ffmpeg")
+    
+    return ffmpeg_path
+
+
 def initialize_app():
     """
     One-time initialization code for the application.
