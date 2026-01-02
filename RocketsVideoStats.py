@@ -109,6 +109,9 @@ class RocketsVideoStatsWindow(QMainWindow):
         if hasattr(self.ui, 'btn_view_paths'):
             self.ui.btn_view_paths.clicked.connect(self.view_ball_paths)
         
+        if hasattr(self.ui, 'btn_debug_replay'):
+            self.ui.btn_debug_replay.clicked.connect(self.debug_replay_contacts)
+        
         if hasattr(self.ui, 'btn_resume_game'):
             self.ui.btn_resume_game.clicked.connect(self.resume_data_entry)
         
@@ -286,6 +289,43 @@ class RocketsVideoStatsWindow(QMainWindow):
                 f"Failed to open ball paths viewer:\n{str(e)}"
             )
             self.update_status_label(f"Error opening ball paths viewer: {str(e)}")
+    
+    def debug_replay_contacts(self):
+        """Open the debug replay contacts window for the selected game."""
+        game_id = self.get_selected_game_id()
+        
+        if not game_id:
+            QMessageBox.warning(
+                self,
+                "No Game Selected",
+                "Please select a game from the dropdown before opening debug replay."
+            )
+            return
+        
+        try:
+            from debug_replay_contacts import DebugReplayContactsWindow
+            
+            debug_window = DebugReplayContactsWindow(db=self.db, game_id=game_id)
+            # Store reference to prevent garbage collection
+            if not hasattr(self, '_debug_windows'):
+                self._debug_windows = []
+            self._debug_windows.append(debug_window)
+            
+            debug_window.show()
+            debug_window.raise_()
+            debug_window.activateWindow()
+            
+            self.update_status_label(f"Debug replay contacts opened for Game {game_id}")
+            
+        except Exception as e:
+            import traceback
+            error_msg = f"Failed to open debug replay contacts:\n{str(e)}\n\n{traceback.format_exc()}"
+            QMessageBox.critical(
+                self,
+                "Error",
+                error_msg
+            )
+            self.update_status_label(f"Error opening debug replay contacts: {str(e)}")
     
     def resume_data_entry(self):
         """Open data entry window for the selected game."""

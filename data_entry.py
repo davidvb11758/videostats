@@ -90,6 +90,9 @@ class DataEntryWindow(QMainWindow):
         # Track which team should serve next after a point is awarded
         self.expected_next_server_team_id = None
         
+        # Thread lock for contact writing to prevent race conditions
+        self._contact_write_lock = threading.Lock()
+        
         # Setup UI first (populate games dropdown)
         self.setup_ui()
         self.connect_signals()
@@ -369,10 +372,39 @@ class DataEntryWindow(QMainWindow):
         if hasattr(self.ui, 'tempXYcoord'):
             self.ui.tempXYcoord.setText(f"DOWN @ ({logical_x:.2f}, {logical_y:.2f}) @ {timecode_str}")
         
-        self.status_label.setText(f"Recording DOWN contact at ({logical_x:.2f}, {logical_y:.2f})...")
+        # Add DOWN contact to pending_contacts queue to maintain timecode order
+        # Check if there are incomplete team_us contacts (voice pending)
+        has_incomplete_contacts = False
+        if hasattr(self, 'pending_contacts'):
+            incomplete_count = len([c for c in self.pending_contacts if not c['is_complete']])
+            has_incomplete_contacts = incomplete_count > 0
         
-        # Record the DOWN contact (this is a manual recording, not automatic error assignment)
-        self.record_contact("down")
+        # Add complete DOWN contact to pending_contacts
+        if hasattr(self, 'pending_contacts'):
+            self.pending_contacts.append({
+                'team_id': losing_team_id,
+                'player_id': None,
+                'player_number': None,
+                'contact_type': 'down',
+                'x': logical_x,
+                'y': logical_y,
+                'timecode_ms': timecode_ms,
+                'is_complete': True
+            })
+            
+            if has_incomplete_contacts:
+                # Wait for earlier contacts to complete before writing
+                incomplete_count = len([c for c in self.pending_contacts if not c['is_complete']])
+                complete_count = len([c for c in self.pending_contacts if c['is_complete']])
+                self.status_label.setText(f"Queued DOWN contact ({complete_count} complete, {incomplete_count} pending)...")
+            else:
+                # No incomplete contacts, write all complete contacts in timecode order
+                self.write_pending_contacts_sorted()
+                self.status_label.setText(f"Recorded DOWN contact at ({logical_x:.2f}, {logical_y:.2f})")
+        else:
+            # Fallback: write directly if pending_contacts not available
+            self.status_label.setText(f"Recording DOWN contact at ({logical_x:.2f}, {logical_y:.2f})...")
+            self.record_contact("down")
     
     def setup_ui(self):
         """Set up the UI with score display and status."""
@@ -2159,9 +2191,45 @@ class DataEntryWindow(QMainWindow):
                         self.selected_player_id = None
                         self.selected_player_number = None
                         self.selected_team_id = team_id
-                        if hasattr(self, 'status_label'):
-                            self.status_label.setText("Recording floor contact (down)...")
-                        self.record_contact("down")
+                        
+                        # Check if there are incomplete team_us contacts (voice pending)
+                        # If so, add to pending_contacts queue to maintain timecode order
+                        has_incomplete_contacts = False
+                        if hasattr(self, 'pending_contacts'):
+                            incomplete_count = len([c for c in self.pending_contacts if not c['is_complete']])
+                            has_incomplete_contacts = incomplete_count > 0
+                        
+                        # For team_them contacts, always use pending_contacts queue to maintain timecode order
+                        if team_id == self.team_them_id:
+                            # Add complete DOWN contact to pending_contacts
+                            if hasattr(self, 'pending_contacts'):
+                                self.pending_contacts.append({
+                                    'team_id': team_id,
+                                    'player_id': None,
+                                    'player_number': None,
+                                    'contact_type': 'down',
+                                    'x': x_coord,
+                                    'y': y_coord,
+                                    'timecode_ms': self.last_clicked_timecode,
+                                    'is_complete': True
+                                })
+                                
+                                if has_incomplete_contacts:
+                                    # Wait for earlier contacts to complete before writing
+                                    incomplete_count = len([c for c in self.pending_contacts if not c['is_complete']])
+                                    complete_count = len([c for c in self.pending_contacts if c['is_complete']])
+                                    if hasattr(self, 'status_label'):
+                                        self.status_label.setText(f"Queued DOWN contact ({complete_count} complete, {incomplete_count} pending)...")
+                                else:
+                                    # No incomplete contacts, write all complete contacts in timecode order
+                                    self.write_pending_contacts_sorted()
+                                    if hasattr(self, 'status_label'):
+                                        self.status_label.setText("Recorded DOWN contact")
+                        else:
+                            # Team_us contact - write directly
+                            if hasattr(self, 'status_label'):
+                                self.status_label.setText("Recording floor contact (down)...")
+                            self.record_contact("down")
                     else:
                         # Set the selected player
                         self.selected_player_id = player_id_or_down
@@ -2181,11 +2249,45 @@ class DataEntryWindow(QMainWindow):
                             player_number, player_name = player_info
                             self.selected_player_number = str(player_number)
                             player_display = f"#{player_number} {player_name}" if player_name else f"#{player_number}"
+                        
+                        # Check if there are incomplete team_us contacts (voice pending)
+                        # If so, add to pending_contacts queue to maintain timecode order
+                        has_incomplete_contacts = False
+                        if hasattr(self, 'pending_contacts'):
+                            incomplete_count = len([c for c in self.pending_contacts if not c['is_complete']])
+                            has_incomplete_contacts = incomplete_count > 0
+                        
+                        # For team_them contacts, always use pending_contacts queue to maintain timecode order
+                        if team_id == self.team_them_id:
+                            # Add complete team_them contact to pending_contacts
+                            if hasattr(self, 'pending_contacts'):
+                                self.pending_contacts.append({
+                                    'team_id': team_id,
+                                    'player_id': player_id_or_down,
+                                    'player_number': str(player_number) if player_info else None,
+                                    'contact_type': action_type,
+                                    'x': x_coord,
+                                    'y': y_coord,
+                                    'timecode_ms': self.last_clicked_timecode,
+                                    'is_complete': True
+                                })
+                                
+                                if has_incomplete_contacts:
+                                    # Wait for earlier contacts to complete before writing
+                                    incomplete_count = len([c for c in self.pending_contacts if not c['is_complete']])
+                                    complete_count = len([c for c in self.pending_contacts if c['is_complete']])
+                                    if hasattr(self, 'status_label'):
+                                        self.status_label.setText(f"Queued {player_display} {action_type} ({complete_count} complete, {incomplete_count} pending)...")
+                                else:
+                                    # No incomplete contacts, write all complete contacts in timecode order
+                                    self.write_pending_contacts_sorted()
+                                    if hasattr(self, 'status_label'):
+                                        self.status_label.setText(f"Recorded {player_display} {action_type}")
+                        else:
+                            # Team_us contact - write directly
                             if hasattr(self, 'status_label'):
                                 self.status_label.setText(f"Selected: {player_display} - Recording {action_type}...")
-                        
-                        # Record the contact with the selected action type
-                        self.record_contact(action_type)
+                            self.record_contact(action_type)
             except UnboundLocalError as e:
                 error_msg = str(e)
                 self.logger.error(f"UnboundLocalError in show_player_selection_dialog (new UI): {error_msg}")
@@ -2715,45 +2817,85 @@ class DataEntryWindow(QMainWindow):
         
         This ensures contacts are written in chronological order regardless of when
         voice recognition completes or when contacts become available.
+        
+        Thread-safe: Uses a lock to prevent concurrent execution and race conditions.
         """
-        if not hasattr(self, 'pending_contacts') or not self.pending_contacts:
-            return
-        
-        # Filter to only complete contacts
-        complete_contacts = [c for c in self.pending_contacts if c['is_complete']]
-        
-        if not complete_contacts:
-            return
-        
-        # Sort by timecode (ascending)
-        complete_contacts.sort(key=lambda c: c['timecode_ms'] or 0)
-        
-        self.logger.debug(f"Writing {len(complete_contacts)} complete contacts in timecode order")
-        
-        # Write each contact in order
-        written_timecodes = set()
-        for contact in complete_contacts:
-            # Set up for recording
-            self.selected_team_id = contact['team_id']
-            self.selected_player_id = contact['player_id']
-            self.selected_player_number = contact['player_number']
-            self.last_clicked_x = contact['x']
-            self.last_clicked_y = contact['y']
-            self.last_clicked_timecode = contact['timecode_ms']
+        # Acquire lock to prevent concurrent execution
+        with self._contact_write_lock:
+            if not hasattr(self, 'pending_contacts') or not self.pending_contacts:
+                return
             
-            self.logger.debug(f"Writing contact: team_id={contact['team_id']}, player={contact['player_number']}, "
-                            f"type={contact['contact_type']}, timecode={contact['timecode_ms']}ms")
+            # Filter to only complete contacts
+            complete_contacts = [c for c in self.pending_contacts if c['is_complete']]
             
-            # Record the contact
-            self.record_contact(contact['contact_type'])
+            if not complete_contacts:
+                return
             
-            # Track written timecodes
-            written_timecodes.add(contact['timecode_ms'])
-        
-        # Remove written contacts from pending list
-        self.pending_contacts = [c for c in self.pending_contacts if c['timecode_ms'] not in written_timecodes]
-        
-        self.logger.debug(f"Remaining pending contacts: {len(self.pending_contacts)}")
+            # Sort by timecode (ascending)
+            complete_contacts.sort(key=lambda c: c['timecode_ms'] or 0)
+            
+            self.logger.debug(f"Writing {len(complete_contacts)} complete contacts in timecode order")
+            
+            # Calculate starting sequence number once to prevent race conditions
+            if not self.rally_in_progress or not self.current_rally_id:
+                self.logger.warning("Cannot write contacts: no active rally")
+                return
+            
+            start_sequence = self.db.get_current_rally_sequence(self.current_rally_id)
+            self.logger.debug(f"Starting sequence number: {start_sequence}")
+            
+            # Create set of written contacts using timecode + team_id + x + y as unique identifier
+            # (timecode alone might not be unique if contacts happen at exact same time)
+            written_contact_ids = set()
+            
+            # Write each contact in order with pre-assigned sequence numbers
+            for idx, contact in enumerate(complete_contacts):
+                # Set up for recording
+                self.selected_team_id = contact['team_id']
+                self.selected_player_id = contact['player_id']
+                self.selected_player_number = contact['player_number']
+                self.last_clicked_x = contact['x']
+                self.last_clicked_y = contact['y']
+                self.last_clicked_timecode = contact['timecode_ms']
+                
+                # Set sequence number before calling record_contact to avoid recalculation
+                assigned_sequence = start_sequence + idx
+                self.current_sequence = assigned_sequence
+                
+                self.logger.debug(f"Writing contact: team_id={contact['team_id']}, player={contact['player_number']}, "
+                                f"type={contact['contact_type']}, timecode={contact['timecode_ms']}ms, sequence={assigned_sequence}")
+                
+                # Set batch write flag to prevent record_contact from recalculating sequence
+                self._in_batch_write = True
+                try:
+                    # Record the contact (will use pre-set self.current_sequence)
+                    self.record_contact(contact['contact_type'])
+                finally:
+                    self._in_batch_write = False
+                
+                # Create unique identifier for this contact (timecode + team_id + x + y)
+                contact_id = (
+                    contact['timecode_ms'],
+                    contact['team_id'],
+                    contact.get('x'),
+                    contact.get('y')
+                )
+                written_contact_ids.add(contact_id)
+            
+            # Remove written contacts from pending list (using unique identifiers)
+            remaining_contacts = []
+            for contact in self.pending_contacts:
+                contact_id = (
+                    contact.get('timecode_ms'),
+                    contact.get('team_id'),
+                    contact.get('x'),
+                    contact.get('y')
+                )
+                if contact_id not in written_contact_ids:
+                    remaining_contacts.append(contact)
+            
+            self.pending_contacts = remaining_contacts
+            self.logger.debug(f"Remaining pending contacts: {len(self.pending_contacts)}")
     
     def process_contact_queue(self):
         """Process queued contacts in order (maintains click order when voice input is used).
@@ -2854,7 +2996,9 @@ class DataEntryWindow(QMainWindow):
             if hasattr(self, 'selected_player_id') and self.selected_player_id is not None:
                 player_id = self.selected_player_id
             
-            self.current_sequence = self.db.get_current_rally_sequence(self.current_rally_id)
+            # Only recalculate sequence if not in batch write (batch write sets it beforehand)
+            if not getattr(self, '_in_batch_write', False):
+                self.current_sequence = self.db.get_current_rally_sequence(self.current_rally_id)
         
         # Add contact to database
         try:
