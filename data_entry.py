@@ -17,212 +17,7 @@ from utils import resource_path
 from logging_config import get_logger
 import json
 import threading
-
-
-# Voice recognition imports - optional if vosk is not installed
-try:
-    from vosk import Model, KaldiRecognizer
-    import pyaudio
-    VOSK_AVAILABLE = True
-except ImportError:
-    VOSK_AVAILABLE = False
-    print("Warning: vosk or pyaudio not installed. Voice input will be disabled.")
-
-
-class VoiceRecognizer(QObject):
-    """Voice recognition handler for player-action pairs."""
-    
-    # Signal emitted when a player-action pair is recognized
-    pair_recognized = Signal(str, str)  # (player_word, action_word)
-    # Signal for status updates
-    status_update = Signal(str)
-    # Signal when listening starts/stops
-    listening_changed = Signal(bool)
-    
-    # Word-to-number mapping for spoken numbers
-    WORD_TO_NUMBER = {
-        "zero": "0", "one": "1", "two": "2", "three": "3", "four": "4",
-        "five": "5", "six": "6", "seven": "7", "eight": "8", "nine": "9",
-        "ten": "10", "eleven": "11", "twelve": "12", "thirteen": "13",
-        "fourteen": "14", "fifteen": "15", "sixteen": "16", "seventeen": "17",
-        "eighteen": "18", "nineteen": "19", "twenty": "20",
-        # Also accept digit strings directly
-        "0": "0", "1": "1", "2": "2", "3": "3", "4": "4",
-        "5": "5", "6": "6", "7": "7", "8": "8", "9": "9",
-        "10": "10", "11": "11", "12": "12", "13": "13", "14": "14",
-        "15": "15", "16": "16", "17": "17", "18": "18", "19": "19", "20": "20",
-    }
-    
-    # Valid action words
-    VALID_ACTIONS = {
-        "serve": "serve", "receive": "receive", "pass": "pass", "dig": "pass",
-        "set": "set", "attack": "attack", "hit": "attack",
-        "free": "freeball", "freeball": "freeball",
-        "block": "block", "down": "down",
-        "net": "net", "fault": "fault"
-    }
-    
-    def __init__(self, model_path: str = None):
-        super().__init__()
-        self.logger = get_logger('data_entry.voice')
-        if model_path is None:
-            # Use resource_path to find model in project directory (works in dev and PyInstaller)
-            model_path = str(resource_path("vosk-model-smEng"))
-        self.model_path = model_path
-        self.model = None
-        self.recognizer = None
-        self.audio_stream = None
-        self.pyaudio_instance = None
-        self._is_listening = False
-        self._stop_requested = False
-        self._listen_thread = None
-        self._words_buffer = []  # Buffer to collect words for pairing
-        
-    def initialize(self) -> bool:
-        """Initialize the voice recognition model and audio. Returns True if successful."""
-        if not VOSK_AVAILABLE:
-            self.status_update.emit("Voice recognition not available - vosk/pyaudio not installed")
-            return False
-        
-        try:
-            self.status_update.emit("Loading voice model...")
-            self.model = Model(self.model_path)
-            
-            # Define grammar for restricted vocabulary
-            number_words = [
-                "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
-                "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen",
-                "seventeen", "eighteen", "nineteen", "twenty"
-            ]
-            digits = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", 
-                     "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20"]
-            actions = ["serve", "receive", "pass", "dig", "set", "attack", "hit",
-                      "free", "freeball", "block", "down", "net", "fault"]
-            
-            grammar = digits + number_words + actions
-            
-            self.recognizer = KaldiRecognizer(self.model, 16000)
-            self.recognizer.SetGrammar(json.dumps(grammar))
-            
-            # Initialize audio
-            self.pyaudio_instance = pyaudio.PyAudio()
-            
-            self.status_update.emit("Voice model loaded successfully")
-            return True
-            
-        except Exception as e:
-            self.status_update.emit(f"Failed to initialize voice recognition: {str(e)}")
-            return False
-    
-    def start_listening(self):
-        """Start listening for voice input in background thread."""
-        if not self.model or not self.recognizer:
-            if not self.initialize():
-                return
-        
-        if self._is_listening:
-            return
-        
-        self._stop_requested = False
-        self._words_buffer = []
-        self._listen_thread = threading.Thread(target=self._listen_loop, daemon=True)
-        self._listen_thread.start()
-        self._is_listening = True
-        self.listening_changed.emit(True)
-        self.status_update.emit("Voice input active - speak player number and action")
-    
-    def stop_listening(self):
-        """Stop listening for voice input."""
-        self._stop_requested = True
-        if self.audio_stream:
-            try:
-                self.audio_stream.stop_stream()
-                self.audio_stream.close()
-            except:
-                pass
-            self.audio_stream = None
-        self._is_listening = False
-        self.listening_changed.emit(False)
-        self.status_update.emit("Voice input stopped")
-    
-    def _listen_loop(self):
-        """Main listening loop - runs in background thread."""
-        try:
-            self.audio_stream = self.pyaudio_instance.open(
-                format=pyaudio.paInt16,
-                channels=1,
-                rate=16000,
-                input=True,
-                frames_per_buffer=8000
-            )
-            self.audio_stream.start_stream()
-            
-            while not self._stop_requested:
-                try:
-                    data = self.audio_stream.read(4000, exception_on_overflow=False)
-                    if self.recognizer.AcceptWaveform(data):
-                        result = json.loads(self.recognizer.Result())
-                        text = result.get("text", "").strip()
-                        
-                        if text:
-                            self._process_recognized_text(text)
-                except Exception as e:
-                    if not self._stop_requested:
-                        print(f"Voice recognition error: {e}")
-                        
-        except Exception as e:
-            self.status_update.emit(f"Audio stream error: {str(e)}")
-        finally:
-            self._is_listening = False
-            self.listening_changed.emit(False)
-    
-    def _process_recognized_text(self, text: str):
-        """Process recognized text and emit signals when a valid pair is found."""
-        words = text.lower().split()
-        self.logger.debug(f"VOICE: Heard raw text: '{text}'")
-        self.logger.debug(f"VOICE: Split words: {words}")
-        self._words_buffer.extend(words)
-        self.logger.debug(f"VOICE: Buffer now: {self._words_buffer}")
-        
-        # Try to form a player-action pair from the buffer
-        while len(self._words_buffer) >= 2:
-            first_word = self._words_buffer[0]
-            second_word = self._words_buffer[1]
-            
-            # Check if first word is a number
-            player_number = self.WORD_TO_NUMBER.get(first_word)
-            # Check if second word is an action
-            action = self.VALID_ACTIONS.get(second_word)
-            
-            self.logger.debug(f"VOICE: Checking pair: '{first_word}' -> player={player_number}, '{second_word}' -> action={action}")
-            
-            if player_number and action:
-                # Valid pair found
-                self._words_buffer = self._words_buffer[2:]  # Remove used words
-                self.logger.debug(f"VOICE: *** VALID PAIR FOUND: Player {player_number}, Action {action} ***")
-                self.pair_recognized.emit(player_number, action)
-                self.status_update.emit(f"Recognized: Player {player_number} - {action}")
-                return
-            else:
-                # First word is not a valid number, skip it
-                if not player_number:
-                    self.logger.debug(f"VOICE: Skipping '{first_word}' - not a valid number")
-                    self._words_buffer.pop(0)
-                # Or second word is not a valid action, skip first word
-                elif not action:
-                    self.logger.debug(f"VOICE: Skipping '{first_word}' - '{second_word}' is not a valid action")
-                    self._words_buffer.pop(0)
-    
-    def is_listening(self) -> bool:
-        """Return whether voice recognition is currently listening."""
-        return self._is_listening
-    
-    def cleanup(self):
-        """Clean up resources."""
-        self.stop_listening()
-        if self.pyaudio_instance:
-            self.pyaudio_instance.terminate()
-            self.pyaudio_instance = None
+from collections import deque
 
 
 class DataEntryWindow(QMainWindow):
@@ -283,22 +78,23 @@ class DataEntryWindow(QMainWindow):
         # 1st opponent contact = pass (dig), 2nd = set, 3rd = attack
         self.opponent_contact_count = 0
         
+        # Contact queue for maintaining click order when voice input is enabled
+        # Queue entries: (team_id, player_id, player_number, contact_type, logical_x, logical_y, timecode_ms)
+        self.contact_queue = deque()  # DEPRECATED: Will be removed after migration to pending_contacts
+        
+        # Unified pending contacts queue for timecode-ordered writes
+        # List of dicts: {team_id, player_id, player_number, contact_type, x, y, timecode_ms, is_complete}
+        # is_complete: True when all data is available (always True for team_them, False for team_us until voice completes)
+        self.pending_contacts = []
+        
         # Track which team should serve next after a point is awarded
         self.expected_next_server_team_id = None
-        
-        # Voice input tracking
-        self.voice_recognizer = None
-        self.use_voice_input = False
-        self.pending_voice_contact_x = None
-        self.pending_voice_contact_y = None
-        self.pending_voice_contact_timecode = None
         
         # Setup UI first (populate games dropdown)
         self.setup_ui()
         self.connect_signals()
         self.setup_court_click_tracking()
         self.setup_coordinate_mapper()
-        self.setup_voice_input()
         
         # Initialize with no game selected - labels start blank
         if hasattr(self.ui, 'team_1_name'):
@@ -346,145 +142,6 @@ class DataEntryWindow(QMainWindow):
             1400   # Height to accommodate 1200 canvas + labels
         )
     
-    def setup_voice_input(self):
-        """Set up voice input functionality."""
-        # Connect checkbox if it exists
-        if hasattr(self.ui, 'checkBox_UseVoiceInput'):
-            self.ui.checkBox_UseVoiceInput.stateChanged.connect(self.on_voice_input_checkbox_changed)
-            # Initialize as unchecked
-            self.ui.checkBox_UseVoiceInput.setChecked(False)
-    
-    def on_voice_input_checkbox_changed(self, state):
-        """Handle voice input checkbox state change."""
-        # In PySide6, stateChanged emits int: 0=Unchecked, 2=Checked
-        self.use_voice_input = (state == Qt.CheckState.Checked.value)
-        self.logger.debug(f"VOICE: Checkbox state changed to {state}, use_voice_input={self.use_voice_input}")
-        
-        if self.use_voice_input:
-            # Initialize voice recognizer if not already done
-            if self.voice_recognizer is None:
-                if not VOSK_AVAILABLE:
-                    QMessageBox.warning(self, "Voice Input Unavailable", 
-                                       "Voice input requires vosk and pyaudio packages.\n"
-                                       "Install them with: pip install vosk pyaudio")
-                    self.ui.checkBox_UseVoiceInput.setChecked(False)
-                    self.use_voice_input = False
-                    return
-                
-                self.voice_recognizer = VoiceRecognizer()
-                self.voice_recognizer.pair_recognized.connect(self.on_voice_pair_recognized)
-                self.voice_recognizer.status_update.connect(self.on_voice_status_update)
-            
-            # Start listening
-            self.voice_recognizer.start_listening()
-            self.status_label.setText("Voice input enabled - click location then speak: [number] [action]")
-        else:
-            # Stop listening
-            if self.voice_recognizer:
-                self.voice_recognizer.stop_listening()
-            self.status_label.setText("Voice input disabled")
-    
-    def on_voice_status_update(self, message: str):
-        """Handle voice recognition status updates."""
-        self.status_label.setText(message)
-    
-    def on_voice_pair_recognized(self, player_number: str, action: str):
-        """Handle recognized player-action pair from voice input."""
-        self.logger.debug(f"VOICE_HANDLER: ========================================")
-        self.logger.debug(f"VOICE_HANDLER: Voice pair recognized - Player: '{player_number}', Action: '{action}'")
-        self.logger.debug(f"VOICE_HANDLER: game_id={self.game_id}, rally_in_progress={self.rally_in_progress}")
-        self.logger.debug(f"VOICE_HANDLER: pending coords: x={self.pending_voice_contact_x}, y={self.pending_voice_contact_y}")
-        
-        if not self.game_id:
-            self.logger.debug(f"VOICE_HANDLER: REJECTED - No game selected")
-            self.status_label.setText("No game selected - cannot record contact")
-            return
-        
-        if not self.rally_in_progress and action != "serve":
-            self.logger.debug(f"VOICE_HANDLER: REJECTED - Rally not started and action is not serve")
-            self.status_label.setText("Rally must start with a serve")
-            return
-        
-        # Check if we have pending coordinates
-        if self.pending_voice_contact_x is None or self.pending_voice_contact_y is None:
-            self.logger.debug(f"VOICE_HANDLER: REJECTED - No pending coordinates")
-            self.status_label.setText(f"Recognized: {player_number} {action} - but no location set. Click on court first.")
-            return
-        
-        # Use the pending coordinates
-        self.last_clicked_x = self.pending_voice_contact_x
-        self.last_clicked_y = self.pending_voice_contact_y
-        self.last_clicked_timecode = self.pending_voice_contact_timecode
-        self.logger.debug(f"VOICE_HANDLER: Using coords: x={self.last_clicked_x}, y={self.last_clicked_y}, timecode={self.last_clicked_timecode}")
-        
-        # Look up the player - for team_us, check active_lineup first
-        if not self.db.conn:
-            self.db.connect()
-        
-        # Determine team - for now assume "our team" (team_us_id) for voice input
-        # The Y coordinate could be used to determine team, but voice is simpler with our team
-        team_id = self.team_us_id
-        self.logger.debug(f"VOICE_HANDLER: Looking up player #{player_number} in team_id={team_id}, game_id={self.game_id}")
-        
-        # For team_us, check active_lineup first
-        player = None
-        if team_id == self.team_us_id:
-            cursor = self.db.conn.cursor()
-            cursor.execute("""
-                SELECT p.player_id, p.player_number, p.name, p.jersey
-                FROM active_lineup al
-                INNER JOIN players p ON al.player_id = p.player_id
-                WHERE al.game_id = ? AND al.team_id = ? 
-                AND (p.player_number = ? OR CAST(p.jersey AS TEXT) = ?)
-            """, (self.game_id, team_id, str(player_number), str(player_number)))
-            result = cursor.fetchone()
-            if result:
-                player = {
-                    'player_id': result[0],
-                    'player_number': result[1],
-                    'name': result[2],
-                    'jersey': result[3]
-                }
-        
-        # Fall back to game_players if not found in active_lineup
-        if not player:
-            player = self.db.get_player_by_number_for_game(self.game_id, team_id, player_number)
-        if not player:
-            self.logger.debug(f"VOICE_HANDLER: REJECTED - Player #{player_number} not found in game roster!")
-            self.status_label.setText(f"Player #{player_number} not found in game roster")
-            # Clear pending coordinates since we couldn't use them
-            self.pending_voice_contact_x = None
-            self.pending_voice_contact_y = None
-            self.pending_voice_contact_timecode = None
-            return
-        
-        self.logger.debug(f"VOICE_HANDLER: Player found! player_id={player['player_id']}")
-        self.selected_player_id = player['player_id']
-        self.selected_player_number = player_number
-        self.selected_team_id = team_id
-        
-        # Handle special actions: "net" and "fault" have outcome "down"
-        # These contacts end the rally
-        if action in ("net", "fault"):
-            self.logger.debug(f"VOICE_HANDLER: Recording net/fault contact...")
-            self.status_label.setText(f"Recording #{player_number} {action} (results in down)...")
-            self.record_contact(action)
-        else:
-            self.logger.debug(f"VOICE_HANDLER: Recording {action} contact...")
-            self.status_label.setText(f"Recording #{player_number} {action}...")
-            self.record_contact(action)
-        
-        # Clear pending coordinates after recording
-        self.pending_voice_contact_x = None
-        self.pending_voice_contact_y = None
-        self.pending_voice_contact_timecode = None
-        self.logger.debug(f"VOICE_HANDLER: Pending coordinates cleared")
-        
-        # Clear pending coordinates after recording
-        self.pending_voice_contact_x = None
-        self.pending_voice_contact_y = None
-        self.pending_voice_contact_timecode = None
-    
     def on_coordinate_mapped(self, logical_x, logical_y, pixel_x, pixel_y, timecode_ms):
         """Handle coordinate mapping from coordinate_mapper."""
         # Always store coordinates when mapper emits them (if mapper is configured)
@@ -525,35 +182,80 @@ class DataEntryWindow(QMainWindow):
                     # Increment opponent contact count
                     self.opponent_contact_count += 1
                     
-                    # Set up for recording the contact
-                    self.selected_team_id = self.team_them_id
-                    self.selected_player_number = opponent_player_number
-                    
                     # Get player_id for the opponent player
                     if not self.db.conn:
                         self.db.connect()
                     player = self.db.get_player_by_number_for_game(self.game_id, self.team_them_id, opponent_player_number)
-                    if player:
-                        self.selected_player_id = player['player_id']
-                    else:
-                        self.selected_player_id = None
+                    player_id = player['player_id'] if player else None
+                    if not player:
                         print(f"Warning: Opponent player {opponent_player_number} not found in game")
                     
-                    # Record the contact automatically
-                    self.status_label.setText(f"Recording opponent #{opponent_player_number} {contact_type} at ({logical_x:.2f}, {logical_y:.2f})...")
-                    self.record_contact(contact_type)
+                    # Check if there are incomplete team_us contacts (voice pending)
+                    # If so, add to pending_contacts queue to maintain timecode order
+                    has_incomplete_contacts = False
+                    if hasattr(self, 'pending_contacts'):
+                        incomplete_count = len([c for c in self.pending_contacts if not c['is_complete']])
+                        has_incomplete_contacts = incomplete_count > 0
+                    
+                    # Add complete team_them contact to pending_contacts
+                    if hasattr(self, 'pending_contacts'):
+                        self.pending_contacts.append({
+                            'team_id': self.team_them_id,
+                            'player_id': player_id,
+                            'player_number': opponent_player_number,
+                            'contact_type': contact_type,
+                            'x': logical_x,
+                            'y': logical_y,
+                            'timecode_ms': timecode_ms,
+                            'is_complete': True
+                        })
+                        
+                        if has_incomplete_contacts:
+                            # Wait for earlier contacts to complete before writing
+                            incomplete_count = len([c for c in self.pending_contacts if not c['is_complete']])
+                            complete_count = len([c for c in self.pending_contacts if c['is_complete']])
+                            self.status_label.setText(f"Queued opponent #{opponent_player_number} {contact_type} ({complete_count} complete, {incomplete_count} pending)...")
+                        else:
+                            # No incomplete contacts, write all complete contacts in timecode order
+                            self.write_pending_contacts_sorted()
+                    else:
+                        # Fallback to old system if pending_contacts not available
+                        has_pending_voice = False
+                        if (self.coordinate_mapper and 
+                            hasattr(self.coordinate_mapper, 'use_voice_input') and 
+                            self.coordinate_mapper.use_voice_input and
+                            hasattr(self.coordinate_mapper, 'voice_input_queue') and
+                            len(self.coordinate_mapper.voice_input_queue) > 0):
+                            has_pending_voice = True
+                        
+                        if has_pending_voice:
+                            # Queue the contact to maintain click order
+                            self.contact_queue.append((
+                                self.team_them_id,
+                                player_id,
+                                opponent_player_number,
+                                contact_type,
+                                logical_x,
+                                logical_y,
+                                timecode_ms
+                            ))
+                            self.status_label.setText(f"Queued opponent #{opponent_player_number} {contact_type} ({len(self.contact_queue)} queued, {len(self.coordinate_mapper.voice_input_queue)} voice pending)...")
+                        else:
+                            # Record the contact immediately (no pending voice inputs)
+                            self.selected_team_id = self.team_them_id
+                            self.selected_player_id = player_id
+                            self.selected_player_number = opponent_player_number
+                            self.status_label.setText(f"Recording opponent #{opponent_player_number} {contact_type} at ({logical_x:.2f}, {logical_y:.2f})...")
+                            self.record_contact(contact_type)
                 else:
                     # Team A contact - reset opponent contact count
                     self.opponent_contact_count = 0
                     
-                    # Check if voice input is enabled
-                    if self.use_voice_input:
-                        # Store coordinates for voice input
-                        self.pending_voice_contact_x = logical_x
-                        self.pending_voice_contact_y = logical_y
-                        self.pending_voice_contact_timecode = timecode_ms
-                        self.logger.debug(f"COORD: Voice mode - stored pending coords: x={logical_x}, y={logical_y}, timecode={timecode_ms}")
-                        self.status_label.setText(f"Location captured ({logical_x:.0f}, {logical_y:.0f}). Now speak: [player number] [action]")
+                    # Check if voice input is enabled in coordinate_mapper
+                    # If so, skip showing popup - voice input will handle it
+                    if hasattr(self.coordinate_mapper, 'use_voice_input') and self.coordinate_mapper.use_voice_input:
+                        # Voice input is enabled, don't show popup - wait for voice input
+                        pass
                     else:
                         # Show player selection dialog for team A
                         team_id = self.team_us_id
@@ -1375,6 +1077,16 @@ class DataEntryWindow(QMainWindow):
             pixel_x: Pixel X coordinate for positioning dialog (optional)
             pixel_y: Pixel Y coordinate for positioning dialog (optional)
         """
+        # Custom dialog class that handles ESC key to reject the dialog
+        class PlayerActionDialog(QDialog):
+            def __init__(self, parent=None):
+                super().__init__(parent)
+            
+            def keyPressEvent(self, event):
+                if event.key() == Qt.Key.Key_Escape:
+                    self.reject()  # Reject dialog when ESC is pressed
+                else:
+                    super().keyPressEvent(event)
         if not self.game_id:
             return
         
@@ -1487,7 +1199,7 @@ class DataEntryWindow(QMainWindow):
                         return
                     
                     # Create dialog and set widget
-                    dialog = QDialog(self.coordinate_mapper if self.coordinate_mapper else self)
+                    dialog = PlayerActionDialog(self.coordinate_mapper if self.coordinate_mapper else self)
                     dialog.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
                     dialog.setModal(True)
                     
@@ -1889,7 +1601,7 @@ class DataEntryWindow(QMainWindow):
                 return
             
             # Create dialog and set widget
-            dialog = QDialog(self.coordinate_mapper if self.coordinate_mapper else self)
+            dialog = PlayerActionDialog(self.coordinate_mapper if self.coordinate_mapper else self)
             # Use Dialog window type instead of Popup to prevent auto-closing
             dialog.setWindowFlags(Qt.Dialog | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
             dialog.setModal(True)
@@ -2514,7 +2226,7 @@ class DataEntryWindow(QMainWindow):
         else:
             # Old dialog implementation for team_them
             # Create compact dialog with no title bar
-            dialog = QDialog(self.coordinate_mapper if self.coordinate_mapper else self)
+            dialog = PlayerActionDialog(self.coordinate_mapper if self.coordinate_mapper else self)
             dialog.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint)
             dialog.setModal(True)
             
@@ -2998,6 +2710,77 @@ class DataEntryWindow(QMainWindow):
         # Record the contact
         self.record_contact(action)
     
+    def write_pending_contacts_sorted(self):
+        """Write all complete pending contacts to DB in ascending timecode order.
+        
+        This ensures contacts are written in chronological order regardless of when
+        voice recognition completes or when contacts become available.
+        """
+        if not hasattr(self, 'pending_contacts') or not self.pending_contacts:
+            return
+        
+        # Filter to only complete contacts
+        complete_contacts = [c for c in self.pending_contacts if c['is_complete']]
+        
+        if not complete_contacts:
+            return
+        
+        # Sort by timecode (ascending)
+        complete_contacts.sort(key=lambda c: c['timecode_ms'] or 0)
+        
+        self.logger.debug(f"Writing {len(complete_contacts)} complete contacts in timecode order")
+        
+        # Write each contact in order
+        written_timecodes = set()
+        for contact in complete_contacts:
+            # Set up for recording
+            self.selected_team_id = contact['team_id']
+            self.selected_player_id = contact['player_id']
+            self.selected_player_number = contact['player_number']
+            self.last_clicked_x = contact['x']
+            self.last_clicked_y = contact['y']
+            self.last_clicked_timecode = contact['timecode_ms']
+            
+            self.logger.debug(f"Writing contact: team_id={contact['team_id']}, player={contact['player_number']}, "
+                            f"type={contact['contact_type']}, timecode={contact['timecode_ms']}ms")
+            
+            # Record the contact
+            self.record_contact(contact['contact_type'])
+            
+            # Track written timecodes
+            written_timecodes.add(contact['timecode_ms'])
+        
+        # Remove written contacts from pending list
+        self.pending_contacts = [c for c in self.pending_contacts if c['timecode_ms'] not in written_timecodes]
+        
+        self.logger.debug(f"Remaining pending contacts: {len(self.pending_contacts)}")
+    
+    def process_contact_queue(self):
+        """Process queued contacts in order (maintains click order when voice input is used).
+        
+        DEPRECATED: This method is kept for backward compatibility but should be replaced
+        by write_pending_contacts_sorted() which maintains timecode order.
+        
+        Processes all queued contacts. These contacts were queued because they came before
+        a voice input that has now been processed, so they should all be processed now
+        to maintain click order.
+        """
+        while self.contact_queue:
+            # Get the next queued contact
+            team_id, player_id, player_number, contact_type, logical_x, logical_y, timecode_ms = self.contact_queue.popleft()
+            
+            # Set up for recording
+            self.selected_team_id = team_id
+            self.selected_player_id = player_id
+            self.selected_player_number = player_number
+            self.last_clicked_x = logical_x
+            self.last_clicked_y = logical_y
+            self.last_clicked_timecode = timecode_ms
+            
+            # Record the contact
+            self.logger.debug(f"Processing queued contact: team_id={team_id}, player={player_number}, type={contact_type}")
+            self.record_contact(contact_type)
+    
     def record_contact(self, contact_type: str):
         """Record a ball contact."""
         # Flag should be set before calling this function to prevent error dialogs from showing
@@ -3022,6 +2805,11 @@ class DataEntryWindow(QMainWindow):
                 QMessageBox.warning(self, "Invalid Action", 
                                   "Rally must start with a serve!")
                 return
+            
+            # Flush pending contacts queue before starting new rally
+            # This ensures all contacts from previous rally are written before next serve
+            if hasattr(self, 'write_pending_contacts_sorted'):
+                self.write_pending_contacts_sorted()
             
             # For serve, determine team from selected player/team
             if not self.selected_team_id:
@@ -3235,8 +3023,6 @@ class DataEntryWindow(QMainWindow):
             if self.use_coordinate_mapper:
                 self.use_coordinate_mapper = False
                 self.status_label.setText(f"Contact recorded: #{recorded_player_number or '?'} {contact_type}. Click for next location.")
-            elif self.use_voice_input:
-                self.status_label.setText(f"Contact recorded: #{recorded_player_number or '?'} {contact_type}. Click for next location, then speak.")
             else:
                 self.status_label.setText(f"Contact recorded: #{recorded_player_number or '?'} {contact_type}. Select player for next contact.")
             
@@ -3954,6 +3740,16 @@ class DataEntryWindow(QMainWindow):
         if not self.game_id:
             QMessageBox.warning(self, "No Game Selected", "Please select a game first!")
             return
+        
+        # Flush pending contacts queue before ending rally to ensure all contacts are written
+        if hasattr(self, 'write_pending_contacts_sorted'):
+            self.write_pending_contacts_sorted()
+        
+        # Verify queue is empty (or log warning if not)
+        if hasattr(self, 'pending_contacts') and self.pending_contacts:
+            incomplete_count = len([c for c in self.pending_contacts if not c['is_complete']])
+            if incomplete_count > 0:
+                self.logger.warning(f"Rally ending with {incomplete_count} incomplete contacts in queue")
         
         # Determine which rally to update - find the most recent rally (the one that just ended)
         rally_id_to_update = None
@@ -5783,8 +5579,6 @@ class DataEntryWindow(QMainWindow):
     
     def closeEvent(self, event):
         """Clean up resources when window is closed."""
-        if self.voice_recognizer:
-            self.voice_recognizer.cleanup()
         event.accept()
     
     def reset_the_game(self):

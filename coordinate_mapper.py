@@ -6,16 +6,19 @@ Uses OpenCV homography for accurate perspective transformation.
 import numpy as np
 import cv2
 import json
+from collections import deque
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGraphicsView, QGraphicsScene,
     QGraphicsEllipseItem, QGraphicsLineItem, QGraphicsTextItem, QApplication, QPushButton,
-    QFileDialog, QSlider, QComboBox, QMessageBox, QDialog, QListWidget, QListWidgetItem, QGridLayout
+    QFileDialog, QSlider, QComboBox, QMessageBox, QDialog, QListWidget, QListWidgetItem, QGridLayout, QCheckBox
 )
 from PySide6.QtCore import Qt, QPointF, QRectF, Signal, QUrl, QTimer, QPoint, QEvent
 from PySide6.QtGui import QPen, QBrush, QColor, QFont, QPainter
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
 from lineup_manager import LineupManager
+from voice_recognizer import VoiceRecognizer, VOSK_AVAILABLE
+from voice_recognizer import VoiceRecognizer, VOSK_AVAILABLE
 
 
 class CoordinateMapper(QMainWindow):
@@ -101,6 +104,11 @@ class CoordinateMapper(QMainWindow):
         self.video_item = None  # Will be created when video is loaded
         self.video_loaded = False
         self.video_file_path = None  # Store the video file path
+        
+        # Voice recognition
+        self.voice_recognizer = None
+        self.use_voice_input = False
+        self.voice_input_queue = deque()  # Queue of (x, y, timecode_ms) tuples for FIFO processing
         
         # Setup UI
         self.setup_ui()
@@ -242,6 +250,14 @@ class CoordinateMapper(QMainWindow):
         
         message_row_layout.addStretch()
         
+        # Voice checkbox - just before Show History
+        self.voice_checkbox = QCheckBox("Voice")
+        self.voice_checkbox.setFont(QFont('Arial', 11))
+        self.voice_checkbox.setStyleSheet("padding: 2px 5px; margin: 0px;")
+        self.voice_checkbox.stateChanged.connect(self.on_voice_checkbox_changed)
+        self.voice_checkbox.setEnabled(VOSK_AVAILABLE and self.db is not None and self.game_id is not None)
+        message_row_layout.addWidget(self.voice_checkbox)
+        
         # Show History link on the right margin
         self.show_history_link = QLabel('<a href="#">Show History</a>')
         self.show_history_link.setFont(QFont('Arial', 11))
@@ -334,6 +350,9 @@ class CoordinateMapper(QMainWindow):
         self.view.viewport().installEventFilter(self)
         self.view.installEventFilter(self)
         self.installEventFilter(self)
+        
+        # Setup voice recognition
+        self.setup_voice_input()
     
     def _button_click_feedback(self, button):
         """Provide visual feedback when a button is clicked by briefly highlighting it."""
@@ -347,9 +366,176 @@ class CoordinateMapper(QMainWindow):
         
         # Reset to original style after 200ms
         QTimer.singleShot(200, lambda: button.setStyleSheet(button._original_style))
+    
+    def setup_voice_input(self):
+        """Set up voice input functionality."""
+        if not VOSK_AVAILABLE:
+            return
         
-        # Update score display after UI is set up
-        self._update_score_display()
+        # Initialize voice recognizer when needed
+        if self.voice_recognizer is None:
+            self.voice_recognizer = VoiceRecognizer()
+            # Connect signals
+            self.voice_recognizer.pair_recognized.connect(self.on_voice_pair_recognized)
+            self.voice_recognizer.status_update.connect(self.on_voice_status_update)
+    
+    def on_voice_checkbox_changed(self, state):
+        """Handle voice checkbox state change."""
+        if state == Qt.CheckState.Checked.value:
+            self.use_voice_input = True
+            # Ensure voice recognizer is initialized
+            if self.voice_recognizer is None:
+                self.setup_voice_input()
+            if self.voice_recognizer:
+                self.voice_recognizer.start_listening()
+        else:
+            self.use_voice_input = False
+            if self.voice_recognizer:
+                self.voice_recognizer.stop_listening()
+            # Clear pending coordinates queue
+            self.voice_input_queue.clear()
+    
+    def on_voice_status_update(self, message: str):
+        """Handle voice recognition status updates."""
+        # Update message display with status (for debugging and user feedback)
+        if hasattr(self, 'message_display') and self.message_display:
+            self.message_display.setText(message)
+    
+    def on_voice_pair_recognized(self, player_number: str, action: str):
+        """Handle recognized player-action pair from voice input."""
+        # Check if we're using the new pending_contacts system
+        parent = self.parent()
+        using_pending_contacts = (parent and hasattr(parent, 'pending_contacts') and 
+                                   hasattr(parent, 'rally_in_progress') and parent.rally_in_progress)
+        
+        # Validate player number and action
+        is_valid = False
+        validation_message = ""
+        
+        if using_pending_contacts:
+            # New system: Find and update incomplete contact in pending_contacts
+            if self.db and self.game_id and self.team_us_id:
+                try:
+                    if not self.db.conn:
+                        self.db.connect()
+                    player = self.db.get_player_by_number_for_game(self.game_id, self.team_us_id, player_number)
+                    if player:
+                        # Find matching incomplete contact
+                        # First try: Find by timecode (within ±100ms tolerance)
+                        # Fallback: Use FIFO (oldest incomplete contact)
+                        incomplete_contacts = [c for c in parent.pending_contacts if not c['is_complete'] and c['team_id'] == self.team_us_id]
+                        
+                        if incomplete_contacts:
+                            # Try to match by timecode first (if we have recent timecode from voice_input_queue)
+                            matched_contact = None
+                            if self.voice_input_queue:
+                                # Get timecode from oldest queue entry
+                                logical_x, logical_y, timecode_ms = self.voice_input_queue[0]
+                                # Find contact with matching timecode (within ±100ms)
+                                for contact in incomplete_contacts:
+                                    if abs(contact['timecode_ms'] - timecode_ms) <= 100:
+                                        matched_contact = contact
+                                        self.voice_input_queue.popleft()  # Remove from old queue
+                                        break
+                            
+                            # Fallback to FIFO if no timecode match
+                            if not matched_contact and incomplete_contacts:
+                                matched_contact = incomplete_contacts[0]  # Oldest incomplete contact
+                                # Remove from old queue if it exists
+                                if self.voice_input_queue:
+                                    self.voice_input_queue.popleft()
+                            
+                            if matched_contact:
+                                # Update the contact with player info
+                                matched_contact['player_id'] = player['player_id']
+                                matched_contact['player_number'] = player_number
+                                matched_contact['contact_type'] = action
+                                matched_contact['is_complete'] = True
+                                
+                                is_valid = True
+                                validation_message = f"Player {player_number} - {action}: VALID"
+                                
+                                # Write all complete contacts in timecode order
+                                if hasattr(parent, 'write_pending_contacts_sorted'):
+                                    parent.write_pending_contacts_sorted()
+                        else:
+                            # No incomplete contacts found, try old queue system as fallback
+                            if self.voice_input_queue:
+                                logical_x, logical_y, timecode_ms = self.voice_input_queue.popleft()
+                                parent.selected_team_id = self.team_us_id
+                                parent.selected_player_id = player['player_id']
+                                parent.selected_player_number = player_number
+                                parent.last_clicked_x = logical_x
+                                parent.last_clicked_y = logical_y
+                                parent.last_clicked_timecode = timecode_ms
+                                parent.record_contact(action)
+                                is_valid = True
+                                validation_message = f"Player {player_number} - {action}: VALID (fallback)"
+                    elif not player:
+                        validation_message = f"Player {player_number} - {action}: INVALID (player not found)"
+                except Exception as e:
+                    validation_message = f"Player {player_number} - {action}: INVALID (error: {e})"
+            else:
+                validation_message = f"Player {player_number} - {action}: INVALID (no game/team)"
+        else:
+            # Old system: Use voice_input_queue
+            if not self.voice_input_queue:
+                # No pending coordinates, ignore
+                validation_message = f"Player {player_number} - {action}: INVALID (no pending coordinates)"
+            else:
+                # Get the oldest pending coordinates (FIFO)
+                logical_x, logical_y, timecode_ms = self.voice_input_queue.popleft()
+                
+                # Check if parent has rally in progress
+                if parent and hasattr(parent, 'rally_in_progress') and parent.rally_in_progress:
+                    # Validate player number exists for team_us
+                    if self.db and self.game_id and self.team_us_id:
+                        try:
+                            if not self.db.conn:
+                                self.db.connect()
+                            player = self.db.get_player_by_number_for_game(self.game_id, self.team_us_id, player_number)
+                            if player and hasattr(parent, 'record_contact'):
+                                is_valid = True
+                                validation_message = f"Player {player_number} - {action}: VALID"
+                                
+                                # Record contact via parent
+                                parent.selected_team_id = self.team_us_id
+                                parent.selected_player_id = player['player_id']
+                                parent.selected_player_number = player_number
+                                parent.last_clicked_x = logical_x
+                                parent.last_clicked_y = logical_y
+                                parent.last_clicked_timecode = timecode_ms
+                                parent.record_contact(action)
+                                
+                                # Process queued contacts (e.g., team_them contacts that were queued)
+                                if hasattr(parent, 'process_contact_queue'):
+                                    parent.process_contact_queue()
+                            elif not player:
+                                validation_message = f"Player {player_number} - {action}: INVALID (player not found)"
+                            else:
+                                validation_message = f"Player {player_number} - {action}: INVALID (parent cannot record contacts)"
+                        except Exception as e:
+                            validation_message = f"Player {player_number} - {action}: INVALID (error: {e})"
+                    else:
+                        validation_message = f"Player {player_number} - {action}: INVALID (no game/team)"
+                else:
+                    validation_message = f"Player {player_number} - {action}: INVALID (no rally in progress)"
+        
+        # Display in message area
+        if is_valid:
+            # Update message with remaining queue size
+            incomplete_count = 0
+            if parent and hasattr(parent, 'pending_contacts'):
+                incomplete_count = len([c for c in parent.pending_contacts if not c['is_complete']])
+            if incomplete_count > 0:
+                validation_message = f"{validation_message} ({incomplete_count} pending)"
+            elif self.voice_input_queue:
+                validation_message = f"{validation_message} ({len(self.voice_input_queue)} pending)"
+            self.message_display.setStyleSheet("color: green; padding: 2px 0px; margin: 0px;")
+        else:
+            self.message_display.setStyleSheet("color: red; padding: 2px 0px; margin: 0px;")
+        
+        self.message_display.setText(validation_message)
     
     def _load_team_ids(self):
         """Load team_us_id and team_them_id from the game."""
@@ -1365,6 +1551,35 @@ class CoordinateMapper(QMainWindow):
                 
                 # Get current video timecode in milliseconds
                 timecode_ms = self.media_player.position()
+                
+                # Store coordinates for voice input if enabled
+                if self.use_voice_input:
+                    # Check if click is on team_us side (Y <= 300) and rally is in progress
+                    parent = self.parent()
+                    if (parent and hasattr(parent, 'rally_in_progress') and parent.rally_in_progress and
+                        hasattr(parent, 'team_us_id') and parent.team_us_id and
+                        logical_coords[1] <= 300):
+                        # Add incomplete contact to pending_contacts queue
+                        if hasattr(parent, 'pending_contacts'):
+                            parent.pending_contacts.append({
+                                'team_id': parent.team_us_id,
+                                'player_id': None,
+                                'player_number': None,
+                                'contact_type': None,
+                                'x': logical_coords[0],
+                                'y': logical_coords[1],
+                                'timecode_ms': timecode_ms,
+                                'is_complete': False
+                            })
+                            self.message_display.setText(f"Location captured ({len([c for c in parent.pending_contacts if not c['is_complete']])} pending). Speak: [player number] [action]")
+                        else:
+                            # Fallback to old voice_input_queue if pending_contacts not available
+                            self.voice_input_queue.append((logical_coords[0], logical_coords[1], timecode_ms))
+                            self.message_display.setText(f"Location captured ({len(self.voice_input_queue)} pending). Speak: [player number] [action]")
+                    else:
+                        # Not team_us or no rally in progress, use old queue
+                        self.voice_input_queue.append((logical_coords[0], logical_coords[1], timecode_ms))
+                        self.message_display.setText(f"Location captured ({len(self.voice_input_queue)} pending). Speak: [player number] [action]")
                 
                 # Emit signal with mapped coordinates and timecode
                 self.coordinate_mapped.emit(logical_coords[0], logical_coords[1], x, y, timecode_ms)
@@ -2676,6 +2891,9 @@ class CoordinateMapper(QMainWindow):
     
     def closeEvent(self, event):
         """Handle window close event - emit signal before closing."""
+        # Clean up voice recognition
+        if self.voice_recognizer:
+            self.voice_recognizer.cleanup()
         self.window_closing.emit()
         super().closeEvent(event)
 
