@@ -503,9 +503,11 @@ class DebugReplayContactsWindow(QMainWindow):
             self.drawn_items.append(source_dot)
             
             # Draw arrow to destination if available
+            # Skip drawing line if contact_type is "down" (next action will be a serve, new rally)
+            contact_type = contact.get('contact_type')
             next_x = contact.get('next_x')
             next_y = contact.get('next_y')
-            if next_x is not None and next_y is not None:
+            if next_x is not None and next_y is not None and contact_type != 'down':
                 logical_point_dest = np.array([next_x, next_y, 1.0], dtype=np.float32).reshape(3, 1)
                 pixel_point_dest = inv_homography @ logical_point_dest
                 pixel_point_dest /= pixel_point_dest[2]

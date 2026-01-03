@@ -108,6 +108,7 @@ class CoordinateMapper(QMainWindow):
         # Voice recognition
         self.voice_recognizer = None
         self.use_voice_input = False
+        self.use_voice_input_them = False
         self.voice_input_queue = deque()  # Queue of (x, y, timecode_ms) tuples for FIFO processing
         
         # Setup UI
@@ -251,12 +252,20 @@ class CoordinateMapper(QMainWindow):
         message_row_layout.addStretch()
         
         # Voice checkbox - just before Show History
-        self.voice_checkbox = QCheckBox("Voice")
+        self.voice_checkbox = QCheckBox("Voice (Us)")
         self.voice_checkbox.setFont(QFont('Arial', 11))
         self.voice_checkbox.setStyleSheet("padding: 2px 5px; margin: 0px;")
         self.voice_checkbox.stateChanged.connect(self.on_voice_checkbox_changed)
         self.voice_checkbox.setEnabled(VOSK_AVAILABLE and self.db is not None and self.game_id is not None)
         message_row_layout.addWidget(self.voice_checkbox)
+        
+        # Voice checkbox for team_them
+        self.voice_checkbox_them = QCheckBox("Voice (Them)")
+        self.voice_checkbox_them.setFont(QFont('Arial', 11))
+        self.voice_checkbox_them.setStyleSheet("padding: 2px 5px; margin: 0px;")
+        self.voice_checkbox_them.stateChanged.connect(self.on_voice_checkbox_them_changed)
+        self.voice_checkbox_them.setEnabled(VOSK_AVAILABLE and self.db is not None and self.game_id is not None)
+        message_row_layout.addWidget(self.voice_checkbox_them)
         
         # Show History link on the right margin
         self.show_history_link = QLabel('<a href="#">Show History</a>')
@@ -380,7 +389,7 @@ class CoordinateMapper(QMainWindow):
             self.voice_recognizer.status_update.connect(self.on_voice_status_update)
     
     def on_voice_checkbox_changed(self, state):
-        """Handle voice checkbox state change."""
+        """Handle voice checkbox state change for team_us."""
         if state == Qt.CheckState.Checked.value:
             self.use_voice_input = True
             # Ensure voice recognizer is initialized
@@ -390,10 +399,30 @@ class CoordinateMapper(QMainWindow):
                 self.voice_recognizer.start_listening()
         else:
             self.use_voice_input = False
+            # Only stop listening if team_them voice input is also disabled
+            if not self.use_voice_input_them:
+                if self.voice_recognizer:
+                    self.voice_recognizer.stop_listening()
+                # Clear pending coordinates queue
+                self.voice_input_queue.clear()
+    
+    def on_voice_checkbox_them_changed(self, state):
+        """Handle voice checkbox state change for team_them."""
+        if state == Qt.CheckState.Checked.value:
+            self.use_voice_input_them = True
+            # Ensure voice recognizer is initialized
+            if self.voice_recognizer is None:
+                self.setup_voice_input()
             if self.voice_recognizer:
-                self.voice_recognizer.stop_listening()
-            # Clear pending coordinates queue
-            self.voice_input_queue.clear()
+                self.voice_recognizer.start_listening()
+        else:
+            self.use_voice_input_them = False
+            # Only stop listening if team_us voice input is also disabled
+            if not self.use_voice_input:
+                if self.voice_recognizer:
+                    self.voice_recognizer.stop_listening()
+                # Clear pending coordinates queue
+                self.voice_input_queue.clear()
     
     def on_voice_status_update(self, message: str):
         """Handle voice recognition status updates."""
@@ -414,65 +443,85 @@ class CoordinateMapper(QMainWindow):
         
         if using_pending_contacts:
             # New system: Find and update incomplete contact in pending_contacts
-            if self.db and self.game_id and self.team_us_id:
+            if self.db and self.game_id and self.team_us_id and self.team_them_id:
                 try:
                     if not self.db.conn:
                         self.db.connect()
+                    
+                    # Try to find player in team_us first
+                    player = None
+                    team_id = None
+                    incomplete_contacts = []
+                    
                     player = self.db.get_player_by_number_for_game(self.game_id, self.team_us_id, player_number)
                     if player:
-                        # Find matching incomplete contact
-                        # First try: Find by timecode (within ±100ms tolerance)
-                        # Fallback: Use FIFO (oldest incomplete contact)
-                        incomplete_contacts = [c for c in parent.pending_contacts if not c['is_complete'] and c['team_id'] == self.team_us_id]
-                        
-                        if incomplete_contacts:
-                            # Try to match by timecode first (if we have recent timecode from voice_input_queue)
-                            matched_contact = None
-                            if self.voice_input_queue:
-                                # Get timecode from oldest queue entry
-                                logical_x, logical_y, timecode_ms = self.voice_input_queue[0]
-                                # Find contact with matching timecode (within ±100ms)
-                                for contact in incomplete_contacts:
-                                    if abs(contact['timecode_ms'] - timecode_ms) <= 100:
-                                        matched_contact = contact
-                                        self.voice_input_queue.popleft()  # Remove from old queue
-                                        break
-                            
-                            # Fallback to FIFO if no timecode match
-                            if not matched_contact and incomplete_contacts:
-                                matched_contact = incomplete_contacts[0]  # Oldest incomplete contact
-                                # Remove from old queue if it exists
-                                if self.voice_input_queue:
-                                    self.voice_input_queue.popleft()
-                            
-                            if matched_contact:
-                                # Update the contact with player info
-                                matched_contact['player_id'] = player['player_id']
-                                matched_contact['player_number'] = player_number
-                                matched_contact['contact_type'] = action
-                                matched_contact['is_complete'] = True
-                                
-                                is_valid = True
-                                validation_message = f"Player {player_number} - {action}: VALID"
-                                
-                                # Write all complete contacts in timecode order
-                                if hasattr(parent, 'write_pending_contacts_sorted'):
-                                    parent.write_pending_contacts_sorted()
+                        team_id = self.team_us_id
+                        # Check if voice input is enabled for team_us
+                        if not self.use_voice_input:
+                            validation_message = f"Player {player_number} - {action}: INVALID (voice input disabled for team_us)"
                         else:
-                            # No incomplete contacts found, try old queue system as fallback
+                            incomplete_contacts = [c for c in parent.pending_contacts if not c['is_complete'] and c['team_id'] == self.team_us_id]
+                    else:
+                        # Try team_them
+                        player = self.db.get_player_by_number_for_game(self.game_id, self.team_them_id, player_number)
+                        if player:
+                            team_id = self.team_them_id
+                            # Check if voice input is enabled for team_them
+                            if not self.use_voice_input_them:
+                                validation_message = f"Player {player_number} - {action}: INVALID (voice input disabled for team_them)"
+                            else:
+                                incomplete_contacts = [c for c in parent.pending_contacts if not c['is_complete'] and c['team_id'] == self.team_them_id]
+                    
+                    if player and team_id and incomplete_contacts:
+                        # Try to match by timecode first (if we have recent timecode from voice_input_queue)
+                        matched_contact = None
+                        if self.voice_input_queue:
+                            # Get timecode from oldest queue entry
+                            logical_x, logical_y, timecode_ms = self.voice_input_queue[0]
+                            # Find contact with matching timecode (within ±100ms)
+                            for contact in incomplete_contacts:
+                                if abs(contact['timecode_ms'] - timecode_ms) <= 100:
+                                    matched_contact = contact
+                                    self.voice_input_queue.popleft()  # Remove from old queue
+                                    break
+                        
+                        # Fallback to FIFO if no timecode match
+                        if not matched_contact and incomplete_contacts:
+                            matched_contact = incomplete_contacts[0]  # Oldest incomplete contact
+                            # Remove from old queue if it exists
                             if self.voice_input_queue:
-                                logical_x, logical_y, timecode_ms = self.voice_input_queue.popleft()
-                                parent.selected_team_id = self.team_us_id
-                                parent.selected_player_id = player['player_id']
-                                parent.selected_player_number = player_number
-                                parent.last_clicked_x = logical_x
-                                parent.last_clicked_y = logical_y
-                                parent.last_clicked_timecode = timecode_ms
-                                parent.record_contact(action)
-                                is_valid = True
-                                validation_message = f"Player {player_number} - {action}: VALID (fallback)"
+                                self.voice_input_queue.popleft()
+                        
+                        if matched_contact:
+                            # Update the contact with player info
+                            matched_contact['player_id'] = player['player_id']
+                            matched_contact['player_number'] = player_number
+                            matched_contact['contact_type'] = action
+                            matched_contact['is_complete'] = True
+                            
+                            is_valid = True
+                            team_name = "Us" if team_id == self.team_us_id else "Them"
+                            validation_message = f"Player {player_number} - {action}: VALID ({team_name})"
+                            
+                            # Write all complete contacts in timecode order
+                            if hasattr(parent, 'write_pending_contacts_sorted'):
+                                parent.write_pending_contacts_sorted()
+                    elif player and team_id:
+                        # No incomplete contacts found, try old queue system as fallback
+                        if self.voice_input_queue:
+                            logical_x, logical_y, timecode_ms = self.voice_input_queue.popleft()
+                            parent.selected_team_id = team_id
+                            parent.selected_player_id = player['player_id']
+                            parent.selected_player_number = player_number
+                            parent.last_clicked_x = logical_x
+                            parent.last_clicked_y = logical_y
+                            parent.last_clicked_timecode = timecode_ms
+                            parent.record_contact(action)
+                            is_valid = True
+                            team_name = "Us" if team_id == self.team_us_id else "Them"
+                            validation_message = f"Player {player_number} - {action}: VALID ({team_name}, fallback)"
                     elif not player:
-                        validation_message = f"Player {player_number} - {action}: INVALID (player not found)"
+                        validation_message = f"Player {player_number} - {action}: INVALID (player not found in either team)"
                 except Exception as e:
                     validation_message = f"Player {player_number} - {action}: INVALID (error: {e})"
             else:
@@ -488,36 +537,62 @@ class CoordinateMapper(QMainWindow):
                 
                 # Check if parent has rally in progress
                 if parent and hasattr(parent, 'rally_in_progress') and parent.rally_in_progress:
-                    # Validate player number exists for team_us
+                    # Try to find player in team_us first, then team_them
+                    player = None
+                    team_id = None
+                    
                     if self.db and self.game_id and self.team_us_id:
                         try:
                             if not self.db.conn:
                                 self.db.connect()
                             player = self.db.get_player_by_number_for_game(self.game_id, self.team_us_id, player_number)
-                            if player and hasattr(parent, 'record_contact'):
-                                is_valid = True
-                                validation_message = f"Player {player_number} - {action}: VALID"
-                                
-                                # Record contact via parent
-                                parent.selected_team_id = self.team_us_id
-                                parent.selected_player_id = player['player_id']
-                                parent.selected_player_number = player_number
-                                parent.last_clicked_x = logical_x
-                                parent.last_clicked_y = logical_y
-                                parent.last_clicked_timecode = timecode_ms
-                                parent.record_contact(action)
-                                
-                                # Process queued contacts (e.g., team_them contacts that were queued)
-                                if hasattr(parent, 'process_contact_queue'):
-                                    parent.process_contact_queue()
-                            elif not player:
-                                validation_message = f"Player {player_number} - {action}: INVALID (player not found)"
-                            else:
-                                validation_message = f"Player {player_number} - {action}: INVALID (parent cannot record contacts)"
+                            if player:
+                                team_id = self.team_us_id
+                                # Check if voice input is enabled for team_us
+                                if not self.use_voice_input:
+                                    validation_message = f"Player {player_number} - {action}: INVALID (voice input disabled for team_us)"
+                                    player = None
                         except Exception as e:
-                            validation_message = f"Player {player_number} - {action}: INVALID (error: {e})"
+                            pass
+                    
+                    # If not found in team_us, try team_them
+                    if not player and self.db and self.game_id and self.team_them_id:
+                        try:
+                            if not self.db.conn:
+                                self.db.connect()
+                            player = self.db.get_player_by_number_for_game(self.game_id, self.team_them_id, player_number)
+                            if player:
+                                team_id = self.team_them_id
+                                # Check if voice input is enabled for team_them
+                                if not self.use_voice_input_them:
+                                    validation_message = f"Player {player_number} - {action}: INVALID (voice input disabled for team_them)"
+                                    player = None
+                        except Exception as e:
+                            pass
+                    
+                    if player and team_id and hasattr(parent, 'record_contact'):
+                        is_valid = True
+                        team_name = "Us" if team_id == self.team_us_id else "Them"
+                        validation_message = f"Player {player_number} - {action}: VALID ({team_name})"
+                        
+                        # Record contact via parent
+                        parent.selected_team_id = team_id
+                        parent.selected_player_id = player['player_id']
+                        parent.selected_player_number = player_number
+                        parent.last_clicked_x = logical_x
+                        parent.last_clicked_y = logical_y
+                        parent.last_clicked_timecode = timecode_ms
+                        parent.record_contact(action)
+                        
+                        # Process queued contacts (e.g., team_them contacts that were queued)
+                        if hasattr(parent, 'process_contact_queue'):
+                            parent.process_contact_queue()
+                    elif not player:
+                        if not validation_message:
+                            validation_message = f"Player {player_number} - {action}: INVALID (player not found in either team)"
                     else:
-                        validation_message = f"Player {player_number} - {action}: INVALID (no game/team)"
+                        if not validation_message:
+                            validation_message = f"Player {player_number} - {action}: INVALID (parent cannot record contacts)"
                 else:
                     validation_message = f"Player {player_number} - {action}: INVALID (no rally in progress)"
         

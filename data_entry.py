@@ -174,82 +174,110 @@ class DataEntryWindow(QMainWindow):
                 is_opponent = logical_y > 300
                 
                 if is_opponent:
-                    # Auto-classify opponent contacts based on sequence
-                    # 1st = pass (dig), 2nd = set, 3rd = attack (then cycle)
-                    contact_sequence = ['pass', 'set', 'attack']
-                    contact_type = contact_sequence[self.opponent_contact_count % 3]
-                    
-                    # Assign opponent player based on sequence: o1, o2, o3
-                    opponent_player_number = f"o{(self.opponent_contact_count % 3) + 1}"
-                    
-                    # Increment opponent contact count
-                    self.opponent_contact_count += 1
-                    
-                    # Get player_id for the opponent player
-                    if not self.db.conn:
-                        self.db.connect()
-                    player = self.db.get_player_by_number_for_game(self.game_id, self.team_them_id, opponent_player_number)
-                    player_id = player['player_id'] if player else None
-                    if not player:
-                        print(f"Warning: Opponent player {opponent_player_number} not found in game")
-                    
-                    # Check if there are incomplete team_us contacts (voice pending)
-                    # If so, add to pending_contacts queue to maintain timecode order
-                    has_incomplete_contacts = False
-                    if hasattr(self, 'pending_contacts'):
-                        incomplete_count = len([c for c in self.pending_contacts if not c['is_complete']])
-                        has_incomplete_contacts = incomplete_count > 0
-                    
-                    # Add complete team_them contact to pending_contacts
-                    if hasattr(self, 'pending_contacts'):
-                        self.pending_contacts.append({
-                            'team_id': self.team_them_id,
-                            'player_id': player_id,
-                            'player_number': opponent_player_number,
-                            'contact_type': contact_type,
-                            'x': logical_x,
-                            'y': logical_y,
-                            'timecode_ms': timecode_ms,
-                            'is_complete': True
-                        })
-                        
-                        if has_incomplete_contacts:
-                            # Wait for earlier contacts to complete before writing
+                    # Check if voice input is enabled for team_them
+                    # If so, skip auto-classification - voice input will handle it
+                    if (hasattr(self.coordinate_mapper, 'use_voice_input_them') and 
+                        self.coordinate_mapper.use_voice_input_them):
+                        # Voice input is enabled for team_them, don't auto-classify - wait for voice input
+                        # Add incomplete contact to pending_contacts
+                        if hasattr(self, 'pending_contacts'):
+                            self.pending_contacts.append({
+                                'team_id': self.team_them_id,
+                                'player_id': None,
+                                'player_number': None,
+                                'contact_type': None,
+                                'x': logical_x,
+                                'y': logical_y,
+                                'timecode_ms': timecode_ms,
+                                'is_complete': False
+                            })
+                            # Also add to voice_input_queue for timecode matching
+                            if hasattr(self.coordinate_mapper, 'voice_input_queue'):
+                                self.coordinate_mapper.voice_input_queue.append((logical_x, logical_y, timecode_ms))
                             incomplete_count = len([c for c in self.pending_contacts if not c['is_complete']])
-                            complete_count = len([c for c in self.pending_contacts if c['is_complete']])
-                            self.status_label.setText(f"Queued opponent #{opponent_player_number} {contact_type} ({complete_count} complete, {incomplete_count} pending)...")
+                            self.status_label.setText(f"Waiting for voice input for opponent contact ({incomplete_count} pending)...")
                         else:
-                            # No incomplete contacts, write all complete contacts in timecode order
-                            self.write_pending_contacts_sorted()
+                            # Fallback: add to voice_input_queue
+                            if hasattr(self.coordinate_mapper, 'voice_input_queue'):
+                                self.coordinate_mapper.voice_input_queue.append((logical_x, logical_y, timecode_ms))
+                                self.status_label.setText(f"Waiting for voice input for opponent contact ({len(self.coordinate_mapper.voice_input_queue)} pending)...")
                     else:
-                        # Fallback to old system if pending_contacts not available
-                        has_pending_voice = False
-                        if (self.coordinate_mapper and 
-                            hasattr(self.coordinate_mapper, 'use_voice_input') and 
-                            self.coordinate_mapper.use_voice_input and
-                            hasattr(self.coordinate_mapper, 'voice_input_queue') and
-                            len(self.coordinate_mapper.voice_input_queue) > 0):
-                            has_pending_voice = True
+                        # Auto-classify opponent contacts based on sequence
+                        # 1st = pass (dig), 2nd = set, 3rd = attack (then cycle)
+                        contact_sequence = ['pass', 'set', 'attack']
+                        contact_type = contact_sequence[self.opponent_contact_count % 3]
                         
-                        if has_pending_voice:
-                            # Queue the contact to maintain click order
-                            self.contact_queue.append((
-                                self.team_them_id,
-                                player_id,
-                                opponent_player_number,
-                                contact_type,
-                                logical_x,
-                                logical_y,
-                                timecode_ms
-                            ))
-                            self.status_label.setText(f"Queued opponent #{opponent_player_number} {contact_type} ({len(self.contact_queue)} queued, {len(self.coordinate_mapper.voice_input_queue)} voice pending)...")
+                        # Assign opponent player based on sequence: o1, o2, o3
+                        opponent_player_number = f"o{(self.opponent_contact_count % 3) + 1}"
+                        
+                        # Increment opponent contact count
+                        self.opponent_contact_count += 1
+                        
+                        # Get player_id for the opponent player
+                        if not self.db.conn:
+                            self.db.connect()
+                        player = self.db.get_player_by_number_for_game(self.game_id, self.team_them_id, opponent_player_number)
+                        player_id = player['player_id'] if player else None
+                        if not player:
+                            print(f"Warning: Opponent player {opponent_player_number} not found in game")
+                        
+                        # Check if there are incomplete contacts (voice pending)
+                        # If so, add to pending_contacts queue to maintain timecode order
+                        has_incomplete_contacts = False
+                        if hasattr(self, 'pending_contacts'):
+                            incomplete_count = len([c for c in self.pending_contacts if not c['is_complete']])
+                            has_incomplete_contacts = incomplete_count > 0
+                        
+                        # Add complete team_them contact to pending_contacts
+                        if hasattr(self, 'pending_contacts'):
+                            self.pending_contacts.append({
+                                'team_id': self.team_them_id,
+                                'player_id': player_id,
+                                'player_number': opponent_player_number,
+                                'contact_type': contact_type,
+                                'x': logical_x,
+                                'y': logical_y,
+                                'timecode_ms': timecode_ms,
+                                'is_complete': True
+                            })
+                            
+                            if has_incomplete_contacts:
+                                # Wait for earlier contacts to complete before writing
+                                incomplete_count = len([c for c in self.pending_contacts if not c['is_complete']])
+                                complete_count = len([c for c in self.pending_contacts if c['is_complete']])
+                                self.status_label.setText(f"Queued opponent #{opponent_player_number} {contact_type} ({complete_count} complete, {incomplete_count} pending)...")
+                            else:
+                                # No incomplete contacts, write all complete contacts in timecode order
+                                self.write_pending_contacts_sorted()
                         else:
-                            # Record the contact immediately (no pending voice inputs)
-                            self.selected_team_id = self.team_them_id
-                            self.selected_player_id = player_id
-                            self.selected_player_number = opponent_player_number
-                            self.status_label.setText(f"Recording opponent #{opponent_player_number} {contact_type} at ({logical_x:.2f}, {logical_y:.2f})...")
-                            self.record_contact(contact_type)
+                            # Fallback to old system if pending_contacts not available
+                            has_pending_voice = False
+                            if (self.coordinate_mapper and 
+                                hasattr(self.coordinate_mapper, 'use_voice_input') and 
+                                self.coordinate_mapper.use_voice_input and
+                                hasattr(self.coordinate_mapper, 'voice_input_queue') and
+                                len(self.coordinate_mapper.voice_input_queue) > 0):
+                                has_pending_voice = True
+                            
+                            if has_pending_voice:
+                                # Queue the contact to maintain click order
+                                self.contact_queue.append((
+                                    self.team_them_id,
+                                    player_id,
+                                    opponent_player_number,
+                                    contact_type,
+                                    logical_x,
+                                    logical_y,
+                                    timecode_ms
+                                ))
+                                self.status_label.setText(f"Queued opponent #{opponent_player_number} {contact_type} ({len(self.contact_queue)} queued, {len(self.coordinate_mapper.voice_input_queue)} voice pending)...")
+                            else:
+                                # Record the contact immediately (no pending voice inputs)
+                                self.selected_team_id = self.team_them_id
+                                self.selected_player_id = player_id
+                                self.selected_player_number = opponent_player_number
+                                self.status_label.setText(f"Recording opponent #{opponent_player_number} {contact_type} at ({logical_x:.2f}, {logical_y:.2f})...")
+                                self.record_contact(contact_type)
                 else:
                     # Team A contact - reset opponent contact count
                     self.opponent_contact_count = 0
