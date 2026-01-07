@@ -655,9 +655,25 @@ class DataEntryWindow(QMainWindow):
                 # Alternate serving team (simplified - you may want to track this better)
                 self.serving_team_id = self.team_us_id if (self.current_rally_number % 2 == 1) else self.team_them_id
         else:
-            # First rally
+            # First rally - determine serving team from rotation_state
             self.current_rally_number = 1
-            self.serving_team_id = self.team_us_id
+            self.rally_in_progress = False  # Ensure no rally is in progress for first serve
+            # Check which team should serve first from rotation_state
+            # Note: rotation_state is only initialized for team_us, so:
+            # - If team_us has serving=1, team_us serves first
+            # - If team_us has serving=0 or no entry, team_them serves first
+            cursor.execute("""
+                SELECT team_id, serving
+                FROM rotation_state 
+                WHERE game_id = ? AND team_id = ?
+            """, (self.game_id, self.team_us_id))
+            team_us_rotation = cursor.fetchone()
+            if team_us_rotation and team_us_rotation[1] == 1:
+                # team_us has serving=1, so team_us serves first
+                self.serving_team_id = self.team_us_id
+            else:
+                # team_us has serving=0 or no rotation_state entry, so team_them serves first
+                self.serving_team_id = self.team_them_id
     
     def _initialize_game_data(self):
         """Initialize game data (video and court boundaries) after coordinate mapper is ready."""
@@ -2316,6 +2332,30 @@ class DataEntryWindow(QMainWindow):
                             if hasattr(self, 'status_label'):
                                 self.status_label.setText(f"Selected: {player_display} - Recording {action_type}...")
                             self.record_contact(action_type)
+                elif dialog_result == QDialog.Rejected:
+                    # Dialog was rejected (ESC pressed) - remove the pending contact if it exists
+                    self.logger.debug(f"Dialog rejected (ESC pressed) - removing pending contact for team {team_id} at ({x_coord}, {y_coord})")
+                    if team_id == self.team_us_id and hasattr(self, 'pending_contacts') and self.pending_contacts:
+                        # Find and remove the incomplete contact matching these coordinates
+                        removed = False
+                        for i, contact in enumerate(self.pending_contacts):
+                            if (not contact.get('is_complete', True) and 
+                                contact.get('team_id') == team_id and
+                                abs(contact.get('x', 0) - x_coord) < 0.01 and
+                                abs(contact.get('y', 0) - y_coord) < 0.01):
+                                self.pending_contacts.pop(i)
+                                removed = True
+                                self.logger.debug(f"Removed pending contact at index {i}")
+                                break
+                        
+                        # Update coordinate_mapper message display if available
+                        if removed and self.coordinate_mapper and hasattr(self.coordinate_mapper, 'message_display'):
+                            incomplete_count = len([c for c in self.pending_contacts if not c.get('is_complete', True)])
+                            if incomplete_count > 0:
+                                self.coordinate_mapper.message_display.setText(f"Location captured ({incomplete_count} pending). Speak: [player number] [action]")
+                            else:
+                                self.coordinate_mapper.message_display.setText("")
+                    return  # Exit early when dialog is rejected
             except UnboundLocalError as e:
                 error_msg = str(e)
                 self.logger.error(f"UnboundLocalError in show_player_selection_dialog (new UI): {error_msg}")
@@ -2491,11 +2531,36 @@ class DataEntryWindow(QMainWindow):
             self.logger.debug(f"ALLOWED_ACTIONS: In old UI - _allowed_actions_backup={_allowed_actions_backup}")
             
             try:
-                if dialog.exec() == QDialog.Accepted and selected_action[0]:
+                dialog_result = dialog.exec()
+                if dialog_result == QDialog.Accepted and selected_action[0]:
                     # Set flag BEFORE calling record_contact to prevent error dialogs from showing
                     self._recording_contact = True
                     
                     player_id_or_down, action_type = selected_action[0]
+                elif dialog_result == QDialog.Rejected:
+                    # Dialog was rejected (ESC pressed) - remove the pending contact if it exists
+                    self.logger.debug(f"Dialog rejected (ESC pressed) - removing pending contact for team {team_id} at ({x_coord}, {y_coord})")
+                    if team_id == self.team_us_id and hasattr(self, 'pending_contacts') and self.pending_contacts:
+                        # Find and remove the incomplete contact matching these coordinates
+                        removed = False
+                        for i, contact in enumerate(self.pending_contacts):
+                            if (not contact.get('is_complete', True) and 
+                                contact.get('team_id') == team_id and
+                                abs(contact.get('x', 0) - x_coord) < 0.01 and
+                                abs(contact.get('y', 0) - y_coord) < 0.01):
+                                self.pending_contacts.pop(i)
+                                removed = True
+                                self.logger.debug(f"Removed pending contact at index {i}")
+                                break
+                        
+                        # Update coordinate_mapper message display if available
+                        if removed and self.coordinate_mapper and hasattr(self.coordinate_mapper, 'message_display'):
+                            incomplete_count = len([c for c in self.pending_contacts if not c.get('is_complete', True)])
+                            if incomplete_count > 0:
+                                self.coordinate_mapper.message_display.setText(f"Location captured ({incomplete_count} pending). Speak: [player number] [action]")
+                            else:
+                                self.coordinate_mapper.message_display.setText("")
+                    return  # Exit early when dialog is rejected
                     
                     # Check if "fault" was selected (mark prior contact as fault)
                     if player_id_or_down == "fault":
@@ -4061,11 +4126,11 @@ class DataEntryWindow(QMainWindow):
                     self.logger.error(f"Failed to rotate team_us: {e}")
                     auto_rotated = False  # Reset if rotation failed
                 else:
-                    # Show rotation popup only if rotation succeeded
+                    # Show substitution dialog only if rotation succeeded
                     try:
-                        self.show_rotation_popup()
+                        self.show_substitution_dialog()
                     except Exception as e:
-                        self.logger.error(f"Failed to show rotation popup: {e}")
+                        self.logger.error(f"Failed to show substitution dialog: {e}")
             
             # Log point_awarded event for undo functionality
             from datetime import datetime
@@ -4199,11 +4264,11 @@ class DataEntryWindow(QMainWindow):
                     self.logger.error(f"Failed to rotate team_us: {e}")
                     auto_rotated = False  # Reset if rotation failed
                 else:
-                    # Show rotation popup only if rotation succeeded
+                    # Show substitution dialog only if rotation succeeded
                     try:
-                        self.show_rotation_popup()
+                        self.show_substitution_dialog()
                     except Exception as e:
-                        self.logger.error(f"Failed to show rotation popup: {e}")
+                        self.logger.error(f"Failed to show substitution dialog: {e}")
             
             # Reload score to get updated values
             self.load_score()

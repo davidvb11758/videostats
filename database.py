@@ -1166,8 +1166,14 @@ class VideoStatsDB:
         self.conn.commit()
         return cursor.lastrowid
     
-    def start_game(self, team_us_id: int, team_them_id: int, notes: Optional[str] = None) -> int:
+    def start_game(self, team_us_id: int, team_them_id: int, notes: Optional[str] = None, game_date: Optional[datetime] = None) -> int:
         """Start a new game and return game_id.
+        
+        Args:
+            team_us_id: ID of team_us
+            team_them_id: ID of team_them
+            notes: Optional notes for the game
+            game_date: Optional game date (datetime object). If None, uses CURRENT_TIMESTAMP.
         
         Raises ValueError if both teams are the same.
         """
@@ -1177,10 +1183,16 @@ class VideoStatsDB:
         if not self.conn:
             self.connect()
         cursor = self.conn.cursor()
-        cursor.execute(
-            "INSERT INTO games (team_us_id, team_them_id, notes) VALUES (?, ?, ?)",
-            (team_us_id, team_them_id, notes)
-        )
+        if game_date:
+            cursor.execute(
+                "INSERT INTO games (team_us_id, team_them_id, notes, game_date) VALUES (?, ?, ?, ?)",
+                (team_us_id, team_them_id, notes, game_date)
+            )
+        else:
+            cursor.execute(
+                "INSERT INTO games (team_us_id, team_them_id, notes) VALUES (?, ?, ?)",
+                (team_us_id, team_them_id, notes)
+            )
         self.conn.commit()
         return cursor.lastrowid
     

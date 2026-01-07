@@ -7,6 +7,7 @@ import sys
 import math
 import subprocess
 from pathlib import Path
+from datetime import datetime
 from PySide6.QtWidgets import (
     QMainWindow, QMessageBox, QApplication, QGraphicsScene, 
     QGraphicsView, QGraphicsEllipseItem, QGraphicsLineItem, 
@@ -1686,6 +1687,12 @@ class ContactPathViewer(QMainWindow):
         self.populate_games_dropdown()
         self.connect_signals()
         
+        # Make the game selection combo box 100% wider (double the width from 180 to 360)
+        if hasattr(self.ui, 'comboBox'):
+            current_width = self.ui.comboBox.width()
+            self.ui.comboBox.setMinimumWidth(current_width * 2)
+            self.ui.comboBox.resize(current_width * 2, self.ui.comboBox.height())
+        
         # If game_id was provided, select it in the combo box
         if self.initial_game_id is not None:
             self.select_game_by_id(self.initial_game_id)
@@ -2100,7 +2107,40 @@ class ContactPathViewer(QMainWindow):
             
             for game in games:
                 game_id, game_date, team_us_name, team_them_name, team_us_id, team_them_id, notes = game
-                display_text = f"Game {game_id}: {team_us_name} vs {team_them_name} ({game_date})"
+                
+                # Format game date to show only the date (YYYY-MM-DD)
+                date_display = game_date
+                if game_date:
+                    try:
+                        # Try parsing ISO format
+                        if isinstance(game_date, str):
+                            if 'T' in game_date:
+                                date_obj = datetime.fromisoformat(game_date.replace(' ', 'T'))
+                            else:
+                                # Try parsing space-separated format
+                                date_obj = datetime.strptime(game_date, '%Y-%m-%d %H:%M:%S')
+                        else:
+                            # Already a datetime object
+                            date_obj = game_date
+                        date_display = date_obj.strftime('%Y-%m-%d')
+                    except:
+                        # If parsing fails, try to extract just the date part
+                        if isinstance(game_date, str):
+                            date_display = game_date[:10] if len(game_date) >= 10 else game_date
+                        else:
+                            date_display = str(game_date)
+                
+                # Extract opponent alias from notes field
+                opponent_display = team_them_name  # Default to team name
+                if notes:
+                    # Check if notes contains "Opponent: " prefix
+                    if notes.startswith("Opponent: "):
+                        opponent_display = notes.replace("Opponent: ", "").strip()
+                    else:
+                        # If notes doesn't start with "Opponent: ", use it as-is if it's not empty
+                        opponent_display = notes.strip() if notes.strip() else team_them_name
+                
+                display_text = f"Game {game_id}: {team_us_name} vs {opponent_display} ({date_display})"
                 self.ui.comboBox.addItem(display_text)
                 # Store game data
                 index = self.ui.comboBox.count() - 1

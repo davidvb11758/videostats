@@ -622,9 +622,16 @@ class CreateGameDialog(QDialog):
         if not opponent_alias:
             opponent_alias = "Opp1"
         
+        # Get game date from dateEdit widget
+        game_date = None
+        if self.date_edit:
+            qdate = self.date_edit.date()
+            # Convert QDate to datetime (set time to midnight)
+            game_date = datetime(qdate.year(), qdate.month(), qdate.day())
+        
         try:
             # Create game
-            self.game_id = self.db.start_game(team_us_id, team_them_id)
+            self.game_id = self.db.start_game(team_us_id, team_them_id, game_date=game_date)
             
             # Update game with opponent alias in notes field
             if opponent_alias != "Opp1":
