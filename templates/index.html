@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Highlight Collection Manager</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header>
+            <h1>Highlight Collection Manager</h1>
+        </header>
+
+        <div class="main-layout">
+            <!-- Left Sidebar -->
+            <aside class="sidebar">
+                <!-- Game Selection -->
+                <section class="section">
+                    <h2>Games</h2>
+                    <div class="game-search">
+                        <input type="text" id="game-search" placeholder="Search games..." />
+                    </div>
+                    <div class="game-list" id="game-list">
+                        <!-- Games will be loaded here -->
+                    </div>
+                </section>
+
+                <!-- Collection Management -->
+                <section class="section">
+                    <h2>Collections</h2>
+                    <div class="collection-controls">
+                        <select id="collection-select" class="collection-select">
+                            <option value="">-- Select Collection --</option>
+                        </select>
+                        <div class="collection-buttons">
+                            <button id="new-collection-btn" class="btn btn-secondary">New</button>
+                            <button id="save-collection-btn" class="btn btn-secondary">Save</button>
+                            <button id="load-collection-btn" class="btn btn-secondary">Load</button>
+                            <button id="delete-collection-btn" class="btn btn-danger">Delete</button>
+                        </div>
+                        <div class="collection-info" id="collection-info" style="display: none;">
+                            <input type="text" id="collection-name" placeholder="Collection name" />
+                            <textarea id="collection-description" placeholder="Description (optional)"></textarea>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Filters -->
+                <section class="section">
+                    <h2>Filters</h2>
+                    
+                    <!-- Players Filter -->
+                    <div class="filter-group">
+                        <label>Players:</label>
+                        <div class="player-list" id="player-list">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="all-players-checkbox" checked />
+                                <span>All Players</span>
+                            </label>
+                            <!-- Players will be loaded here -->
+                        </div>
+                    </div>
+
+                    <!-- Contact Types Filter -->
+                    <div class="filter-group">
+                        <label>Contact Types:</label>
+                        <div class="checkbox-grid-3" id="contact-types-grid">
+                            <label class="checkbox-label"><input type="checkbox" value="serve" /> Serve</label>
+                            <label class="checkbox-label"><input type="checkbox" value="receive" /> Receive</label>
+                            <label class="checkbox-label"><input type="checkbox" value="pass" /> Pass</label>
+                            <label class="checkbox-label"><input type="checkbox" value="set" /> Set</label>
+                            <label class="checkbox-label"><input type="checkbox" value="attack" /> Attack</label>
+                            <label class="checkbox-label"><input type="checkbox" value="freeball" /> Freeball</label>
+                            <label class="checkbox-label"><input type="checkbox" value="block" /> Block</label>
+                            <label class="checkbox-label"><input type="checkbox" value="down" /> Down</label>
+                        </div>
+                    </div>
+
+                    <!-- Outcomes Filter -->
+                    <div class="filter-group">
+                        <label>Outcomes:</label>
+                        <div class="checkbox-grid-4" id="outcomes-grid">
+                            <label class="checkbox-label"><input type="checkbox" value="continue" /> Continue</label>
+                            <label class="checkbox-label"><input type="checkbox" value="ace" /> Ace</label>
+                            <label class="checkbox-label"><input type="checkbox" value="kill" /> Kill</label>
+                            <label class="checkbox-label"><input type="checkbox" value="stuff" /> Stuff</label>
+                            <label class="checkbox-label"><input type="checkbox" value="error" /> Error</label>
+                            <label class="checkbox-label"><input type="checkbox" value="down" /> Down</label>
+                            <label class="checkbox-label"><input type="checkbox" value="assist" /> Assist</label>
+                            <label class="checkbox-label"><input type="checkbox" value="fault" /> Fault</label>
+                        </div>
+                    </div>
+
+                    <!-- Ratings Filter (only shown when Receive is selected) -->
+                    <div class="filter-group" id="ratings-filter-group" style="display: none;">
+                        <label>Receive Ratings:</label>
+                        <div class="checkbox-row" id="ratings-row">
+                            <label class="checkbox-label"><input type="checkbox" value="0" /> 0</label>
+                            <label class="checkbox-label"><input type="checkbox" value="1" /> 1</label>
+                            <label class="checkbox-label"><input type="checkbox" value="2" /> 2</label>
+                            <label class="checkbox-label"><input type="checkbox" value="3" /> 3</label>
+                        </div>
+                    </div>
+
+                    <!-- Team Filters -->
+                    <div class="filter-group">
+                        <label>Teams:</label>
+                        <div class="team-filters">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="team-us-checkbox" checked />
+                                <span id="team-us-label">Team Us</span>
+                            </label>
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="team-them-checkbox" />
+                                <span id="team-them-label">Team Them</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <button id="apply-filters-btn" class="btn btn-primary">Apply Filters</button>
+                </section>
+            </aside>
+
+            <!-- Main Content Area -->
+            <main class="main-content">
+                <!-- Clip Table -->
+                <section class="clip-section">
+                    <h2>Clips</h2>
+                    <div class="clip-table-container">
+                        <table class="clip-table" id="clip-table">
+                            <thead>
+                                <tr>
+                                    <th class="drag-handle-col"></th>
+                                    <th class="checkbox-col"><input type="checkbox" id="select-all-checkbox" /></th>
+                                    <th>Game</th>
+                                    <th>Stars</th>
+                                    <th>Rally</th>
+                                    <th>Seq</th>
+                                    <th>Player</th>
+                                    <th>Type</th>
+                                    <th>Rating</th>
+                                    <th>Outcome</th>
+                                    <th>View</th>
+                                </tr>
+                            </thead>
+                            <tbody id="clip-table-body">
+                                <!-- Clips will be loaded here -->
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <!-- Highlight Video Controls -->
+                <section class="highlight-section">
+                    <h2>Create Highlight Video</h2>
+                    <div class="highlight-controls">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="include-title-checkbox" />
+                            <span>Include Title Screen</span>
+                        </label>
+                        <button id="create-highlight-btn" class="btn btn-primary">Generate Highlight Video</button>
+                        <div id="video-progress" class="video-progress" style="display: none;">
+                            <div class="progress-bar">
+                                <div class="progress-fill" id="progress-fill"></div>
+                            </div>
+                            <div class="progress-text" id="progress-text">Processing...</div>
+                        </div>
+                        <div id="video-result" class="video-result" style="display: none;">
+                            <a id="video-download-link" class="btn btn-success" target="_blank">Download Video</a>
+                        </div>
+                    </div>
+                </section>
+            </main>
+        </div>
+    </div>
+
+    <!-- Video Player Modal -->
+    <div id="video-modal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <span class="modal-close">&times;</span>
+            <video id="video-player" controls>
+                Your browser does not support the video tag.
+            </video>
+            <div class="video-controls">
+                <button id="replay-btn" class="btn btn-primary">Replay Clip</button>
+            </div>
+            <div class="video-info" id="video-info"></div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>

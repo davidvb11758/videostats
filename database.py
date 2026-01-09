@@ -580,8 +580,67 @@ class VideoStatsDB:
             
             logger.info("Seeded default team_them team (ID=12) and 4 players (IDs=30,31,32,33)")
         
+        # Create collection tables for highlight video manager
+        self.create_collection_tables()
+        
         self.conn.commit()
         logger.info("Database tables created successfully!")
+    
+    def create_collection_tables(self):
+        """Create tables for clip collections and star ratings."""
+        if not self.conn:
+            self.connect()
+        
+        cursor = self.conn.cursor()
+        
+        # Collections table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS clip_collections (
+                collection_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                description TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        # Collection clips junction table (with ordering and selection state)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS collection_clips (
+                collection_id INTEGER,
+                contact_id INTEGER,
+                game_id INTEGER,
+                order_index INTEGER NOT NULL,
+                is_selected INTEGER DEFAULT 0,
+                FOREIGN KEY (collection_id) REFERENCES clip_collections(collection_id) ON DELETE CASCADE,
+                PRIMARY KEY (collection_id, contact_id, game_id)
+            )
+        """)
+        
+        # Add is_selected column if it doesn't exist (for existing tables)
+        cursor.execute("PRAGMA table_info(collection_clips)")
+        columns = [row[1] for row in cursor.fetchall()]
+        if 'is_selected' not in columns:
+            try:
+                cursor.execute("ALTER TABLE collection_clips ADD COLUMN is_selected INTEGER DEFAULT 0")
+                self.conn.commit()
+                logger.info("Added is_selected column to collection_clips table")
+            except Exception as e:
+                logger.warning(f"Failed to add is_selected column: {e}")
+                self.conn.rollback()
+        
+        # Clip star ratings table (user-assigned ratings, separate from contact ratings)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS clip_star_ratings (
+                contact_id INTEGER NOT NULL,
+                game_id INTEGER NOT NULL,
+                star_rating INTEGER CHECK(star_rating >= 1 AND star_rating <= 5),
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (contact_id, game_id)
+            )
+        """)
+        
+        self.conn.commit()
+        logger.info("Collection tables created successfully!")
     
     def initialize_database(self):
         """Initialize the database with tables."""
