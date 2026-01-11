@@ -250,3 +250,79 @@ class VideoService:
         finally:
             # Note: Not cleaning up temp files per user request (commented out in original)
             print(f"DEBUG: Temporary directory preserved: {temp_dir}")
+    
+    @staticmethod
+    def create_title_video(image_path: str, output_path: str, duration: float = 5.0, fps: int = 30) -> bool:
+        """
+        Convert a static image to a video file using ffmpeg.
+        
+        Args:
+            image_path: Path to input image file
+            output_path: Path to output video file
+            duration: Duration of video in seconds (default: 5.0)
+            fps: Frame rate (default: 30)
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Ensure output directory exists
+            output_path_obj = Path(output_path)
+            output_path_obj.parent.mkdir(parents=True, exist_ok=True)
+            
+            # Check if input image exists
+            image_path_obj = Path(image_path)
+            if not image_path_obj.exists():
+                print(f"Image file not found: {image_path}")
+                return False
+            
+            ffmpeg_exe = get_ffmpeg_path()
+            
+            # ffmpeg command to convert image to video with silent audio
+            # -loop 1: loop the input image
+            # -t duration: set duration
+            # -f lavfi -i anullsrc: add silent audio source
+            # -vf fps=fps: set frame rate
+            # -pix_fmt yuv420p: ensure compatibility
+            # -c:v libx264: use h264 codec
+            # -c:a aac: use aac audio codec
+            # -shortest: end encoding when shortest input stream ends
+            cmd = [
+                str(ffmpeg_exe),
+                '-loop', '1',
+                '-i', str(image_path_obj.absolute()),
+                '-f', 'lavfi',
+                '-i', 'anullsrc=channel_layout=stereo:sample_rate=44100',
+                '-t', str(duration),
+                '-vf', f'fps={fps}',
+                '-pix_fmt', 'yuv420p',
+                '-c:v', 'libx264',
+                '-c:a', 'aac',
+                '-shortest',
+                '-y',  # Overwrite output file if exists
+                str(output_path_obj.absolute())
+            ]
+            
+            print(f"DEBUG: Running ffmpeg command to create title video: {' '.join(cmd)}")
+            
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+            )
+            
+            if result.returncode == 0:
+                print(f"Successfully created title video: {output_path}")
+                return True
+            else:
+                error_msg = result.stderr if result.stderr else "Unknown error"
+                print(f"FFmpeg error creating title video: {error_msg}")
+                return False
+                
+        except FileNotFoundError:
+            print(f"FFmpeg not found at: {get_ffmpeg_path()}")
+            return False
+        except Exception as e:
+            print(f"Error creating title video: {str(e)}")
+            return False

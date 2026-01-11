@@ -156,10 +156,13 @@
                 <section class="highlight-section">
                     <h2>Create Highlight Video</h2>
                     <div class="highlight-controls">
-                        <label class="checkbox-label">
-                            <input type="checkbox" id="include-title-checkbox" />
-                            <span>Include Title Screen</span>
-                        </label>
+                        <div style="display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="include-title-checkbox" />
+                                <span>Include Title Screen</span>
+                            </label>
+                            <button id="configure-title-btn" class="btn btn-secondary">Configure Title Screen</button>
+                        </div>
                         <button id="create-highlight-btn" class="btn btn-primary">Generate Highlight Video</button>
                         <div id="video-progress" class="video-progress" style="display: none;">
                             <div class="progress-bar">

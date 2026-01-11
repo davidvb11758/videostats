@@ -262,10 +262,20 @@ def create_highlight_video():
         data = request.json or {}
         clips_data = data.get('clips', [])
         include_title = data.get('include_title', False)
-        title_path = data.get('title_path', 'output.mp4')
         
         if not clips_data:
             return jsonify({'error': 'No clips provided'}), 400
+        
+        # Handle title path - use fixed title.mp4 in video_clips folder
+        title_path = None
+        if include_title:
+            title_path_obj = Path("video_clips") / "title.mp4"
+            if not title_path_obj.exists():
+                return jsonify({
+                    'error': 'Title video not found. Please generate a title video first.',
+                    'title_path': str(title_path_obj)
+                }), 400
+            title_path = str(title_path_obj)
         
         # Generate job ID
         job_id = str(uuid.uuid4())
@@ -282,7 +292,7 @@ def create_highlight_video():
             video_jobs[job_id] = {
                 'status': 'pending',
                 'progress': 0,
-                'total': len(clips_data) + 1,
+                'total': len(clips_data) + (1 if include_title else 0) + 1,  # clips + title (if any) + concatenation
                 'output_path': None,
                 'error': None
             }
@@ -314,7 +324,7 @@ def create_highlight_video():
                     output_dir,
                     highlight_filename,
                     include_title,
-                    title_path if include_title else None,
+                    title_path,
                     progress_callback
                 )
                 

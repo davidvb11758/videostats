@@ -648,6 +648,27 @@ async function loadCollection(collectionId) {
         const data = await apiGet(`/api/collections/${collectionId}`);
         state.currentCollection = data.collection;
         
+        // First, capture current checkbox states for all displayed clips
+        // This preserves selection state for clips that aren't in the loaded collection
+        const currentCheckboxStates = new Map();
+        document.querySelectorAll('#clip-table-body tr').forEach(row => {
+            const checkbox = row.querySelector('input[type="checkbox"]');
+            if (checkbox) {
+                const contactId = parseInt(checkbox.dataset.contactId);
+                const gameId = parseInt(checkbox.dataset.gameId);
+                const key = `${gameId}-${contactId}`;
+                currentCheckboxStates.set(key, checkbox.checked);
+            }
+        });
+        
+        // Also update state.currentClips to reflect current checkbox states
+        state.currentClips.forEach(clip => {
+            const key = `${clip.game_id}-${clip.contact_id}`;
+            if (currentCheckboxStates.has(key)) {
+                clip.is_selected = currentCheckboxStates.get(key);
+            }
+        });
+        
         // Find the maximum order_index in current clips to continue numbering
         const maxOrderIndex = state.currentClips.length > 0 
             ? Math.max(...state.currentClips.map(c => c.order_index || 0))
@@ -660,6 +681,9 @@ async function loadCollection(collectionId) {
             existingClipsMap.set(key, clip);
         });
         
+        // Create a set of clips that are in the loaded collection (for selection state updates)
+        const loadedCollectionKeys = new Set();
+        
         // Process loaded clips - check for duplicates and update selection state
         let newClipsCount = 0;
         data.clips.forEach((c) => {
@@ -668,6 +692,9 @@ async function loadCollection(collectionId) {
             
             // Determine selection state from loaded collection
             const loadedSelectionState = c.is_selected === true || c.is_selected === 1 || c.is_selected === '1';
+            
+            // Mark this clip as being in the loaded collection
+            loadedCollectionKeys.add(key);
             
             if (existingClip) {
                 // Duplicate found - update the existing clip's selection state
@@ -683,6 +710,19 @@ async function loadCollection(collectionId) {
                 state.currentClips.push(newClip);
                 existingClipsMap.set(key, newClip); // Add to map to prevent future duplicates in this batch
                 newClipsCount++;
+            }
+        });
+        
+        // For clips that are NOT in the loaded collection, preserve their current selection state
+        state.currentClips.forEach(clip => {
+            const key = `${clip.game_id}-${clip.rally_number}-${clip.sequence_number}`;
+            if (!loadedCollectionKeys.has(key)) {
+                // This clip is not in the loaded collection, preserve its current selection state
+                const checkboxKey = `${clip.game_id}-${clip.contact_id}`;
+                if (currentCheckboxStates.has(checkboxKey)) {
+                    clip.is_selected = currentCheckboxStates.get(checkboxKey);
+                }
+                // If no checkbox state was captured, keep the existing is_selected value
             }
         });
         
@@ -800,8 +840,7 @@ async function createHighlightVideo() {
     try {
         const result = await apiPost('/api/highlight-video', {
             clips: selectedClips,
-            include_title: includeTitle,
-            title_path: 'output.mp4'
+            include_title: includeTitle
         });
         
         const jobId = result.job_id;
@@ -901,6 +940,9 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Highlight video
     document.getElementById('create-highlight-btn').addEventListener('click', createHighlightVideo);
+    document.getElementById('configure-title-btn').addEventListener('click', () => {
+        window.open('/title-builder', '_blank');
+    });
     
     // Modal close - stop video and pause
     function closeVideoModal() {
