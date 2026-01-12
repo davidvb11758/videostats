@@ -519,8 +519,8 @@ async function viewClip(clip) {
             return;
         }
         
-        // Build video URL with encoded path
-        const videoUrl = `/api/source-video?path=${encodeURIComponent(videoPath)}`;
+        // Build video URL with encoded path - use new clip endpoint for efficient 6-second clip
+        const videoUrl = `/api/video-clip?path=${encodeURIComponent(videoPath)}&timecode_ms=${clip.timecode_ms}`;
         
         // Set video info
         videoInfo.innerHTML = `
@@ -539,38 +539,33 @@ async function viewClip(clip) {
         
         modal.style.display = 'block';
         
-        // Set up playback for 6 seconds (3 seconds before to 3 seconds after timecode)
-        const startTimeSeconds = clip.start_ms / 1000; // Should be timecode - 3 seconds
-        const endTimeSeconds = (clip.start_ms + clip.duration_ms) / 1000; // Should be timecode + 3 seconds
-        
         // Remove old event listeners by cloning (clean slate)
         const oldVideoPlayer = videoPlayer;
         const newVideoPlayer = videoPlayer.cloneNode(true);
         oldVideoPlayer.parentNode.replaceChild(newVideoPlayer, oldVideoPlayer);
         const updatedVideoPlayer = document.getElementById('video-player');
         
-        // Set source
+        // Set source - clip starts at 0:00, no seeking needed
         updatedVideoPlayer.src = videoUrl;
         
-        // Seek to start time and play when video is loaded
+        // Play when video is ready (clip starts at 0:00)
         const setupVideo = () => {
-            updatedVideoPlayer.currentTime = startTimeSeconds;
             updatedVideoPlayer.play().catch(e => {
                 console.error('Autoplay prevented:', e);
                 // User might need to click play manually
             });
         };
         
-        // Set up event listeners
-        updatedVideoPlayer.addEventListener('loadedmetadata', () => {
+        // Set up event listeners - use 'canplay' for better readiness
+        updatedVideoPlayer.addEventListener('canplay', () => {
             setupVideo();
         }, { once: true });
         
-        // Stop playback at end time (6 seconds total)
+        // Stop playback at 6 seconds (clip duration)
         let timeUpdateHandler = () => {
-            if (updatedVideoPlayer.currentTime >= endTimeSeconds) {
+            if (updatedVideoPlayer.currentTime >= 6.0) {
                 updatedVideoPlayer.pause();
-                updatedVideoPlayer.currentTime = startTimeSeconds; // Reset to start for replay
+                updatedVideoPlayer.currentTime = 0; // Reset to start for replay
             }
         };
         

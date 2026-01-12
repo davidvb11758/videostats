@@ -153,18 +153,20 @@ class ListGamesDialog(QDialog):
         cursor.execute("""
             SELECT g.game_id, g.game_date, 
                    t1.name as team_us_name, t2.name as team_them_name,
-                   g.video_file_path, g.notes
+                   g.video_file_path, g.notes, g.is_ended
             FROM games g
             INNER JOIN teams t1 ON g.team_us_id = t1.team_id
             INNER JOIN teams t2 ON g.team_them_id = t2.team_id
-            ORDER BY g.game_date DESC, g.game_id DESC
         """)
         games = cursor.fetchall()
         
         self.game_list.clear()
         
+        # Collect games with their display text for sorting
+        game_items = []
+        
         for game in games:
-            game_id, game_date, team_us_name, team_them_name, video_file_path, notes = game
+            game_id, game_date, team_us_name, team_them_name, video_file_path, notes, is_ended = game
             
             # Format game date to show only the date (YYYY-MM-DD)
             date_display = game_date
@@ -199,7 +201,21 @@ class ListGamesDialog(QDialog):
                     opponent_display = notes.strip() if notes.strip() else team_them_name
             
             display_text = f"Game {game_id}: {team_us_name} vs {opponent_display} ({date_display})"
+            game_items.append((display_text, game_id, video_file_path, is_ended))
+        
+        # Sort games alphabetically in descending order (Z to A)
+        game_items.sort(key=lambda x: x[0], reverse=True)
+        
+        # Add sorted games to the list
+        for display_text, game_id, video_file_path, is_ended in game_items:
             item = QListWidgetItem(display_text)
+            
+            # Set font to bold if game is ended
+            if is_ended:
+                font = QFont()
+                font.setBold(True)
+                item.setFont(font)
+            
             item.setData(Qt.ItemDataRole.UserRole, {
                 'game_id': game_id,
                 'video_file_path': video_file_path

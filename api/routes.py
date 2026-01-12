@@ -6,9 +6,11 @@ import threading
 import uuid
 import re
 import urllib.parse
+import tempfile
+import hashlib
 from pathlib import Path
 from datetime import datetime
-from flask import Blueprint, request, jsonify, g, send_file, Response, current_app
+from flask import Blueprint, request, jsonify, g, send_file, Response, current_app, session
 from typing import Dict, List
 
 from database import VideoStatsDB
@@ -24,6 +26,10 @@ api = Blueprint('highlight_manager', __name__)
 # Video generation job storage (in-memory for now)
 video_jobs = {}
 video_jobs_lock = threading.Lock()
+
+# Thread-safe session cache for video clips
+session_clip_cache = {}  # {session_id: {cache_key: temp_file_path}}
+session_cache_lock = threading.Lock()
 
 
 def get_db():
@@ -45,6 +51,21 @@ def get_db():
             # Column might already exist, ignore error
             g.db.conn.rollback()
     return g.db
+
+
+def get_session_id():
+    """Get or create session ID for current request."""
+    if 'session_id' not in session:
+        session['session_id'] = str(uuid.uuid4())
+    return session['session_id']
+
+
+def get_session_temp_dir(session_id: str) -> Path:
+    """Get temp directory for a session."""
+    temp_base = Path(tempfile.gettempdir()) / "videostats_clips"
+    session_dir = temp_base / f"session_{session_id}"
+    session_dir.mkdir(parents=True, exist_ok=True)
+    return session_dir
 
 
 def get_services():
@@ -453,6 +474,116 @@ def serve_source_video():
             'error': str(e),
             'traceback': traceback.format_exc()
         }), 500
+
+
+@api.route('/api/video-clip', methods=['GET'])
+def serve_video_clip():
+    """Extract and serve only the 6-second clip segment."""
+    try:
+        video_path_encoded = request.args.get('path')
+        timecode_ms = int(request.args.get('timecode_ms', 0))
+        
+        if not video_path_encoded:
+            return jsonify({'error': 'Video path is required'}), 400
+        
+        video_path = urllib.parse.unquote(video_path_encoded)
+        video_path_obj = Path(video_path)
+        
+        # Check if source video file exists
+        if not video_path_obj.exists():
+            return jsonify({
+                'error': 'Video file not found',
+                'path': str(video_path_obj),
+                'absolute_path': str(video_path_obj.absolute())
+            }), 404
+        
+        session_id = get_session_id()
+        cache_key = (video_path, timecode_ms)
+        
+        # Check cache (thread-safe)
+        with session_cache_lock:
+            if session_id not in session_clip_cache:
+                session_clip_cache[session_id] = {}
+            
+            session_cache = session_clip_cache[session_id]
+            
+            if cache_key in session_cache:
+                temp_file = Path(session_cache[cache_key])
+                if temp_file.exists():
+                    # Serve cached clip
+                    return send_file(
+                        str(temp_file),
+                        mimetype='video/mp4',
+                        as_attachment=False
+                    )
+        
+        # Extract new clip
+        start_ms = max(0, timecode_ms - 3000)
+        duration_ms = 6000
+        
+        # Generate unique filename
+        path_hash = hashlib.md5(video_path.encode()).hexdigest()[:8]
+        temp_filename = f"clip_{session_id}_{path_hash}_{timecode_ms}.mp4"
+        temp_dir = get_session_temp_dir(session_id)
+        temp_file = temp_dir / temp_filename
+        
+        # Extract clip using VideoService
+        video_service = VideoService()
+        if video_service.extract_clip(str(video_path_obj), start_ms, duration_ms, str(temp_file)):
+            # Add to cache
+            with session_cache_lock:
+                session_clip_cache[session_id][cache_key] = str(temp_file)
+            
+            # Serve the clip
+            return send_file(
+                str(temp_file),
+                mimetype='video/mp4',
+                as_attachment=False
+            )
+        else:
+            return jsonify({'error': 'Failed to extract clip'}), 500
+            
+    except ValueError:
+        return jsonify({'error': 'Invalid timecode_ms parameter'}), 400
+    except Exception as e:
+        import traceback
+        return jsonify({
+            'error': str(e),
+            'traceback': traceback.format_exc()
+        }), 500
+
+
+@api.route('/api/cleanup-session-clips', methods=['POST'])
+def cleanup_session_clips():
+    """Clean up temp clips for current session."""
+    try:
+        session_id = get_session_id()
+        temp_dir = get_session_temp_dir(session_id)
+        
+        # Delete all files in session temp directory
+        deleted_count = 0
+        for temp_file in temp_dir.glob("*.mp4"):
+            try:
+                temp_file.unlink()
+                deleted_count += 1
+            except Exception:
+                pass
+        
+        # Remove from cache
+        with session_cache_lock:
+            if session_id in session_clip_cache:
+                del session_clip_cache[session_id]
+        
+        # Try to remove directory
+        try:
+            if temp_dir.exists() and not any(temp_dir.iterdir()):
+                temp_dir.rmdir()
+        except Exception:
+            pass
+        
+        return jsonify({'deleted': deleted_count})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 @api.route('/api/check-video', methods=['GET'])

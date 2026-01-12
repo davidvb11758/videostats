@@ -4,6 +4,8 @@ Main window for managing video clip collections and generating highlight videos.
 """
 
 import sys
+import os
+import hashlib
 from pathlib import Path
 from datetime import datetime
 from typing import List, Optional, Dict
@@ -27,7 +29,7 @@ from services.clip_service import ClipService
 from services.collection_service import CollectionService
 from services.filter_service import FilterService
 from services.video_service import VideoService
-from utils import get_ffmpeg_path, resource_path
+from utils import get_ffmpeg_path, resource_path, get_user_data_dir
 
 
 class StarRatingWidget(QWidget):
@@ -280,15 +282,24 @@ class DraggableClipTable(QTableWidget):
 class VideoPlayerWindow(QMainWindow):
     """Separate window for video playback."""
     
-    def __init__(self, video_path: str, contact_timecode_ms: int = 0, contact_info: str = "", parent=None):
+    def __init__(self, video_path: str, contact_timecode_ms: int = 0, contact_info: str = "", parent=None, is_clip: bool = False):
         super().__init__(parent)
         window_title = f"Video Player - {contact_info}" if contact_info else "Video Player"
         self.setWindowTitle(window_title)
         self.resize(1000, 600)
         
+        self.is_clip = is_clip
         self.contact_timecode_ms = contact_timecode_ms if contact_timecode_ms else 0
-        self.start_time_ms = max(0, self.contact_timecode_ms - 3000)
-        self.end_time_ms = self.contact_timecode_ms + 3000
+        
+        if is_clip:
+            # For extracted clips, clip starts at 0:00 and is 6 seconds long
+            self.start_time_ms = 0
+            self.end_time_ms = 6000
+        else:
+            # For full videos, seek to 3 seconds before contact
+            self.start_time_ms = max(0, self.contact_timecode_ms - 3000)
+            self.end_time_ms = self.contact_timecode_ms + 3000
+        
         self.auto_started = False
         
         central_widget = QWidget()
@@ -345,7 +356,9 @@ class VideoPlayerWindow(QMainWindow):
     def on_media_status_changed(self, status):
         """Handle media status changes."""
         if status == QMediaPlayer.MediaStatus.LoadedMedia:
-            self.media_player.setPosition(self.start_time_ms)
+            if not self.is_clip:
+                # Only seek for full videos, clips start at 0:00
+                self.media_player.setPosition(self.start_time_ms)
             self.media_player.play()
             self.play_pause_btn.setText("Pause")
             self.auto_started = True
@@ -370,22 +383,33 @@ class VideoPlayerWindow(QMainWindow):
             self.video_slider.setValue(position)
         
         current_time = self.format_time(position)
-        duration = self.media_player.duration()
-        total_time = self.format_time(duration)
+        if self.is_clip:
+            # For clips, duration is always 6 seconds
+            total_time = self.format_time(6000)
+        else:
+            duration = self.media_player.duration()
+            total_time = self.format_time(duration)
         self.time_label.setText(f"{current_time} / {total_time}")
         
-        if abs(position - self.contact_timecode_ms) < 500:
-            self.contact_indicator.setStyleSheet("color: white; background-color: red; padding: 2px;")
-        else:
-            self.contact_indicator.setStyleSheet("color: red;")
+        if not self.is_clip:
+            # Only show contact indicator for full videos
+            if abs(position - self.contact_timecode_ms) < 500:
+                self.contact_indicator.setStyleSheet("color: white; background-color: red; padding: 2px;")
+            else:
+                self.contact_indicator.setStyleSheet("color: red;")
         
+        # Auto-pause at end time
         if position >= self.end_time_ms and self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
             self.media_player.pause()
             self.play_pause_btn.setText("Play")
     
     def update_duration(self, duration):
         """Update the slider range."""
-        self.video_slider.setRange(0, duration)
+        if self.is_clip:
+            # For clips, duration is always 6 seconds
+            self.video_slider.setRange(0, 6000)
+        else:
+            self.video_slider.setRange(0, duration)
     
     def format_time(self, ms):
         """Format milliseconds to HH:MM:SS."""
@@ -416,6 +440,18 @@ class HighlightCollectionManager(QMainWindow):
         self.team_us_id = None
         self.team_them_id = None
         self.games_data = {}  # Store game data for team IDs
+        
+        # Setup temp clip directory and caching for efficient clip retrieval
+        self.process_id = os.getpid()
+        try:
+            self.user_id = os.getlogin() if hasattr(os, 'getlogin') else str(os.getuid())
+        except (OSError, AttributeError):
+            self.user_id = 'unknown'
+        
+        self.temp_clip_dir = get_user_data_dir() / "temp_clips" / f"process_{self.process_id}"
+        self.temp_clip_dir.mkdir(parents=True, exist_ok=True)
+        self.temp_clip_files = []  # Track all temp clip files for cleanup
+        self.clip_cache = {}  # Cache: (video_path, timecode_ms) -> temp_file_path
         
         # Setup UI
         self.setup_ui()
@@ -841,14 +877,75 @@ class HighlightCollectionManager(QMainWindow):
         
         self.open_video_player(video_path, timecode_ms)
     
+    def _get_cache_key(self, video_path: str, timecode_ms: int) -> tuple:
+        """Generate unique cache key for a clip."""
+        return (video_path, timecode_ms)
+    
+    def _get_temp_filename(self, video_path: str, timecode_ms: int) -> str:
+        """Generate unique temp filename for this process."""
+        # Create hash of video path for uniqueness
+        path_hash = hashlib.md5(video_path.encode()).hexdigest()[:8]
+        return f"clip_{self.process_id}_{self.user_id}_{path_hash}_{timecode_ms}.mp4"
+    
+    def _extract_clip(self, video_path: str, timecode_ms: int, temp_file: Path) -> bool:
+        """Extract 6-second clip with progress dialog."""
+        start_ms = max(0, timecode_ms - 3000)
+        duration_ms = 6000
+        
+        # Show progress dialog
+        progress = QProgressDialog("Extracting video clip...", "Cancel", 0, 0, self)
+        progress.setWindowTitle("Extracting Clip")
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setCancelButton(None)  # No cancel for now
+        progress.show()
+        QApplication.processEvents()
+        
+        # Extract clip using VideoService
+        success = self.video_service.extract_clip(
+            video_path,
+            start_ms,
+            duration_ms,
+            str(temp_file)
+        )
+        
+        progress.close()
+        return success
+    
     def open_video_player(self, video_path: str, timecode_ms: int):
-        """Open video player window."""
+        """Open video player window with efficient clip extraction."""
         if not video_path or not Path(video_path).exists():
             QMessageBox.warning(self, "Video Not Found", f"Video file not found:\n{video_path}")
             return
         
-        player = VideoPlayerWindow(video_path, timecode_ms, "", self)
-        player.show()
+        cache_key = self._get_cache_key(video_path, timecode_ms)
+        
+        # Check cache first
+        if cache_key in self.clip_cache:
+            temp_file = self.clip_cache[cache_key]
+            if Path(temp_file).exists():
+                # Reuse existing clip - instant playback
+                player = VideoPlayerWindow(str(temp_file), 0, "", self, is_clip=True)
+                player.show()
+                return
+        
+        # Extract new clip
+        temp_filename = self._get_temp_filename(video_path, timecode_ms)
+        temp_file = self.temp_clip_dir / temp_filename
+        
+        # Extract clip (with progress)
+        if self._extract_clip(video_path, timecode_ms, temp_file):
+            # Add to cache and tracking
+            self.clip_cache[cache_key] = str(temp_file)
+            self.temp_clip_files.append(str(temp_file))
+            
+            # Open player with extracted clip
+            player = VideoPlayerWindow(str(temp_file), 0, "", self, is_clip=True)
+            player.show()
+        else:
+            QMessageBox.warning(self, "Error", "Failed to extract video clip. Falling back to full video.")
+            # Fallback to original behavior
+            player = VideoPlayerWindow(video_path, timecode_ms, "", self)
+            player.show()
     
     def on_new_collection(self):
         """Create a new collection."""
@@ -998,6 +1095,24 @@ class HighlightCollectionManager(QMainWindow):
             title_window.show()
         except Exception as e:
             QMessageBox.warning(self, "Error", f"Failed to open title creator:\n{str(e)}")
+    
+    def closeEvent(self, event):
+        """Clean up all temp clip files when window closes."""
+        for temp_file in self.temp_clip_files:
+            try:
+                if Path(temp_file).exists():
+                    Path(temp_file).unlink()
+            except Exception as e:
+                print(f"Warning: Could not delete temp file {temp_file}: {e}")
+        
+        # Try to remove temp directory if empty
+        try:
+            if self.temp_clip_dir.exists() and not any(self.temp_clip_dir.iterdir()):
+                self.temp_clip_dir.rmdir()
+        except Exception:
+            pass
+        
+        event.accept()
 
 
 def main():

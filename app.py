@@ -4,6 +4,8 @@ from api.routes import api
 from api.title_builder_routes import title_builder_api
 
 app = Flask(__name__)
+# Set secret key for session management (required for multi-user clip caching)
+app.secret_key = 'videostats-clip-session-key-change-in-production'
 app.register_blueprint(api)
 app.register_blueprint(title_builder_api)
 
