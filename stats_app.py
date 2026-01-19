@@ -273,7 +273,7 @@ class StatsApp(QMainWindow):
             self.db.connect()
         cursor = self.db.conn.cursor()
         games = cursor.execute(
-            'SELECT game_id, game_date, team_us_id, team_them_id, notes FROM games WHERE team_us_id = ? OR team_them_id = ? ORDER BY game_date DESC',
+            'SELECT game_id, game_date, team_us_id, team_them_id, notes FROM games WHERE team_us_id = %s OR team_them_id = %s ORDER BY game_date DESC',
             (team_id, team_id)
         ).fetchall()
         
@@ -324,7 +324,7 @@ class StatsApp(QMainWindow):
         
         # Get players and stats - ONLY for players on the selected team
         # Filter by team_id to ensure we only get players from the selected team
-        placeholders = ','.join('?' * len(self.selected_game_ids))
+        placeholders = ','.join('%s' * len(self.selected_game_ids))
         query = f'''
             SELECT 
                 p.player_id,
@@ -355,7 +355,7 @@ class StatsApp(QMainWindow):
             FROM players p
             LEFT JOIN player_stats ps ON p.player_id = ps.player_id 
                 AND ps.game_id IN ({placeholders})
-            WHERE p.team_id = ?
+            WHERE p.team_id = %s
             ORDER BY CAST(p.player_number AS INTEGER), p.player_number
         '''
         
@@ -395,7 +395,7 @@ class StatsApp(QMainWindow):
                 SUM(ps.block_solo) as block_solo
             FROM player_stats ps
             INNER JOIN players p ON ps.player_id = p.player_id
-            WHERE p.team_id = ? AND ps.game_id IN ({placeholders})
+            WHERE p.team_id = %s AND ps.game_id IN ({placeholders})
         '''
         
         # Execute totals query with team ID and selected game IDs
@@ -750,4 +750,5 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 

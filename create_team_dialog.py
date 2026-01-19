@@ -151,13 +151,13 @@ class CreateTeamDialog(QDialog):
                     params = []
                     
                     if role:
-                        updates.append("role_code = ?")
+                        updates.append("role_code = %s")
                         params.append(role)
                     
                     # Try to convert jersey to integer for jersey column
                     try:
                         jersey_int = int(jersey)
-                        updates.append("jersey = ?")
+                        updates.append("jersey = %s")
                         params.append(jersey_int)
                     except ValueError:
                         pass  # Keep jersey as text in player_number
@@ -165,7 +165,7 @@ class CreateTeamDialog(QDialog):
                     if updates:
                         params.append(player_id)
                         cursor.execute(
-                            f"UPDATE players SET {', '.join(updates)} WHERE player_id = ?",
+                            f"UPDATE players SET {', '.join(updates)} WHERE player_id = %s",
                             params
                         )
             
@@ -182,4 +182,5 @@ class CreateTeamDialog(QDialog):
                 "Database Error",
                 f"Failed to save team:\n{str(e)}"
             )
+
 

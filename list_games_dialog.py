@@ -330,7 +330,7 @@ class ListGamesDialog(QDialog):
             FROM games g
             INNER JOIN teams t1 ON g.team_us_id = t1.team_id
             INNER JOIN teams t2 ON g.team_them_id = t2.team_id
-            WHERE g.game_id = ?
+            WHERE g.game_id = %s
         """, (game_id,))
         
         game_info = cursor.fetchone()
@@ -340,7 +340,7 @@ class ListGamesDialog(QDialog):
         team_us_id, team_them_id, team_us_name, team_them_name = game_info
         
         # Count rallies
-        cursor.execute("SELECT COUNT(*) FROM rallies WHERE game_id = ?", (game_id,))
+        cursor.execute("SELECT COUNT(*) FROM rallies WHERE game_id = %s", (game_id,))
         num_rallies = cursor.fetchone()[0] or 0
         
         # Count contacts
@@ -348,7 +348,7 @@ class ListGamesDialog(QDialog):
             SELECT COUNT(*) 
             FROM contacts c
             INNER JOIN rallies r ON c.rally_id = r.rally_id
-            WHERE r.game_id = ?
+            WHERE r.game_id = %s
         """, (game_id,))
         num_contacts = cursor.fetchone()[0] or 0
         
@@ -356,7 +356,7 @@ class ListGamesDialog(QDialog):
         cursor.execute("""
             SELECT point_winner_id, COUNT(*) 
             FROM rallies 
-            WHERE game_id = ? AND point_winner_id IS NOT NULL
+            WHERE game_id = %s AND point_winner_id IS NOT NULL
             GROUP BY point_winner_id
         """, (game_id,))
         
@@ -369,11 +369,11 @@ class ListGamesDialog(QDialog):
                 points_them = count
         
         # Count game players
-        cursor.execute("SELECT COUNT(*) FROM game_players WHERE game_id = ?", (game_id,))
+        cursor.execute("SELECT COUNT(*) FROM game_players WHERE game_id = %s", (game_id,))
         num_game_players = cursor.fetchone()[0] or 0
         
         # Count player stats
-        cursor.execute("SELECT COUNT(*) FROM player_stats WHERE game_id = ?", (game_id,))
+        cursor.execute("SELECT COUNT(*) FROM player_stats WHERE game_id = %s", (game_id,))
         num_player_stats = cursor.fetchone()[0] or 0
         
         return {
@@ -407,7 +407,7 @@ class ListGamesDialog(QDialog):
         
         # Build confirmation message with statistics
         confirmation_message = (
-            f"Are you sure you want to delete Game {stats['game_id']}?\n\n"
+            f"Are you sure you want to delete Game {stats['game_id']}%s\n\n"
             f"Game: {stats['team_us_name']} vs {stats['team_them_name']}\n\n"
             f"This will delete all associated data:\n"
             f"- {stats['num_rallies']} rallies\n"
@@ -484,4 +484,5 @@ class ListGamesDialog(QDialog):
             view_size = self.view.viewport().size()
             self.video_item.setSize(QRectF(0, 0, view_size.width(), view_size.height()).size())
             self.scene.setSceneRect(0, 0, view_size.width(), view_size.height())
+
 

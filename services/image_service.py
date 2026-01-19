@@ -145,3 +145,4 @@ def generate_image(settings: Dict[str, Any]) -> Image.Image:
         current_y += text_height + LINE_SPACING
     
     return img
+

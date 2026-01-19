@@ -1,0 +1,41 @@
+PostgreSQL Database Configuration
+==================================
+
+Environment Variables:
+---------------------
+Set these environment variables before running the application:
+
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5432
+POSTGRES_DB=videstats
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=your_password_here
+
+Alternative Configuration:
+-------------------------
+You can also pass a configuration dictionary when initializing VideoStatsDB:
+
+    db_config = {
+        'host': 'localhost',
+        'port': 5432,
+        'database': 'videstats',
+        'user': 'postgres',
+        'password': 'your_password'
+    }
+    db = VideoStatsDB(db_config=db_config)
+
+Database Setup:
+--------------
+1. Install PostgreSQL
+2. Create the database:
+   CREATE DATABASE videstats;
+
+3. Run the migration file to create the schema:
+   psql -U postgres -d videstats -f database/migrations/01_postgres_schema.sql
+
+4. Configure environment variables or pass db_config to VideoStatsDB
+
+Dependencies:
+------------
+Install psycopg2-binary:
+   pip install psycopg2-binary

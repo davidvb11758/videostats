@@ -59,28 +59,28 @@ class ClipService:
               AND c.contact_type IN ({})
               AND c.outcome IN ({})
         """.format(
-            ','.join(['?'] * len(game_ids)),
-            ','.join(['?'] * len(filters['contact_types'])),
-            ','.join(['?'] * len(filters['outcomes']))
+            ','.join(['%s'] * len(game_ids)),
+            ','.join(['%s'] * len(filters['contact_types'])),
+            ','.join(['%s'] * len(filters['outcomes']))
         )
         
         params = list(game_ids) + filters['contact_types'] + filters['outcomes']
         
         # Add team filter
         if len(filters['team_ids']) < 2 and len(filters['team_ids']) > 0:
-            query += " AND c.team_id IN ({})".format(','.join(['?'] * len(filters['team_ids'])))
+            query += " AND c.team_id IN ({})".format(','.join(['%s'] * len(filters['team_ids'])))
             params.extend(filters['team_ids'])
         
         # Add rating filter if Receive is selected and ratings are selected
         if filters['use_rating_filter']:
             query += " AND (c.contact_type != 'receive' OR c.rating IN ({}))".format(
-                ','.join(['?'] * len(filters['ratings']))
+                ','.join(['%s'] * len(filters['ratings']))
             )
             params.extend(filters['ratings'])
         
         # Add player filter
         if not filters['all_players_selected'] and len(filters['player_ids']) > 0:
-            query += " AND c.player_id IN ({})".format(','.join(['?'] * len(filters['player_ids'])))
+            query += " AND c.player_id IN ({})".format(','.join(['%s'] * len(filters['player_ids'])))
             params.extend(filters['player_ids'])
         
         query += " ORDER BY r.game_id, r.rally_number, c.sequence_number"
@@ -150,7 +150,7 @@ class ClipService:
         cursor = self.db.conn.cursor()
         
         # Build query with placeholders
-        placeholders = ','.join(['(?, ?)'] * len(contact_game_pairs))
+        placeholders = ','.join(['(%s, %s)'] * len(contact_game_pairs))
         query = f"""
             SELECT contact_id, game_id, star_rating
             FROM clip_star_ratings
@@ -189,7 +189,7 @@ class ClipService:
         try:
             cursor.execute("""
                 INSERT OR REPLACE INTO clip_star_ratings (contact_id, game_id, star_rating, updated_at)
-                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
             """, (contact_id, game_id, star_rating))
             self.db.conn.commit()
             return True
@@ -216,7 +216,7 @@ class ClipService:
         cursor.execute("""
             SELECT star_rating
             FROM clip_star_ratings
-            WHERE contact_id = ? AND game_id = ?
+            WHERE contact_id = %s AND game_id = %s
         """, (contact_id, game_id))
         
         result = cursor.fetchone()
@@ -261,3 +261,5 @@ class ClipService:
             })
         
         return result
+
+

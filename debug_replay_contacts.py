@@ -215,7 +215,7 @@ class DebugReplayContactsWindow(QMainWindow):
             FROM contacts c
             INNER JOIN rallies r ON c.rally_id = r.rally_id
             LEFT JOIN players p ON c.player_id = p.player_id
-            WHERE r.game_id = ?
+            WHERE r.game_id = %s
               AND c.x IS NOT NULL
               AND c.y IS NOT NULL
               AND c.timecode IS NOT NULL
@@ -720,4 +720,5 @@ class DebugReplayContactsWindow(QMainWindow):
         self.contact_check_timer.stop()
         self.media_player.stop()
         event.accept()
+
 

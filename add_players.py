@@ -178,7 +178,7 @@ class AddPlayersDialog(QDialog):
         if self.team_us_id:
             cursor.execute(
                 """SELECT player_id, player_number, name FROM players 
-                   WHERE team_id = ? 
+                   WHERE team_id = %s 
                    ORDER BY 
                        CASE 
                            WHEN CAST(player_number AS INTEGER) IS NOT NULL 
@@ -200,7 +200,7 @@ class AddPlayersDialog(QDialog):
         if self.team_them_id:
             cursor.execute(
                 """SELECT player_id, player_number, name FROM players 
-                   WHERE team_id = ? 
+                   WHERE team_id = %s 
                    ORDER BY 
                        CASE 
                            WHEN CAST(player_number AS INTEGER) IS NOT NULL 
@@ -245,7 +245,7 @@ class AddPlayersDialog(QDialog):
         
         cursor = self.db.conn.cursor()
         cursor.execute(
-            "SELECT player_number, name FROM players WHERE player_id = ? AND team_id = ?",
+            "SELECT player_number, name FROM players WHERE player_id = %s AND team_id = %s",
             (player_id, team_id)
         )
         result = cursor.fetchone()
@@ -262,7 +262,7 @@ class AddPlayersDialog(QDialog):
             cursor = self.db.conn.cursor()
             cursor.execute(
                 """SELECT player_id, player_number, name FROM players 
-                   WHERE team_id = ? 
+                   WHERE team_id = %s 
                    ORDER BY 
                        CASE 
                            WHEN CAST(player_number AS INTEGER) IS NOT NULL 
@@ -319,7 +319,7 @@ class AddPlayersDialog(QDialog):
             # Check if player already exists for this team
             cursor = self.db.conn.cursor()
             cursor.execute(
-                "SELECT player_id FROM players WHERE team_id = ? AND player_number = ?",
+                "SELECT player_id FROM players WHERE team_id = %s AND player_number = %s",
                 (team_id, player_number)
             )
             existing_player = cursor.fetchone()
@@ -364,7 +364,7 @@ class AddPlayersDialog(QDialog):
         
         reply = QMessageBox.question(
             self, "Confirm Remove",
-            f"Remove player number {player_number} from this game?",
+            f"Remove player number {player_number} from this game%s",
             QMessageBox.Yes | QMessageBox.No
         )
         
@@ -415,4 +415,5 @@ if __name__ == "__main__":
     
     db.close()
     sys.exit(0)
+
 

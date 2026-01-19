@@ -176,7 +176,7 @@ class CreateGameDialog(QDialog):
             cursor.execute("""
                 SELECT player_id, name, jersey, player_number
                 FROM players
-                WHERE team_id = ?
+                WHERE team_id = %s
                 ORDER BY name ASC
             """, (team_id,))
             
@@ -274,7 +274,7 @@ class CreateGameDialog(QDialog):
             cursor.execute("""
                 SELECT player_id, name, jersey, player_number
                 FROM players
-                WHERE team_id = ?
+                WHERE team_id = %s
                 ORDER BY name ASC
             """, (team_id,))
             
@@ -356,7 +356,7 @@ class CreateGameDialog(QDialog):
             cursor.execute("""
                 SELECT player_id, name, jersey, player_number
                 FROM players
-                WHERE team_id = ?
+                WHERE team_id = %s
                 ORDER BY name ASC
             """, (team_id,))
             
@@ -452,7 +452,7 @@ class CreateGameDialog(QDialog):
             cursor.execute("""
                 SELECT player_id, name, jersey, player_number
                 FROM players
-                WHERE team_id = ?
+                WHERE team_id = %s
                 ORDER BY name ASC
             """, (team_id,))
             
@@ -637,7 +637,7 @@ class CreateGameDialog(QDialog):
             if opponent_alias != "Opp1":
                 cursor = self.db.conn.cursor()
                 cursor.execute(
-                    "UPDATE games SET notes = ? WHERE game_id = ?",
+                    "UPDATE games SET notes = %s WHERE game_id = %s",
                     (f"Opponent: {opponent_alias}", self.game_id)
                 )
                 self.db.conn.commit()
@@ -652,15 +652,15 @@ class CreateGameDialog(QDialog):
                 if role:
                     cursor.execute("""
                         UPDATE active_lineup
-                        SET role_code = ?
-                        WHERE team_id = ? AND position_number = ? AND player_id = ?
+                        SET role_code = %s
+                        WHERE team_id = %s AND position_number = %s AND player_id = %s
                     """, (role, team_us_id, pos, player_id))
             
             # Update libero role in players table if selected
             libero_id = self.libero_combo.currentData()
             if libero_id:
                 cursor.execute(
-                    "UPDATE players SET role_code = 'Lib' WHERE player_id = ?",
+                    "UPDATE players SET role_code = 'Lib' WHERE player_id = %s",
                     (libero_id,)
                 )
             
@@ -670,7 +670,7 @@ class CreateGameDialog(QDialog):
             # This makes all players available for substitutions and libero replacements
             cursor = self.db.conn.cursor()
             cursor.execute("""
-                SELECT player_id FROM players WHERE team_id = ?
+                SELECT player_id FROM players WHERE team_id = %s
             """, (team_us_id,))
             team_us_roster = cursor.fetchall()
             
@@ -714,7 +714,7 @@ class CreateGameDialog(QDialog):
             cursor.execute("""
                 SELECT id, payload
                 FROM events
-                WHERE game_id = ? AND team_id = ? AND event_type = 'initial_setup'
+                WHERE game_id = %s AND team_id = %s AND event_type = 'initial_setup'
                 ORDER BY created_at DESC, id DESC
                 LIMIT 1
             """, (self.game_id, team_us_id))
@@ -734,7 +734,7 @@ class CreateGameDialog(QDialog):
                             cursor.execute("""
                                 SELECT game_role_code
                                 FROM game_players
-                                WHERE game_id = ? AND team_id = ? AND player_id = ?
+                                WHERE game_id = %s AND team_id = %s AND player_id = %s
                             """, (self.game_id, team_us_id, player_id))
                             result = cursor.fetchone()
                             if result and result[0]:
@@ -747,8 +747,8 @@ class CreateGameDialog(QDialog):
                         updated_payload_json = json.dumps(payload)
                         cursor.execute("""
                             UPDATE events
-                            SET payload = ?
-                            WHERE id = ?
+                            SET payload = %s
+                            WHERE id = %s
                         """, (updated_payload_json, event_id))
                         self.db.conn.commit()
                         print(f"DEBUG: Updated initial_setup event {event_id} to use game_role_code")
@@ -777,7 +777,7 @@ class CreateGameDialog(QDialog):
             self.team_us_id = team_us_id
             self.team_them_id = team_them_id
             cursor = self.db.conn.cursor()
-            cursor.execute("SELECT name FROM teams WHERE team_id = ?", (team_us_id,))
+            cursor.execute("SELECT name FROM teams WHERE team_id = %s", (team_us_id,))
             self.team_us_name = cursor.fetchone()[0]
             self.team_them_name = opponent_alias
             
@@ -845,3 +845,4 @@ class CreateGameDialog(QDialog):
                 f"Failed to launch coordinate mapper:\n{str(e)}\n\n"
                 "The game has been created successfully."
             )
+

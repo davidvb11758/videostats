@@ -73,3 +73,4 @@ class EditTeamDialog(QDialog):
             self.team_name = self.team_combo.currentText()
         super().accept()
 
+

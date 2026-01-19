@@ -105,3 +105,4 @@ def initialize_app():
     user_data_dir.mkdir(parents=True, exist_ok=True)
     return user_data_dir
 
+

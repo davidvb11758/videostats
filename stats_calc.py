@@ -106,7 +106,7 @@ class StatsCalculator:
         cursor = db.conn.cursor()
         
         # Delete existing stats for this game
-        cursor.execute("DELETE FROM player_stats WHERE game_id = ?", (game_id,))
+        cursor.execute("DELETE FROM player_stats WHERE game_id = %s", (game_id,))
         deleted_count = cursor.rowcount
         if deleted_count > 0:
             logger.info(f"Deleted {deleted_count} existing stat records for game {game_id}")
@@ -120,7 +120,7 @@ class StatsCalculator:
                 c.rating
             FROM contacts c
             INNER JOIN rallies r ON c.rally_id = r.rally_id
-            WHERE r.game_id = ? AND c.player_id IS NOT NULL
+            WHERE r.game_id = %s AND c.player_id IS NOT NULL
             ORDER BY c.player_id, c.contact_type
         """, (game_id,))
         
@@ -229,7 +229,7 @@ class StatsCalculator:
                 SELECT COUNT(*) as ace_count
                 FROM contacts c
                 INNER JOIN rallies r ON c.rally_id = r.rally_id
-                WHERE r.game_id = ? AND c.player_id = ? 
+                WHERE r.game_id = %s AND c.player_id = %s 
                 AND c.contact_type = 'serve' AND c.outcome = 'ace'
             """, (game_id, player_id))
             ace_result = cursor.fetchone()
@@ -251,7 +251,7 @@ class StatsCalculator:
                 SELECT COUNT(*) as assist_count
                 FROM contacts c
                 INNER JOIN rallies r ON c.rally_id = r.rally_id
-                WHERE r.game_id = ? AND c.player_id = ? 
+                WHERE r.game_id = %s AND c.player_id = %s 
                 AND c.contact_type = 'set' AND c.outcome = 'assist'
             """, (game_id, player_id))
             assist_result = cursor.fetchone()
@@ -267,7 +267,7 @@ class StatsCalculator:
                     serve_attempts, serve_aces, serve_errors, serve_ace_pct, serve_in_pct,
                     dig_attempts, dig_successful,
                     block_solo
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """, (
                 game_id, player_id,
                 stats['receive_attempts'], stats['receive_0'], stats['receive_1'], stats['receive_2'], stats['receive_3'], receive_avg_rating,
@@ -283,7 +283,7 @@ class StatsCalculator:
         
         # Print summary for each player
         for player_id, stats in player_stats.items():
-            cursor.execute("SELECT player_number, name FROM players WHERE player_id = ?", (player_id,))
+            cursor.execute("SELECT player_number, name FROM players WHERE player_id = %s", (player_id,))
             player_info = cursor.fetchone()
             player_name = f"{player_info[0] if player_info else 'Unknown'}" + (f" ({player_info[1]})" if player_info and player_info[1] else "")
             logger.debug(f"  Player {player_name}: "
@@ -437,7 +437,7 @@ class StatsCalculator:
         cursor.execute("""
             SELECT team_us_id, team_them_id
             FROM games
-            WHERE game_id = ?
+            WHERE game_id = %s
         """, (game_id,))
         
         game_result = cursor.fetchone()
@@ -467,7 +467,7 @@ class StatsCalculator:
                 COALESCE(c.rating_manual, 0) as rating_manual
             FROM contacts c
             INNER JOIN rallies r ON c.rally_id = r.rally_id
-            WHERE r.game_id = ? AND c.contact_type = 'receive'
+            WHERE r.game_id = %s AND c.contact_type = 'receive'
             ORDER BY c.rally_id, c.sequence_number
         """, (game_id,))
         
@@ -506,7 +506,7 @@ class StatsCalculator:
                     x,
                     y
                 FROM contacts
-                WHERE rally_id = ? AND sequence_number > ?
+                WHERE rally_id = %s AND sequence_number > %s
                 ORDER BY sequence_number
                 LIMIT 1
             """, (rally_id, sequence_number))
@@ -539,8 +539,8 @@ class StatsCalculator:
                 logger.debug(f"  Updating contact_id={contact_id} with rating={rating}")
                 cursor.execute("""
                     UPDATE contacts
-                    SET rating = ?
-                    WHERE contact_id = ?
+                    SET rating = %s
+                    WHERE contact_id = %s
                 """, (rating, contact_id))
                 updated_count += 1
                 logger.debug(f"  [OK] Successfully updated contact {contact_id} with rating {rating}")
@@ -633,4 +633,6 @@ if __name__ == "__main__":
     else:
         # Just print receive rating configs
         calculator.print_receive_rating_configs()
+
+
 

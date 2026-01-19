@@ -198,3 +198,4 @@ def get_available_fonts() -> List[str]:
         List of font names
     """
     return list(WINDOWS_FONTS.keys())
+

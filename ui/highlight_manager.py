@@ -1020,7 +1020,7 @@ class HighlightCollectionManager(QMainWindow):
             return
         
         reply = QMessageBox.question(self, "Delete Collection", 
-                                    "Are you sure you want to delete this collection?",
+                                    "Are you sure you want to delete this collection%s",
                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         if reply == QMessageBox.StandardButton.Yes:
             if self.collection_service.delete_collection(collection_id):
@@ -1136,3 +1136,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

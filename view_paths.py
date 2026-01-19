@@ -944,12 +944,12 @@ class ContactEditDialog(QDialog):
         
         cursor = self.db.conn.cursor()
         # Get rally_id and sequence_number for this contact
-        cursor.execute("SELECT rally_id, sequence_number FROM contacts WHERE contact_id = ?", (self.contact_id,))
+        cursor.execute("SELECT rally_id, sequence_number FROM contacts WHERE contact_id = %s", (self.contact_id,))
         result = cursor.fetchone()
         if result:
             rally_id, seq_num = result
             # Get next contact
-            cursor.execute("SELECT x, y FROM contacts WHERE rally_id = ? AND sequence_number = ?", 
+            cursor.execute("SELECT x, y FROM contacts WHERE rally_id = %s AND sequence_number = %s", 
                           (rally_id, seq_num + 1))
             next_result = cursor.fetchone()
             if next_result and next_result[0] is not None and next_result[1] is not None:
@@ -1340,7 +1340,7 @@ class ContactEditDialog(QDialog):
         
         cursor = self.db.conn.cursor()
         # Get team IDs
-        cursor.execute("SELECT team_us_id, team_them_id FROM games WHERE game_id = ?", (self.game_id,))
+        cursor.execute("SELECT team_us_id, team_them_id FROM games WHERE game_id = %s", (self.game_id,))
         result = cursor.fetchone()
         if not result:
             return
@@ -1353,7 +1353,7 @@ class ContactEditDialog(QDialog):
                    p.name
             FROM game_players gp
             INNER JOIN players p ON gp.player_id = p.player_id
-            WHERE gp.game_id = ? AND gp.team_id = ?
+            WHERE gp.game_id = %s AND gp.team_id = %s
             ORDER BY CASE 
                 WHEN CAST(p.player_number AS INTEGER) IS NOT NULL 
                 THEN CAST(p.player_number AS INTEGER)
@@ -1371,7 +1371,7 @@ class ContactEditDialog(QDialog):
                        COALESCE(p.jersey, p.player_number) as player_number,
                        p.name
                 FROM players p
-                WHERE p.team_id = ?
+                WHERE p.team_id = %s
                 ORDER BY CASE 
                     WHEN CAST(p.player_number AS INTEGER) IS NOT NULL 
                     THEN CAST(p.player_number AS INTEGER)
@@ -1411,7 +1411,7 @@ class ContactEditDialog(QDialog):
             opponent_rb.setChecked(True)
         elif current_player_id:
             # Check if player is from team_them
-            cursor.execute("SELECT team_id FROM players WHERE player_id = ?", (current_player_id,))
+            cursor.execute("SELECT team_id FROM players WHERE player_id = %s", (current_player_id,))
             player_team_result = cursor.fetchone()
             if player_team_result and player_team_result[0] == team_them_id:
                 opponent_rb.setChecked(True)
@@ -1422,7 +1422,7 @@ class ContactEditDialog(QDialog):
             self.db.connect()
         
         cursor = self.db.conn.cursor()
-        cursor.execute("SELECT video_file_path FROM games WHERE game_id = ?", (self.game_id,))
+        cursor.execute("SELECT video_file_path FROM games WHERE game_id = %s", (self.game_id,))
         result = cursor.fetchone()
         
         if not result or not result[0]:
@@ -1543,9 +1543,9 @@ class ContactEditDialog(QDialog):
             # Update contact
             update_query = """
                 UPDATE contacts 
-                SET player_id = ?, contact_type = ?, outcome = ?, rating = ?, timecode = ?,
-                    outcome_manual = ?, rating_manual = ?, x = ?, y = ?
-                WHERE contact_id = ?
+                SET player_id = %s, contact_type = %s, outcome = %s, rating = %s, timecode = %s,
+                    outcome_manual = %s, rating_manual = %s, x = %s, y = %s
+                WHERE contact_id = %s
             """
             outcome_manual = 1 if self.outcome_manually_edited else 0
             rating_manual = 1 if self.rating_manually_edited else 0
@@ -1565,15 +1565,15 @@ class ContactEditDialog(QDialog):
             
             # Update destination coordinates in next contact if it exists
             if self.dest_x is not None and self.dest_y is not None:
-                cursor.execute("SELECT rally_id, sequence_number FROM contacts WHERE contact_id = ?", (self.contact_id,))
+                cursor.execute("SELECT rally_id, sequence_number FROM contacts WHERE contact_id = %s", (self.contact_id,))
                 result = cursor.fetchone()
                 if result:
                     rally_id, seq_num = result
                     # Update next contact coordinates
                     cursor.execute("""
                         UPDATE contacts 
-                        SET x = ?, y = ?
-                        WHERE rally_id = ? AND sequence_number = ?
+                        SET x = %s, y = %s
+                        WHERE rally_id = %s AND sequence_number = %s
                     """, (int(self.dest_x), int(self.dest_y), rally_id, seq_num + 1))
                     print(f"DEBUG: Updated next contact coordinates to ({int(self.dest_x)}, {int(self.dest_y)})")
             
@@ -2568,30 +2568,30 @@ class ContactPathViewer(QMainWindow):
             INNER JOIN rallies r ON c.rally_id = r.rally_id
             LEFT JOIN players p ON c.player_id = p.player_id
             INNER JOIN teams t ON c.team_id = t.team_id
-            WHERE r.game_id = ?
+            WHERE r.game_id = %s
               AND c.x IS NOT NULL 
               AND c.y IS NOT NULL
               AND c.contact_type IN ({})
               AND c.outcome IN ({})
-        """.format(','.join(['?'] * len(selected_contact_types)), ','.join(['?'] * len(selected_outcomes)))
+        """.format(','.join(['%s'] * len(selected_contact_types)), ','.join(['%s'] * len(selected_outcomes)))
         
         params_filtered = [self.game_id] + selected_contact_types + selected_outcomes
         
         # Add team filter
         if len(team_ids_to_show) < 2:
             # Only one team selected
-            query_filtered += " AND c.team_id IN ({})".format(','.join(['?'] * len(team_ids_to_show)))
+            query_filtered += " AND c.team_id IN ({})".format(','.join(['%s'] * len(team_ids_to_show)))
             params_filtered.extend(team_ids_to_show)
         
         # Add player filter if specific players are selected
         # Note: Floor contacts (contacts without player_id) are excluded when filtering by player
         if has_player_filter and not all_players_selected:
-            query_filtered += " AND c.player_id IN ({})".format(','.join(['?'] * len(selected_player_ids)))
+            query_filtered += " AND c.player_id IN ({})".format(','.join(['%s'] * len(selected_player_ids)))
             params_filtered.extend(selected_player_ids)
         
         # Add rating filter if Receive is selected and ratings are selected
         if use_rating_filter:
-            query_filtered += " AND (c.contact_type != 'receive' OR c.rating IN ({}))".format(','.join(['?'] * len(selected_ratings)))
+            query_filtered += " AND (c.contact_type != 'receive' OR c.rating IN ({}))".format(','.join(['%s'] * len(selected_ratings)))
             params_filtered.extend(selected_ratings)
         
         query_filtered += " ORDER BY r.rally_number, c.sequence_number"
@@ -2607,7 +2607,7 @@ class ContactPathViewer(QMainWindow):
         # Now get ALL contacts in the same rallies (to find next contact after each filtered contact)
         # Get unique rally_ids from filtered contacts
         rally_ids = [contact[1] for contact in filtered_contacts]
-        rally_ids_str = ','.join(['?'] * len(rally_ids))
+        rally_ids_str = ','.join(['%s'] * len(rally_ids))
         
         query_all = f"""
             SELECT 
@@ -2771,26 +2771,26 @@ class ContactPathViewer(QMainWindow):
             INNER JOIN rallies r ON c.rally_id = r.rally_id
             LEFT JOIN players p ON c.player_id = p.player_id
             INNER JOIN teams t ON c.team_id = t.team_id
-            WHERE r.game_id = ?
+            WHERE r.game_id = %s
               AND c.contact_type IN ({})
               AND c.outcome IN ({})
-        """.format(','.join(['?'] * len(selected_contact_types)), ','.join(['?'] * len(selected_outcomes)))
+        """.format(','.join(['%s'] * len(selected_contact_types)), ','.join(['%s'] * len(selected_outcomes)))
         
         params = [self.game_id] + selected_contact_types + selected_outcomes
         
         # Add team filter
         if len(team_ids_to_show) < 2:
-            query += " AND c.team_id IN ({})".format(','.join(['?'] * len(team_ids_to_show)))
+            query += " AND c.team_id IN ({})".format(','.join(['%s'] * len(team_ids_to_show)))
             params.extend(team_ids_to_show)
         
         # Add rating filter if Receive is selected and ratings are selected
         if use_rating_filter:
-            query += " AND (c.contact_type != 'receive' OR c.rating IN ({}))".format(','.join(['?'] * len(selected_ratings)))
+            query += " AND (c.contact_type != 'receive' OR c.rating IN ({}))".format(','.join(['%s'] * len(selected_ratings)))
             params.extend(selected_ratings)
         
         # Add player filter
         if not all_players_selected and len(selected_player_ids) > 0:
-            query += " AND c.player_id IN ({})".format(','.join(['?'] * len(selected_player_ids)))
+            query += " AND c.player_id IN ({})".format(','.join(['%s'] * len(selected_player_ids)))
             params.extend(selected_player_ids)
         
         query += " ORDER BY r.rally_number, c.sequence_number"
@@ -2948,7 +2948,7 @@ class ContactPathViewer(QMainWindow):
             self.db.connect()
         
         cursor = self.db.conn.cursor()
-        cursor.execute("SELECT video_file_path FROM games WHERE game_id = ?", (self.game_id,))
+        cursor.execute("SELECT video_file_path FROM games WHERE game_id = %s", (self.game_id,))
         result = cursor.fetchone()
         
         if not result or not result[0]:
@@ -3056,7 +3056,7 @@ class ContactPathViewer(QMainWindow):
             self.db.connect()
         
         cursor = self.db.conn.cursor()
-        cursor.execute("SELECT video_file_path FROM games WHERE game_id = ?", (self.game_id,))
+        cursor.execute("SELECT video_file_path FROM games WHERE game_id = %s", (self.game_id,))
         result = cursor.fetchone()
         
         if not result or not result[0]:
@@ -3268,7 +3268,7 @@ class ContactPathViewer(QMainWindow):
             self.db.connect()
         
         cursor = self.db.conn.cursor()
-        cursor.execute("SELECT video_file_path FROM games WHERE game_id = ?", (self.game_id,))
+        cursor.execute("SELECT video_file_path FROM games WHERE game_id = %s", (self.game_id,))
         result = cursor.fetchone()
         
         if not result or not result[0]:
@@ -3646,9 +3646,9 @@ class ContactPathViewer(QMainWindow):
                 cursor.execute("""
                     SELECT point_winner_id, COUNT(*) 
                     FROM rallies 
-                    WHERE game_id = ? 
+                    WHERE game_id = %s 
                       AND point_winner_id IS NOT NULL
-                      AND rally_number <= ?
+                      AND rally_number <= %s
                     GROUP BY point_winner_id
                 """, (self.game_id, rally_number))
                 results = cursor.fetchall()
@@ -3849,4 +3849,5 @@ if __name__ == "__main__":
     else:
         print("Failed to load UI file")
         sys.exit(1)
+
 

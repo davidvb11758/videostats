@@ -48,7 +48,7 @@ def main():
         FROM games g
         INNER JOIN teams t1 ON g.team_us_id = t1.team_id
         INNER JOIN teams t2 ON g.team_them_id = t2.team_id
-        WHERE g.game_id = ?
+        WHERE g.game_id = %s
     """, (game_id,))
     
     result = cursor.fetchone()
@@ -93,4 +93,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 

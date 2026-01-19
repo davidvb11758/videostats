@@ -622,7 +622,7 @@ class CoordinateMapper(QMainWindow):
                 self.db.connect()
             cursor = self.db.conn.cursor()
             cursor.execute(
-                "SELECT team_us_id, team_them_id FROM games WHERE game_id = ?",
+                "SELECT team_us_id, team_them_id FROM games WHERE game_id = %s",
                 (self.game_id,)
             )
             result = cursor.fetchone()
@@ -644,7 +644,7 @@ class CoordinateMapper(QMainWindow):
             cursor.execute(
                 """SELECT point_winner_id, COUNT(*) 
                    FROM rallies 
-                   WHERE game_id = ? AND point_winner_id IS NOT NULL
+                   WHERE game_id = %s AND point_winner_id IS NOT NULL
                    GROUP BY point_winner_id""",
                 (self.game_id,)
             )
@@ -661,7 +661,7 @@ class CoordinateMapper(QMainWindow):
             
             # Get current rally number
             cursor.execute(
-                "SELECT MAX(rally_number) FROM rallies WHERE game_id = ?",
+                "SELECT MAX(rally_number) FROM rallies WHERE game_id = %s",
                 (self.game_id,)
             )
             result = cursor.fetchone()
@@ -689,10 +689,10 @@ class CoordinateMapper(QMainWindow):
             
             # Get team names
             cursor = self.db.conn.cursor()
-            cursor.execute("SELECT name FROM teams WHERE team_id = ?", (self.team_us_id,))
+            cursor.execute("SELECT name FROM teams WHERE team_id = %s", (self.team_us_id,))
             result = cursor.fetchone()
             team_us_name = result[0] if result else "Us"
-            cursor.execute("SELECT name FROM teams WHERE team_id = ?", (self.team_them_id,))
+            cursor.execute("SELECT name FROM teams WHERE team_id = %s", (self.team_them_id,))
             result = cursor.fetchone()
             team_them_name = result[0] if result else "Them"
             
@@ -728,7 +728,7 @@ class CoordinateMapper(QMainWindow):
             cursor.execute("""
                 SELECT COUNT(*) 
                 FROM events 
-                WHERE game_id = ? AND event_type != 'initial_setup'
+                WHERE game_id = %s AND event_type != 'initial_setup'
             """, (self.game_id,))
             result = cursor.fetchone()
             return result[0] > 0 if result else False
@@ -807,7 +807,7 @@ class CoordinateMapper(QMainWindow):
             cursor.execute("""
                 SELECT rally_id, rally_number, serving_team_id
                 FROM rallies 
-                WHERE game_id = ?
+                WHERE game_id = %s
                 ORDER BY rally_id DESC
                 LIMIT 1
             """, (self.game_id,))
@@ -1760,7 +1760,7 @@ class CoordinateMapper(QMainWindow):
                    p.name
             FROM players p
             INNER JOIN game_players gp ON p.player_id = gp.player_id
-            WHERE gp.game_id = ? AND gp.team_id = ?
+            WHERE gp.game_id = %s AND gp.team_id = %s
             ORDER BY CASE 
                 WHEN CAST(COALESCE(p.jersey, p.player_number) AS INTEGER) IS NOT NULL 
                 THEN CAST(COALESCE(p.jersey, p.player_number) AS INTEGER)
@@ -1775,7 +1775,7 @@ class CoordinateMapper(QMainWindow):
         cursor.execute("""
             SELECT player_id
             FROM active_lineup
-            WHERE game_id = ? AND team_id = ?
+            WHERE game_id = %s AND team_id = %s
         """, (self.game_id, team_id))
         
         active_player_ids = {row[0] for row in cursor.fetchall()}
@@ -1812,7 +1812,7 @@ class CoordinateMapper(QMainWindow):
                    al.position_number
             FROM active_lineup al
             INNER JOIN players p ON al.player_id = p.player_id
-            WHERE al.game_id = ? AND al.team_id = ?
+            WHERE al.game_id = %s AND al.team_id = %s
             ORDER BY al.position_number
         """, (self.game_id, team_id))
         
@@ -1833,7 +1833,7 @@ class CoordinateMapper(QMainWindow):
         cursor.execute("""
             SELECT player_id 
             FROM players 
-            WHERE team_id = ? AND role_code = 'Lib'
+            WHERE team_id = %s AND role_code = 'Lib'
             LIMIT 1
         """, (team_id,))
         
@@ -1875,7 +1875,7 @@ class CoordinateMapper(QMainWindow):
         cursor.execute("""
             SELECT position_number 
             FROM active_lineup 
-            WHERE game_id = ? AND team_id = ? AND player_id = ?
+            WHERE game_id = %s AND team_id = %s AND player_id = %s
         """, (self.game_id, self.team_us_id, libero_id))
         if cursor.fetchone():
             QMessageBox.warning(self, "Libero Already On Court", "The libero is already on the court.")
@@ -1892,7 +1892,7 @@ class CoordinateMapper(QMainWindow):
                        p.name
                 FROM active_lineup al
                 INNER JOIN players p ON al.player_id = p.player_id
-                WHERE al.game_id = ? AND al.team_id = ? AND al.position_number = ?
+                WHERE al.game_id = %s AND al.team_id = %s AND al.position_number = %s
             """, (self.game_id, self.team_us_id, pos))
             result = cursor.fetchone()
             if result:
@@ -2047,7 +2047,7 @@ class CoordinateMapper(QMainWindow):
                 cursor.execute("""
                     SELECT COALESCE(p.jersey, p.player_number) as player_number, p.name
                     FROM players p
-                    WHERE p.player_id = ?
+                    WHERE p.player_id = %s
                 """, (replaced_player_id,))
                 player_info = cursor.fetchone()
                 if player_info:
@@ -2101,7 +2101,7 @@ class CoordinateMapper(QMainWindow):
         cursor.execute("""
             SELECT position_number 
             FROM active_lineup 
-            WHERE game_id = ? AND team_id = ? AND player_id = ?
+            WHERE game_id = %s AND team_id = %s AND player_id = %s
         """, (self.game_id, self.team_us_id, libero_id))
         
         libero_positions = cursor.fetchall()
@@ -2113,7 +2113,7 @@ class CoordinateMapper(QMainWindow):
         cursor.execute("""
             SELECT replaced_player_id, replaced_position
             FROM libero_actions 
-            WHERE game_id = ? AND team_id = ? AND action = 'enter'
+            WHERE game_id = %s AND team_id = %s AND action = 'enter'
             ORDER BY created_at DESC
             LIMIT 1
         """, (self.game_id, self.team_us_id))
@@ -2146,7 +2146,7 @@ class CoordinateMapper(QMainWindow):
         cursor.execute("""
             SELECT COALESCE(p.jersey, p.player_number) as player_number, p.name
             FROM players p
-            WHERE p.player_id = ?
+            WHERE p.player_id = %s
         """, (replaced_player_id,))
         player_info = cursor.fetchone()
         if not player_info:
@@ -2323,7 +2323,7 @@ class CoordinateMapper(QMainWindow):
             cursor.execute("""
                 SELECT COALESCE(p.jersey, p.player_number) as player_number, p.name
                 FROM players p
-                WHERE p.player_id = ?
+                WHERE p.player_id = %s
             """, (replaced_player_id,))
             player_info = cursor.fetchone()
             if player_info:
@@ -2739,9 +2739,9 @@ class CoordinateMapper(QMainWindow):
         cursor.execute("""
             SELECT id, team_id, event_type, payload, created_at
             FROM events
-            WHERE game_id = ?
+            WHERE game_id = %s
             ORDER BY created_at DESC, id DESC
-            LIMIT ?
+            LIMIT %s
         """, (self.game_id, limit))
         
         return cursor.fetchall()
@@ -2765,7 +2765,7 @@ class CoordinateMapper(QMainWindow):
         cursor.execute("""
             SELECT COALESCE(p.jersey, p.player_number) as player_number, p.name
             FROM players p
-            WHERE p.player_id = ?
+            WHERE p.player_id = %s
         """, (player_id,))
         
         result = cursor.fetchone()
@@ -2820,19 +2820,19 @@ class CoordinateMapper(QMainWindow):
             if point_winner_id:
                 if point_winner_id == self.team_us_id:
                     team_display = "Us"
-                    score = score_us if score_us is not None else "?"
+                    score = score_us if score_us is not None else "%s"
                 elif point_winner_id == self.team_them_id:
                     team_display = "Them"
-                    score = score_them if score_them is not None else "?"
+                    score = score_them if score_them is not None else "%s"
                 else:
                     # Get team name or use ID
                     if not self.db.conn:
                         self.db.connect()
                     cursor = self.db.conn.cursor()
-                    cursor.execute("SELECT name FROM teams WHERE team_id = ?", (point_winner_id,))
+                    cursor.execute("SELECT name FROM teams WHERE team_id = %s", (point_winner_id,))
                     team_result = cursor.fetchone()
                     team_display = team_result[0] if team_result else f"Team {point_winner_id}"
-                    score = "?"
+                    score = "%s"
                 
                 result += f"point: {team_display}={score}"
             else:
@@ -2855,8 +2855,8 @@ class CoordinateMapper(QMainWindow):
             out_name, out_number = self._get_player_info(out_player_id) if out_player_id else (None, None)
             in_name, in_number = self._get_player_info(in_player_id) if in_player_id else (None, None)
             
-            out_display = f"{out_name or 'Unknown'} ({out_number or '?'})" if out_name or out_number else f"Player {out_player_id}"
-            in_display = f"{in_name or 'Unknown'} ({in_number or '?'})" if in_name or in_number else f"Player {in_player_id}"
+            out_display = f"{out_name or 'Unknown'} ({out_number or '%s'})" if out_name or out_number else f"Player {out_player_id}"
+            in_display = f"{in_name or 'Unknown'} ({in_number or '%s'})" if in_name or in_number else f"Player {in_player_id}"
             
             result += f"sub: {in_display} for {out_display}"
         
@@ -2868,7 +2868,7 @@ class CoordinateMapper(QMainWindow):
             
             if action == 'enter' and replaced_player_id:
                 replaced_name, replaced_number = self._get_player_info(replaced_player_id)
-                replaced_display = f"{replaced_name or 'Unknown'} ({replaced_number or '?'})" if replaced_name or replaced_number else f"Player {replaced_player_id}"
+                replaced_display = f"{replaced_name or 'Unknown'} ({replaced_number or '%s'})" if replaced_name or replaced_number else f"Player {replaced_player_id}"
                 result += f"libero in for {replaced_display}"
             elif action == 'exit':
                 result += "libero out"
@@ -2984,3 +2984,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

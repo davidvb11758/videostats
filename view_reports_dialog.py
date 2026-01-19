@@ -45,3 +45,4 @@ class ViewReportsDialog(QDialog):
         button_layout.addWidget(self.btn_close)
         layout.addLayout(button_layout)
 
+

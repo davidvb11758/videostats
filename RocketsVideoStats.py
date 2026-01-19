@@ -394,7 +394,7 @@ class RocketsVideoStatsWindow(QMainWindow):
             FROM games g
             JOIN teams t1 ON g.team_us_id = t1.team_id
             JOIN teams t2 ON g.team_them_id = t2.team_id
-            WHERE g.game_id = ?
+            WHERE g.game_id = %s
         """, (game_id,))
         
         result = cursor.fetchone()
@@ -515,7 +515,7 @@ class RocketsVideoStatsWindow(QMainWindow):
             FROM games g
             INNER JOIN teams t1 ON g.team_us_id = t1.team_id
             INNER JOIN teams t2 ON g.team_them_id = t2.team_id
-            WHERE g.game_id = ?
+            WHERE g.game_id = %s
         """, (game_id,))
         
         game_info = cursor.fetchone()
@@ -535,7 +535,7 @@ class RocketsVideoStatsWindow(QMainWindow):
             cursor.execute("""
                 SELECT r.rally_id, r.point_winner_id
                 FROM rallies r
-                WHERE r.game_id = ? AND r.point_winner_id IS NOT NULL
+                WHERE r.game_id = %s AND r.point_winner_id IS NOT NULL
                 ORDER BY r.rally_id
             """, (game_id,))
             
@@ -546,7 +546,7 @@ class RocketsVideoStatsWindow(QMainWindow):
                 cursor.execute("""
                     UPDATE contacts 
                     SET outcome = 'continue'
-                    WHERE rally_id IN (SELECT rally_id FROM rallies WHERE game_id = ?)
+                    WHERE rally_id IN (SELECT rally_id FROM rallies WHERE game_id = %s)
                       AND outcome != 'down' 
                       AND COALESCE(outcome_manual, 0) = 0
                 """, (game_id,))
@@ -563,21 +563,21 @@ class RocketsVideoStatsWindow(QMainWindow):
             stats_calculator.calculate_game_stats(self.db, game_id)
             
             # Step 3: Get final statistics for display
-            cursor.execute("SELECT COUNT(*) FROM rallies WHERE game_id = ?", (game_id,))
+            cursor.execute("SELECT COUNT(*) FROM rallies WHERE game_id = %s", (game_id,))
             num_rallies = cursor.fetchone()[0] or 0
             
             cursor.execute("""
                 SELECT COUNT(*) 
                 FROM contacts c
                 INNER JOIN rallies r ON c.rally_id = r.rally_id
-                WHERE r.game_id = ?
+                WHERE r.game_id = %s
             """, (game_id,))
             num_contacts = cursor.fetchone()[0] or 0
             
             cursor.execute("""
                 SELECT point_winner_id, COUNT(*) 
                 FROM rallies 
-                WHERE game_id = ? AND point_winner_id IS NOT NULL
+                WHERE game_id = %s AND point_winner_id IS NOT NULL
                 GROUP BY point_winner_id
             """, (game_id,))
             
@@ -630,7 +630,7 @@ class RocketsVideoStatsWindow(QMainWindow):
             FROM games g
             INNER JOIN teams t1 ON g.team_us_id = t1.team_id
             INNER JOIN teams t2 ON g.team_them_id = t2.team_id
-            WHERE g.game_id = ?
+            WHERE g.game_id = %s
         """, (game_id,))
         
         game_info = cursor.fetchone()
@@ -640,7 +640,7 @@ class RocketsVideoStatsWindow(QMainWindow):
         team_us_id, team_them_id, team_us_name, team_them_name = game_info
         
         # Count rallies
-        cursor.execute("SELECT COUNT(*) FROM rallies WHERE game_id = ?", (game_id,))
+        cursor.execute("SELECT COUNT(*) FROM rallies WHERE game_id = %s", (game_id,))
         num_rallies = cursor.fetchone()[0] or 0
         
         # Count contacts
@@ -648,7 +648,7 @@ class RocketsVideoStatsWindow(QMainWindow):
             SELECT COUNT(*) 
             FROM contacts c
             INNER JOIN rallies r ON c.rally_id = r.rally_id
-            WHERE r.game_id = ?
+            WHERE r.game_id = %s
         """, (game_id,))
         num_contacts = cursor.fetchone()[0] or 0
         
@@ -656,7 +656,7 @@ class RocketsVideoStatsWindow(QMainWindow):
         cursor.execute("""
             SELECT point_winner_id, COUNT(*) 
             FROM rallies 
-            WHERE game_id = ? AND point_winner_id IS NOT NULL
+            WHERE game_id = %s AND point_winner_id IS NOT NULL
             GROUP BY point_winner_id
         """, (game_id,))
         
@@ -713,7 +713,7 @@ class RocketsVideoStatsWindow(QMainWindow):
         
         # Build confirmation message with statistics
         confirmation_message = (
-            f"Are you sure you want to end this game?\n\n"
+            f"Are you sure you want to end this game%s\n\n"
             f"Game: {stats['team_us_name']} vs {stats['team_them_name']}\n\n"
             f"Game Statistics:\n"
             f"- {stats['num_rallies']} rallies\n"
@@ -743,7 +743,7 @@ class RocketsVideoStatsWindow(QMainWindow):
                 cursor.execute("""
                     SELECT r.rally_id, r.point_winner_id
                     FROM rallies r
-                    WHERE r.game_id = ? AND r.point_winner_id IS NOT NULL
+                    WHERE r.game_id = %s AND r.point_winner_id IS NOT NULL
                     ORDER BY r.rally_id
                 """, (game_id,))
                 
@@ -754,7 +754,7 @@ class RocketsVideoStatsWindow(QMainWindow):
                     cursor.execute("""
                         UPDATE contacts 
                         SET outcome = 'continue'
-                        WHERE rally_id IN (SELECT rally_id FROM rallies WHERE game_id = ?)
+                        WHERE rally_id IN (SELECT rally_id FROM rallies WHERE game_id = %s)
                           AND outcome != 'down' 
                           AND COALESCE(outcome_manual, 0) = 0
                     """, (game_id,))
@@ -821,4 +821,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 

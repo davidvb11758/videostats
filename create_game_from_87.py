@@ -54,7 +54,7 @@ def create_game_from_87():
                    video_width, video_height,
                    scene_width, scene_height
             FROM games
-            WHERE game_id = ?
+            WHERE game_id = %s
         """, (template_game_id,))
         
         game_row = cursor.fetchone()
@@ -82,7 +82,7 @@ def create_game_from_87():
         cursor.execute("""
             SELECT position_number, player_id, role_code, is_server
             FROM active_lineup
-            WHERE game_id = ? AND team_id = ?
+            WHERE game_id = %s AND team_id = %s
             ORDER BY position_number
         """, (template_game_id, template_team_us_id))
         
@@ -101,7 +101,7 @@ def create_game_from_87():
         cursor.execute("""
             SELECT rotation_order, rotation_index, serving, term_of_service_start
             FROM rotation_state
-            WHERE game_id = ? AND team_id = ?
+            WHERE game_id = %s AND team_id = %s
         """, (template_game_id, template_team_us_id))
         
         rotation_row = cursor.fetchone()
@@ -126,7 +126,7 @@ def create_game_from_87():
         cursor.execute("""
             SELECT team_id, player_id, game_role_code
             FROM game_players
-            WHERE game_id = ?
+            WHERE game_id = %s
             ORDER BY team_id, player_id
         """, (template_game_id,))
         
@@ -137,7 +137,7 @@ def create_game_from_87():
         cursor.execute("""
             SELECT team_id, libero_id, replaced_player_id, replaced_position, action, created_at
             FROM libero_actions
-            WHERE game_id = ?
+            WHERE game_id = %s
             ORDER BY created_at
         """, (template_game_id,))
         
@@ -153,28 +153,28 @@ def create_game_from_87():
         print(f"  Copying court boundaries, video paths, offsets, and dimensions...")
         cursor.execute("""
             UPDATE games SET
-                video_file_path = ?,
-                still_image_path = ?,
-                court_corner_tl_x = ?, court_corner_tl_y = ?,
-                court_corner_tr_x = ?, court_corner_tr_y = ?,
-                court_corner_bl_x = ?, court_corner_bl_y = ?,
-                court_corner_br_x = ?, court_corner_br_y = ?,
-                court_centerline_top_x = ?, court_centerline_top_y = ?,
-                court_centerline_bottom_x = ?, court_centerline_bottom_y = ?,
-                court_y200_left_x = ?, court_y200_left_y = ?,
-                court_y200_right_x = ?, court_y200_right_y = ?,
-                court_y400_left_x = ?, court_y400_left_y = ?,
-                court_y400_right_x = ?, court_y400_right_y = ?,
-                homography_matrix = ?,
-                scroll_offset_x = ?,
-                scroll_offset_y = ?,
-                video_offset_x = ?,
-                video_offset_y = ?,
-                video_width = ?,
-                video_height = ?,
-                scene_width = ?,
-                scene_height = ?
-            WHERE game_id = ?
+                video_file_path = %s,
+                still_image_path = %s,
+                court_corner_tl_x = %s, court_corner_tl_y = %s,
+                court_corner_tr_x = %s, court_corner_tr_y = %s,
+                court_corner_bl_x = %s, court_corner_bl_y = %s,
+                court_corner_br_x = %s, court_corner_br_y = %s,
+                court_centerline_top_x = %s, court_centerline_top_y = %s,
+                court_centerline_bottom_x = %s, court_centerline_bottom_y = %s,
+                court_y200_left_x = %s, court_y200_left_y = %s,
+                court_y200_right_x = %s, court_y200_right_y = %s,
+                court_y400_left_x = %s, court_y400_left_y = %s,
+                court_y400_right_x = %s, court_y400_right_y = %s,
+                homography_matrix = %s,
+                scroll_offset_x = %s,
+                scroll_offset_y = %s,
+                video_offset_x = %s,
+                video_offset_y = %s,
+                video_width = %s,
+                video_height = %s,
+                scene_width = %s,
+                scene_height = %s
+            WHERE game_id = %s
         """, (template_video_path, template_still_image_path) + tuple(template_court_data) + (
             template_scroll_offset_x, template_scroll_offset_y,
             template_video_offset_x, template_video_offset_y,
@@ -201,8 +201,8 @@ def create_game_from_87():
             if role_code:
                 cursor.execute("""
                     UPDATE active_lineup
-                    SET role_code = ?
-                    WHERE game_id = ? AND team_id = ? AND position_number = ?
+                    SET role_code = %s
+                    WHERE game_id = %s AND team_id = %s AND position_number = %s
                 """, (role_code, new_game_id, template_team_us_id, position))
         
         # 10. Update is_server flags to match template
@@ -210,16 +210,16 @@ def create_game_from_87():
         for position, is_server in template_is_server.items():
             cursor.execute("""
                 UPDATE active_lineup
-                SET is_server = ?
-                WHERE game_id = ? AND team_id = ? AND position_number = ?
+                SET is_server = %s
+                WHERE game_id = %s AND team_id = %s AND position_number = %s
             """, (1 if is_server else 0, new_game_id, template_team_us_id, position))
         
         # 11. Update rotation_state to match template exactly
         print(f"  Updating rotation_state...")
         cursor.execute("""
             UPDATE rotation_state
-            SET rotation_order = ?, rotation_index = ?, term_of_service_start = ?
-            WHERE game_id = ? AND team_id = ?
+            SET rotation_order = %s, rotation_index = %s, term_of_service_start = %s
+            WHERE game_id = %s AND team_id = %s
         """, (template_rotation_order, template_rotation_index, template_term_of_service_start, 
               new_game_id, template_team_us_id))
         
@@ -232,7 +232,7 @@ def create_game_from_87():
                 cursor.execute("""
                     INSERT INTO libero_actions 
                     (game_id, team_id, libero_id, replaced_player_id, replaced_position, action, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
                 """, (new_game_id, team_id, libero_id, replaced_player_id, replaced_position, action, created_at))
             db.conn.commit()
             print(f"    Copied {len(template_libero_actions)} libero actions")
@@ -265,4 +265,6 @@ if __name__ == "__main__":
         import traceback
         traceback.print_exc()
         sys.exit(1)
+
+
 

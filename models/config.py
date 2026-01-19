@@ -104,3 +104,4 @@ class VideoSettings:
                 return False, f"Font size for line {i+1} must be between 8 and 200."
         
         return True, None
+

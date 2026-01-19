@@ -1,15 +1,16 @@
 """
-SQLite database structure for VideoStats volleyball tracking application.
+PostgreSQL database structure for VideoStats volleyball tracking application.
 Tracks player ball contacts from serve through rally end.
 """
 
-import sqlite3
+import psycopg2
+import psycopg2.extras
 import re
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
-from utils import get_database_path
 from logging_config import get_logger
+import os
 
 logger = get_logger('database')
 
@@ -17,18 +18,34 @@ logger = get_logger('database')
 class VideoStatsDB:
     """Database manager for VideoStats volleyball tracking."""
     
-    def __init__(self, db_path: str = None):
-        if db_path is None:
-            db_path = str(get_database_path())
-        self.db_path = db_path
+    def __init__(self, db_config: dict = None):
+        """Initialize the database connection.
+        
+        Args:
+            db_config: Optional dictionary with PostgreSQL connection parameters:
+                {
+                    'host': 'localhost',
+                    'port': 5432,
+                    'database': 'videstats',
+                    'user': 'postgres',
+                    'password': 'password'
+                }
+                If None, will use environment variables or defaults.
+        """
+        db_config = {
+            'host': os.getenv('POSTGRES_HOST', 'localhost'),
+            'port': int(os.getenv('POSTGRES_PORT', 5432)),
+            'database': os.getenv('POSTGRES_DB', 'videstats'),
+            'user': os.getenv('POSTGRES_USER', 'postgres'),
+            'password': os.getenv('POSTGRES_PASSWORD', 'videostats.local.pg.135!')
+        }
+        self.db_config = VideoStatsDB(db_config=db_config)
         self.conn = None
         
     def connect(self):
         """Connect to the database."""
-        self.conn = sqlite3.connect(self.db_path)
-        self.conn.row_factory = sqlite3.Row
-        # Ensure constraints are up to date on every connection
-        self.add_constraints_to_existing_tables()
+        self.conn = psycopg2.connect(**self.db_config)
+        self.conn.set_session(autocommit=False)
         return self.conn
     
     def close(self):
@@ -37,1142 +54,14 @@ class VideoStatsDB:
             self.conn.close()
             self.conn = None
     
-    def create_tables(self):
-        """Create all database tables."""
-        if not self.conn:
-            self.connect()
-        
-        cursor = self.conn.cursor()
-        
-        # Teams table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS teams (
-                team_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        
-        # Players table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS players (
-                player_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                team_id INTEGER,
-                player_number TEXT NOT NULL,
-                name TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (team_id) REFERENCES teams(team_id),
-                UNIQUE(team_id, player_number)
-            )
-        """)
-        
-        # Games table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS games (
-                game_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                game_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                team_us_id INTEGER NOT NULL,
-                team_them_id INTEGER NOT NULL,
-                notes TEXT,
-                video_file_path TEXT,
-                still_image_path TEXT,
-                court_corner_tl_x REAL,
-                court_corner_tl_y REAL,
-                court_corner_tr_x REAL,
-                court_corner_tr_y REAL,
-                court_corner_bl_x REAL,
-                court_corner_bl_y REAL,
-                court_corner_br_x REAL,
-                court_corner_br_y REAL,
-                court_centerline_top_x REAL,
-                court_centerline_top_y REAL,
-                court_centerline_bottom_x REAL,
-                court_centerline_bottom_y REAL,
-                court_y200_left_x REAL,
-                court_y200_left_y REAL,
-                court_y200_right_x REAL,
-                court_y200_right_y REAL,
-                court_y400_left_x REAL,
-                court_y400_left_y REAL,
-                court_y400_right_x REAL,
-                court_y400_right_y REAL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (team_us_id) REFERENCES teams(team_id),
-                FOREIGN KEY (team_them_id) REFERENCES teams(team_id),
-                CHECK (team_us_id != team_them_id)
-            )
-        """)
-        
-        # Game Players table - links players to specific games
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS game_players (
-                game_player_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                game_id INTEGER NOT NULL,
-                team_id INTEGER NOT NULL,
-                player_id INTEGER NOT NULL,
-                game_role_code TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (game_id) REFERENCES games(game_id) ON DELETE CASCADE,
-                FOREIGN KEY (team_id) REFERENCES teams(team_id),
-                FOREIGN KEY (player_id) REFERENCES players(player_id),
-                UNIQUE(game_id, team_id, player_id)
-            )
-        """)
-        
-        # Rallies table - tracks each rally from serve to point
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS rallies (
-                rally_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                game_id INTEGER NOT NULL,
-                rally_number INTEGER NOT NULL,
-                serving_team_id INTEGER NOT NULL,
-                point_winner_id INTEGER,
-                rally_start_time TIMESTAMP,
-                rally_end_time TIMESTAMP,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (game_id) REFERENCES games(game_id),
-                FOREIGN KEY (serving_team_id) REFERENCES teams(team_id),
-                FOREIGN KEY (point_winner_id) REFERENCES teams(team_id),
-                UNIQUE(game_id, rally_number)
-            )
-        """)
-        
-        # Contacts table - tracks each ball contact in a rally
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS contacts (
-                contact_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                rally_id INTEGER NOT NULL,
-                sequence_number INTEGER NOT NULL,
-                player_id INTEGER,
-                contact_type TEXT NOT NULL CHECK(contact_type IN ('serve', 'pass', 'set', 'attack', 'block', 'receive', 'freeball', 'down', 'net')),
-                team_id INTEGER NOT NULL,
-                x INTEGER,
-                y INTEGER,
-                timecode INTEGER,
-                outcome TEXT DEFAULT 'continue' CHECK(outcome IN ('continue', 'ace', 'kill', 'error', 'down', 'stuff', 'assist', 'fault')),
-                rating INTEGER,
-                outcome_manual INTEGER DEFAULT 0,
-                rating_manual INTEGER DEFAULT 0,
-                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (rally_id) REFERENCES rallies(rally_id),
-                FOREIGN KEY (player_id) REFERENCES players(player_id),
-                FOREIGN KEY (team_id) REFERENCES teams(team_id)
-            )
-        """)
-        
-        # Player Statistics table - tracks statistics by game and by player
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS player_stats (
-                stat_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                game_id INTEGER NOT NULL,
-                player_id INTEGER NOT NULL,
-                -- Receive statistics
-                receive_attempts INTEGER DEFAULT 0,
-                receive_0 INTEGER DEFAULT 0,
-                receive_1 INTEGER DEFAULT 0,
-                receive_2 INTEGER DEFAULT 0,
-                receive_3 INTEGER DEFAULT 0,
-                receive_avg_rating REAL DEFAULT 0.0,
-                -- Attack statistics
-                attack_attempts INTEGER DEFAULT 0,
-                attack_kills INTEGER DEFAULT 0,
-                attack_errors INTEGER DEFAULT 0,
-                attack_kill_pct REAL DEFAULT 0.0,
-                attack_hitting_pct REAL DEFAULT 0.0,
-                attack_efficiency REAL DEFAULT 0.0,
-                -- Set statistics
-                set_attempts INTEGER DEFAULT 0,
-                set_assists INTEGER DEFAULT 0,
-                -- Serve statistics
-                serve_attempts INTEGER DEFAULT 0,
-                serve_aces INTEGER DEFAULT 0,
-                serve_errors INTEGER DEFAULT 0,
-                serve_ace_pct REAL DEFAULT 0.0,
-                serve_in_pct REAL DEFAULT 0.0,
-                -- Dig statistics
-                dig_attempts INTEGER DEFAULT 0,
-                dig_successful INTEGER DEFAULT 0,
-                -- Block statistics
-                block_solo INTEGER DEFAULT 0,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (game_id) REFERENCES games(game_id) ON DELETE CASCADE,
-                FOREIGN KEY (player_id) REFERENCES players(player_id),
-                UNIQUE(game_id, player_id)
-            )
-        """)
-        
-        # Positions table (static - immutable position definitions)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS positions (
-                number INTEGER PRIMARY KEY,
-                name TEXT NOT NULL,
-                abbrev TEXT NOT NULL,
-                row TEXT NOT NULL CHECK(row IN ('Front', 'Back')),
-                side TEXT NOT NULL CHECK(side IN ('Left', 'Middle', 'Right')),
-                x INTEGER NOT NULL,
-                y INTEGER NOT NULL
-            )
-        """)
-        
-        # Active lineup table - who is currently in each position
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS active_lineup (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                game_id INTEGER NOT NULL REFERENCES games(game_id) ON DELETE CASCADE,
-                team_id INTEGER NOT NULL REFERENCES teams(team_id),
-                position_number INTEGER NOT NULL REFERENCES positions(number),
-                player_id INTEGER NOT NULL REFERENCES players(player_id),
-                role_code TEXT NOT NULL,
-                is_server BOOLEAN DEFAULT 0,
-                placed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(game_id, team_id, position_number)
-            )
-        """)
-        
-        # Rotation state table - current rotation index and term of service
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS rotation_state (
-                game_id INTEGER NOT NULL REFERENCES games(game_id) ON DELETE CASCADE,
-                team_id INTEGER NOT NULL REFERENCES teams(team_id),
-                rotation_order TEXT NOT NULL, -- JSON array e.g. [1,6,5,4,3,2]
-                rotation_index INTEGER NOT NULL DEFAULT 0,
-                serving BOOLEAN DEFAULT 0,
-                term_of_service_start TIMESTAMP NULL,
-                PRIMARY KEY (game_id, team_id)
-            )
-        """)
-        
-        # Events log table (generic)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS events (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                game_id INTEGER NOT NULL REFERENCES games(game_id),
-                team_id INTEGER NOT NULL REFERENCES teams(team_id),
-                event_type TEXT NOT NULL CHECK(event_type IN ('rotation', 'substitution', 'libero', 'server_change', 'initial_setup', 'contact', 'point_awarded')),
-                payload TEXT NOT NULL, -- JSON
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        
-        # Substitutions table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS substitutions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                game_id INTEGER NOT NULL REFERENCES games(game_id),
-                team_id INTEGER NOT NULL REFERENCES teams(team_id),
-                out_player_id INTEGER NOT NULL REFERENCES players(player_id),
-                in_player_id INTEGER NOT NULL REFERENCES players(player_id),
-                out_position INTEGER NULL,
-                in_position INTEGER NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        
-        # Libero actions table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS libero_actions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                game_id INTEGER NOT NULL REFERENCES games(game_id),
-                team_id INTEGER NOT NULL REFERENCES teams(team_id),
-                libero_id INTEGER NOT NULL REFERENCES players(player_id),
-                replaced_player_id INTEGER NOT NULL REFERENCES players(player_id),
-                replaced_position INTEGER NOT NULL,
-                action TEXT NOT NULL CHECK(action IN ('enter', 'exit')),
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        
-        # Migration: Add game_id column if it doesn't exist (for existing databases)
-        try:
-            cursor.execute("ALTER TABLE substitutions ADD COLUMN game_id INTEGER REFERENCES games(game_id)")
-            # Set default game_id for existing records (use most recent game or NULL)
-            cursor.execute("""
-                UPDATE substitutions 
-                SET game_id = (SELECT game_id FROM games ORDER BY game_id DESC LIMIT 1)
-                WHERE game_id IS NULL
-            """)
-        except sqlite3.OperationalError:
-            pass  # Column already exists
-        
-        try:
-            cursor.execute("ALTER TABLE libero_actions ADD COLUMN game_id INTEGER REFERENCES games(game_id)")
-            # Set default game_id for existing records
-            cursor.execute("""
-                UPDATE libero_actions 
-                SET game_id = (SELECT game_id FROM games ORDER BY game_id DESC LIMIT 1)
-                WHERE game_id IS NULL
-            """)
-        except sqlite3.OperationalError:
-            pass  # Column already exists
-        
-        # Migration: Add game_id column to events table if it doesn't exist (for existing databases)
-        try:
-            cursor.execute("ALTER TABLE events ADD COLUMN game_id INTEGER REFERENCES games(game_id)")
-            # Set default game_id for existing records (use most recent game or NULL)
-            cursor.execute("""
-                UPDATE events 
-                SET game_id = (SELECT game_id FROM games ORDER BY game_id DESC LIMIT 1)
-                WHERE game_id IS NULL
-            """)
-        except sqlite3.OperationalError:
-            pass  # Column already exists
-        
-        # Migration: Add game_id to active_lineup if it doesn't exist
-        cursor.execute("PRAGMA table_info(active_lineup)")
-        active_lineup_columns = [row[1] for row in cursor.fetchall()]
-        if 'game_id' not in active_lineup_columns:
-            logger.info("Adding game_id column to active_lineup table...")
-            try:
-                # SQLite doesn't support adding NOT NULL columns easily, so we'll add it as nullable first
-                cursor.execute("ALTER TABLE active_lineup ADD COLUMN game_id INTEGER REFERENCES games(game_id)")
-                # Set default game_id for existing records (use most recent game)
-                cursor.execute("""
-                    UPDATE active_lineup 
-                    SET game_id = (SELECT game_id FROM games ORDER BY game_id DESC LIMIT 1)
-                    WHERE game_id IS NULL
-                """)
-                self.conn.commit()
-                logger.info("game_id column added to active_lineup successfully!")
-            except Exception as e:
-                logger.warning(f"Failed to add game_id to active_lineup: {e}")
-        
-        # Migration: Fix UNIQUE constraint on active_lineup to include game_id
-        # Check if the constraint needs to be updated
-        # Only do this if game_id column exists (from previous migration)
-        if 'game_id' in active_lineup_columns:
-            needs_migration = False
-            
-            # Check table definition for UNIQUE constraint
-            cursor.execute("""
-                SELECT sql FROM sqlite_master 
-                WHERE type='table' AND name='active_lineup'
-            """)
-            result = cursor.fetchone()
-            if result and result[0]:
-                sql = result[0].upper()
-                # Check if UNIQUE constraint includes game_id
-                # Look for UNIQUE constraint that doesn't start with game_id
-                unique_match = re.search(r'UNIQUE\s*\(([^)]+)\)', sql)
-                if unique_match:
-                    unique_cols = unique_match.group(1).upper()
-                    # If the constraint doesn't start with GAME_ID, we need to recreate
-                    if not unique_cols.strip().startswith('GAME_ID'):
-                        needs_migration = True
-            
-            # Also check for UNIQUE indexes that might exist separately
-            if not needs_migration:
-                cursor.execute("""
-                    SELECT name, sql FROM sqlite_master 
-                    WHERE type='index' AND tbl_name='active_lineup' AND sql LIKE '%UNIQUE%'
-                """)
-                indexes = cursor.fetchall()
-                for index_name, index_sql in indexes:
-                    if index_sql:
-                        index_sql_upper = index_sql.upper()
-                        # Check if index is on (team_id, position_number) without game_id
-                        if 'TEAM_ID' in index_sql_upper and 'POSITION_NUMBER' in index_sql_upper:
-                            if 'GAME_ID' not in index_sql_upper:
-                                needs_migration = True
-                                break
-            
-            if needs_migration:
-                logger.info("Migrating active_lineup table to fix UNIQUE constraint (adding game_id)...")
-                try:
-                    # Create new table with correct constraint
-                    cursor.execute("""
-                        CREATE TABLE active_lineup_new (
-                            id INTEGER PRIMARY KEY AUTOINCREMENT,
-                            game_id INTEGER NOT NULL REFERENCES games(game_id) ON DELETE CASCADE,
-                            team_id INTEGER NOT NULL REFERENCES teams(team_id),
-                            position_number INTEGER NOT NULL REFERENCES positions(number),
-                            player_id INTEGER NOT NULL REFERENCES players(player_id),
-                            role_code TEXT NOT NULL,
-                            is_server BOOLEAN DEFAULT 0,
-                            placed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                            UNIQUE(game_id, team_id, position_number)
-                        )
-                    """)
-                    
-                    # Copy data from old table
-                    cursor.execute("""
-                        INSERT INTO active_lineup_new 
-                        (id, game_id, team_id, position_number, player_id, role_code, is_server, placed_at)
-                        SELECT id, game_id, team_id, position_number, player_id, role_code, is_server, placed_at
-                        FROM active_lineup
-                    """)
-                    
-                    # Drop old table and rename new one
-                    cursor.execute("DROP TABLE active_lineup")
-                    cursor.execute("ALTER TABLE active_lineup_new RENAME TO active_lineup")
-                    
-                    # Recreate indexes
-                    cursor.execute("CREATE INDEX IF NOT EXISTS idx_active_lineup_game ON active_lineup(game_id)")
-                    cursor.execute("CREATE INDEX IF NOT EXISTS idx_active_lineup_team ON active_lineup(team_id)")
-                    cursor.execute("CREATE INDEX IF NOT EXISTS idx_active_lineup_player ON active_lineup(player_id)")
-                    
-                    self.conn.commit()
-                    logger.info("active_lineup table migrated successfully!")
-                except Exception as e:
-                    self.conn.rollback()
-                    logger.error(f"Migration of active_lineup failed: {e}. You may need to manually migrate the database.")
-        
-        # Migration: Add game_id to rotation_state if it doesn't exist
-        cursor.execute("PRAGMA table_info(rotation_state)")
-        rotation_state_columns = [row[1] for row in cursor.fetchall()]
-        if 'game_id' not in rotation_state_columns:
-            logger.info("Adding game_id column to rotation_state table...")
-            try:
-                # SQLite doesn't support changing PRIMARY KEY easily, so we'll add game_id as nullable first
-                cursor.execute("ALTER TABLE rotation_state ADD COLUMN game_id INTEGER REFERENCES games(game_id)")
-                # Set default game_id for existing records (use most recent game)
-                cursor.execute("""
-                    UPDATE rotation_state 
-                    SET game_id = (SELECT game_id FROM games ORDER BY game_id DESC LIMIT 1)
-                    WHERE game_id IS NULL
-                """)
-                # Note: We can't easily change PRIMARY KEY in SQLite without recreating the table
-                # The application code will need to ensure game_id is provided for new records
-                self.conn.commit()
-                logger.info("game_id column added to rotation_state successfully!")
-            except Exception as e:
-                logger.warning(f"Failed to add game_id to rotation_state: {e}")
-        
-        # Create indexes for better query performance
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_contacts_rally ON contacts(rally_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_contacts_player ON contacts(player_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_contacts_type ON contacts(contact_type)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_rallies_game ON rallies(game_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_players_team ON players(team_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_game_players_game ON game_players(game_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_game_players_team ON game_players(team_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_game_players_player ON game_players(player_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_player_stats_game ON player_stats(game_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_player_stats_player ON player_stats(player_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_active_lineup_game ON active_lineup(game_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_active_lineup_team ON active_lineup(team_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_active_lineup_player ON active_lineup(player_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_rotation_state_game ON rotation_state(game_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_rotation_state_team ON rotation_state(team_id)")
-        # Migration: Update events table CHECK constraint to include new event types (contact, point_awarded)
-        # SQLite doesn't support ALTER TABLE for CHECK constraints, so we need to recreate the table if needed
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='events'")
-        if cursor.fetchone():
-            cursor.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='events'")
-            result = cursor.fetchone()
-            if result and result[0]:
-                sql_def = result[0]
-                # Check if constraint doesn't include new event types
-                if "'contact'" not in sql_def or "'point_awarded'" not in sql_def:
-                    logger.info("Migrating events table to support new event types (contact, point_awarded)...")
-                    try:
-                        # Create new table with updated constraint
-                        cursor.execute("""
-                            CREATE TABLE events_new (
-                                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                                game_id INTEGER NOT NULL REFERENCES games(game_id),
-                                team_id INTEGER NOT NULL REFERENCES teams(team_id),
-                                event_type TEXT NOT NULL CHECK(event_type IN ('rotation', 'substitution', 'libero', 'server_change', 'initial_setup', 'contact', 'point_awarded')),
-                                payload TEXT NOT NULL,
-                                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                            )
-                        """)
-                        
-                        # Copy all data from old table
-                        cursor.execute("""
-                            INSERT INTO events_new 
-                            (id, game_id, team_id, event_type, payload, created_at)
-                            SELECT id, game_id, team_id, event_type, payload, created_at
-                            FROM events
-                        """)
-                        
-                        # Drop old table and rename new one
-                        cursor.execute("DROP TABLE events")
-                        cursor.execute("ALTER TABLE events_new RENAME TO events")
-                        
-                        # Recreate indexes
-                        cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_game ON events(game_id)")
-                        cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_team ON events(team_id)")
-                        cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type)")
-                        
-                        self.conn.commit()
-                        logger.info("Events table migrated successfully!")
-                    except Exception as e:
-                        self.conn.rollback()
-                        logger.error(f"Migration of events table failed: {e}. You may need to manually migrate the database.")
-        
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_game ON events(game_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_team ON events(team_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_substitutions_team ON substitutions(team_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_substitutions_game ON substitutions(game_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_libero_actions_team ON libero_actions(team_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_libero_actions_game ON libero_actions(game_id)")
-        
-        # Ensure players table has role_code, is_active, and jersey columns for seed data
-        # (These are also added by migrations, but we need them here for seeding)
-        cursor.execute("PRAGMA table_info(players)")
-        columns = [row[1] for row in cursor.fetchall()]
-        
-        if 'role_code' not in columns:
-            try:
-                cursor.execute("ALTER TABLE players ADD COLUMN role_code TEXT")
-            except sqlite3.OperationalError:
-                pass  # Column might already exist
-        if 'is_active' not in columns:
-            try:
-                cursor.execute("ALTER TABLE players ADD COLUMN is_active BOOLEAN DEFAULT 0")
-            except sqlite3.OperationalError:
-                pass  # Column might already exist
-        if 'jersey' not in columns:
-            try:
-                cursor.execute("ALTER TABLE players ADD COLUMN jersey INTEGER")
-            except sqlite3.OperationalError:
-                pass  # Column might already exist
-        
-        # Populate positions table with static data if empty
-        cursor.execute("SELECT COUNT(*) FROM positions")
-        if cursor.fetchone()[0] == 0:
-            positions_data = [
-                (1, 'Right Back', 'RB', 'Back', 'Right', 299, 0),
-                (2, 'Right Front', 'RF', 'Front', 'Right', 299, 299),
-                (3, 'Middle Front', 'MF', 'Front', 'Middle', 150, 299),
-                (4, 'Left Front', 'LF', 'Front', 'Left', 0, 299),
-                (5, 'Left Back', 'LB', 'Back', 'Left', 0, 0),
-                (6, 'Middle Back', 'MB', 'Back', 'Middle', 150, 0)
-            ]
-            cursor.executemany(
-                "INSERT INTO positions (number, name, abbrev, row, side, x, y) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                positions_data
-            )
-        
-        # Seed default team_them team and players if database is new
-        cursor.execute("SELECT COUNT(*) FROM teams")
-        if cursor.fetchone()[0] == 0:
-            # Insert default opponent team (team_them)
-            cursor.execute("""
-                INSERT INTO teams (team_id, name, created_at) 
-                VALUES (12, 'Opp1', datetime('now'))
-            """)
-            
-            # Insert default players for team_them with all columns
-            players_data = [
-                (30, 12, 'o1', 'o1', None, 0, None),
-                (31, 12, 'o2', 'o2', None, 0, None),
-                (32, 12, 'o3', 'o3', None, 0, None),
-                (33, 12, 'o0', 'o0', None, 0, None)
-            ]
-            cursor.executemany("""
-                INSERT INTO players (player_id, team_id, player_number, name, role_code, is_active, jersey) 
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, players_data)
-            
-            # Update sqlite_sequence to reflect the highest IDs used
-            cursor.execute("""
-                INSERT OR REPLACE INTO sqlite_sequence (name, seq) 
-                VALUES ('teams', 12)
-            """)
-            cursor.execute("""
-                INSERT OR REPLACE INTO sqlite_sequence (name, seq) 
-                VALUES ('players', 33)
-            """)
-            
-            logger.info("Seeded default team_them team (ID=12) and 4 players (IDs=30,31,32,33)")
-        
-        # Create collection tables for highlight video manager
-        self.create_collection_tables()
-        
-        self.conn.commit()
-        logger.info("Database tables created successfully!")
-    
-    def create_collection_tables(self):
-        """Create tables for clip collections and star ratings."""
-        if not self.conn:
-            self.connect()
-        
-        cursor = self.conn.cursor()
-        
-        # Collections table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS clip_collections (
-                collection_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                description TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        
-        # Collection clips junction table (with ordering and selection state)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS collection_clips (
-                collection_id INTEGER,
-                contact_id INTEGER,
-                game_id INTEGER,
-                order_index INTEGER NOT NULL,
-                is_selected INTEGER DEFAULT 0,
-                FOREIGN KEY (collection_id) REFERENCES clip_collections(collection_id) ON DELETE CASCADE,
-                PRIMARY KEY (collection_id, contact_id, game_id)
-            )
-        """)
-        
-        # Add is_selected column if it doesn't exist (for existing tables)
-        cursor.execute("PRAGMA table_info(collection_clips)")
-        columns = [row[1] for row in cursor.fetchall()]
-        if 'is_selected' not in columns:
-            try:
-                cursor.execute("ALTER TABLE collection_clips ADD COLUMN is_selected INTEGER DEFAULT 0")
-                self.conn.commit()
-                logger.info("Added is_selected column to collection_clips table")
-            except Exception as e:
-                logger.warning(f"Failed to add is_selected column: {e}")
-                self.conn.rollback()
-        
-        # Clip star ratings table (user-assigned ratings, separate from contact ratings)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS clip_star_ratings (
-                contact_id INTEGER NOT NULL,
-                game_id INTEGER NOT NULL,
-                star_rating INTEGER CHECK(star_rating >= 1 AND star_rating <= 5),
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (contact_id, game_id)
-            )
-        """)
-        
-        self.conn.commit()
-        logger.info("Collection tables created successfully!")
     
     def initialize_database(self):
-        """Initialize the database with tables."""
-        self.connect()
-        self.create_tables()
-        self.add_constraints_to_existing_tables()
-        self.close()
+        """Initialize the database with tables.
+        Note: For PostgreSQL, schema should be created using migration files.
+        This method is kept for compatibility but doesn't create tables.
+        """
+        logger.info("Database initialization called. Use migration files to create PostgreSQL schema.")
     
-    def add_constraints_to_existing_tables(self):
-        """Add constraints to existing tables if they don't have them."""
-        cursor = self.conn.cursor()
-        
-        # Check if games table exists first
-        cursor.execute("""
-            SELECT name FROM sqlite_master 
-            WHERE type='table' AND name='games'
-        """)
-        games_table_exists = cursor.fetchone() is not None
-        
-        if not games_table_exists:
-            # Tables don't exist yet, skip constraint checks
-            return
-        
-        # Check if games table exists and if it has the constraint
-        # SQLite doesn't support adding CHECK constraints to existing tables easily
-        # So we'll rely on application-level validation for existing databases
-        # New databases will have the constraint from CREATE TABLE
-        
-        # Verify existing games don't violate the constraint
-        cursor.execute("""
-            SELECT game_id, team_us_id, team_them_id 
-            FROM games 
-            WHERE team_us_id = team_them_id
-        """)
-        violations = cursor.fetchall()
-        if violations:
-            logger.warning(f"Found {len(violations)} games with duplicate teams. These should be fixed manually.")
-        
-        # Migrate player_number from INTEGER to TEXT if needed
-        # Check if players table exists and has INTEGER player_number
-        cursor.execute("""
-            SELECT sql FROM sqlite_master 
-            WHERE type='table' AND name='players'
-        """)
-        result = cursor.fetchone()
-        if result and result[0] and 'player_number INTEGER' in result[0]:
-            # Need to migrate - SQLite doesn't support ALTER COLUMN, so recreate table
-            logger.info("Migrating player_number column from INTEGER to TEXT...")
-            try:
-                # Create new table with TEXT column
-                cursor.execute("""
-                    CREATE TABLE players_new (
-                        player_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        team_id INTEGER,
-                        player_number TEXT NOT NULL,
-                        name TEXT,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        FOREIGN KEY (team_id) REFERENCES teams(team_id),
-                        UNIQUE(team_id, player_number)
-                    )
-                """)
-                
-                # Copy data (SQLite will convert INTEGER to TEXT automatically)
-                cursor.execute("""
-                    INSERT INTO players_new 
-                    SELECT player_id, team_id, CAST(player_number AS TEXT), name, created_at
-                    FROM players
-                """)
-                
-                # Drop old table and rename new one
-                cursor.execute("DROP TABLE players")
-                cursor.execute("ALTER TABLE players_new RENAME TO players")
-                
-                # Recreate indexes
-                cursor.execute("CREATE INDEX IF NOT EXISTS idx_players_team ON players(team_id)")
-                
-                self.conn.commit()
-                logger.info("Migration completed successfully!")
-            except Exception as e:
-                self.conn.rollback()
-                logger.error(f"Migration failed: {e}. You may need to manually migrate the database.")
-        
-        # Migrate contact_type constraint if needed
-        # Check if contacts table exists and has old constraint
-        cursor.execute("""
-            SELECT sql FROM sqlite_master 
-            WHERE type='table' AND name='contacts'
-        """)
-        result = cursor.fetchone()
-        if result and result[0]:
-            # Check if it has the old constraint with 'opp' or missing 'receive'/'freeball'/'down'
-            sql = result[0]
-            if "'opp'" in sql or "'receive'" not in sql or "'freeball'" not in sql or "'down'" not in sql or "'net'" not in sql:
-                logger.info("Migrating contact_type constraint in contacts table...")
-                try:
-                    # Create new table with updated constraint
-                    cursor.execute("""
-                        CREATE TABLE contacts_new (
-                            contact_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                            rally_id INTEGER NOT NULL,
-                            sequence_number INTEGER NOT NULL,
-                            player_id INTEGER,
-                            contact_type TEXT NOT NULL CHECK(contact_type IN ('serve', 'pass', 'set', 'attack', 'block', 'receive', 'freeball', 'down', 'net')),
-                            team_id INTEGER NOT NULL,
-                            x INTEGER,
-                            y INTEGER,
-                            timecode INTEGER,
-                            outcome_manual INTEGER DEFAULT 0,
-                            rating_manual INTEGER DEFAULT 0,
-                            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                            FOREIGN KEY (rally_id) REFERENCES rallies(rally_id),
-                            FOREIGN KEY (player_id) REFERENCES players(player_id),
-                            FOREIGN KEY (team_id) REFERENCES teams(team_id)
-                        )
-                    """)
-                    
-                    # Copy data, but filter out any 'opp' contact_types (they shouldn't exist, but just in case)
-                    # Include x, y, and timecode columns if they exist in the old table
-                    cursor.execute("PRAGMA table_info(contacts)")
-                    old_columns = [row[1] for row in cursor.fetchall()]
-                    has_x = 'x' in old_columns
-                    has_y = 'y' in old_columns
-                    has_timecode = 'timecode' in old_columns
-                    has_outcome_manual = 'outcome_manual' in old_columns
-                    has_rating_manual = 'rating_manual' in old_columns
-                    
-                    # Build SELECT statement based on which columns exist
-                    select_cols = "contact_id, rally_id, sequence_number, player_id, "
-                    select_cols += "CASE WHEN contact_type = 'opp' THEN 'receive' ELSE contact_type END as contact_type, "
-                    select_cols += "team_id"
-                    if has_x:
-                        select_cols += ", x"
-                    else:
-                        select_cols += ", NULL as x"
-                    if has_y:
-                        select_cols += ", y"
-                    else:
-                        select_cols += ", NULL as y"
-                    if has_timecode:
-                        select_cols += ", timecode"
-                    else:
-                        select_cols += ", NULL as timecode"
-                    if has_outcome_manual:
-                        select_cols += ", outcome_manual"
-                    else:
-                        select_cols += ", 0 as outcome_manual"
-                    if has_rating_manual:
-                        select_cols += ", rating_manual"
-                    else:
-                        select_cols += ", 0 as rating_manual"
-                    select_cols += ", timestamp, created_at"
-                    
-                    cursor.execute(f"""
-                        INSERT INTO contacts_new 
-                        SELECT {select_cols}
-                        FROM contacts
-                        WHERE contact_type IN ('serve', 'pass', 'set', 'attack', 'block', 'receive', 'freeball', 'down', 'net', 'opp')
-                    """)
-                    
-                    # Drop old table and rename new one
-                    cursor.execute("DROP TABLE contacts")
-                    cursor.execute("ALTER TABLE contacts_new RENAME TO contacts")
-                    
-                    # Recreate indexes
-                    cursor.execute("CREATE INDEX IF NOT EXISTS idx_contacts_rally ON contacts(rally_id)")
-                    cursor.execute("CREATE INDEX IF NOT EXISTS idx_contacts_player ON contacts(player_id)")
-                    cursor.execute("CREATE INDEX IF NOT EXISTS idx_contacts_type ON contacts(contact_type)")
-                    
-                    self.conn.commit()
-                    logger.info("Contact type constraint migration completed successfully!")
-                except Exception as e:
-                    self.conn.rollback()
-                    logger.error(f"Migration failed: {e}. You may need to manually migrate the database.")
-        
-        # Add x, y coordinate columns to contacts table if they don't exist
-        cursor.execute("PRAGMA table_info(contacts)")
-        columns = [row[1] for row in cursor.fetchall()]
-        if 'x' not in columns:
-            logger.info("Adding x coordinate column to contacts table...")
-            try:
-                cursor.execute("ALTER TABLE contacts ADD COLUMN x INTEGER")
-                self.conn.commit()
-                logger.info("x coordinate column added successfully!")
-            except Exception as e:
-                logger.warning(f"Failed to add x column: {e}")
-        if 'y' not in columns:
-            logger.info("Adding y coordinate column to contacts table...")
-            try:
-                cursor.execute("ALTER TABLE contacts ADD COLUMN y INTEGER")
-                self.conn.commit()
-                logger.info("y coordinate column added successfully!")
-            except Exception as e:
-                logger.warning(f"Failed to add y column: {e}")
-        
-        # Add timecode column to contacts table if it doesn't exist
-        # Need to refresh columns list after adding x and y
-        cursor.execute("PRAGMA table_info(contacts)")
-        columns = [row[1] for row in cursor.fetchall()]
-        if 'timecode' not in columns:
-            logger.info("Adding timecode column to contacts table...")
-            try:
-                cursor.execute("ALTER TABLE contacts ADD COLUMN timecode INTEGER")
-                self.conn.commit()
-                logger.info("timecode column added successfully!")
-            except Exception as e:
-                logger.warning(f"Failed to add timecode column: {e}")
-        
-        # Add rating column to contacts table if it doesn't exist
-        cursor.execute("PRAGMA table_info(contacts)")
-        columns = [row[1] for row in cursor.fetchall()]
-        if 'rating' not in columns:
-            logger.info("Adding rating column to contacts table...")
-            try:
-                cursor.execute("ALTER TABLE contacts ADD COLUMN rating INTEGER")
-                self.conn.commit()
-                logger.info("rating column added successfully!")
-            except Exception as e:
-                logger.warning(f"Failed to add rating column: {e}")
-        
-        # Add outcome column to contacts table if it doesn't exist
-        if 'outcome' not in columns:
-            logger.info("Adding outcome column to contacts table...")
-            try:
-                cursor.execute("ALTER TABLE contacts ADD COLUMN outcome TEXT DEFAULT 'continue' CHECK(outcome IN ('continue', 'ace', 'kill', 'error', 'down', 'stuff', 'assist', 'fault'))")
-                self.conn.commit()
-                logger.info("outcome column added successfully!")
-            except Exception as e:
-                logger.warning(f"Failed to add outcome column: {e}")
-        
-        # Add outcome_manual and rating_manual columns to contacts table if they don't exist
-        cursor.execute("PRAGMA table_info(contacts)")
-        columns = [row[1] for row in cursor.fetchall()]
-        if 'outcome_manual' not in columns:
-            logger.info("Adding outcome_manual column to contacts table...")
-            try:
-                cursor.execute("ALTER TABLE contacts ADD COLUMN outcome_manual INTEGER DEFAULT 0")
-                self.conn.commit()
-                logger.info("outcome_manual column added successfully!")
-            except Exception as e:
-                logger.warning(f"Failed to add outcome_manual column: {e}")
-        if 'rating_manual' not in columns:
-            logger.info("Adding rating_manual column to contacts table...")
-            try:
-                cursor.execute("ALTER TABLE contacts ADD COLUMN rating_manual INTEGER DEFAULT 0")
-                self.conn.commit()
-                logger.info("rating_manual column added successfully!")
-            except Exception as e:
-                logger.warning(f"Failed to add rating_manual column: {e}")
-        
-        # Migration: Add game_role_code column to game_players table if it doesn't exist
-        cursor.execute("PRAGMA table_info(game_players)")
-        game_players_columns = [row[1] for row in cursor.fetchall()]
-        if 'game_role_code' not in game_players_columns:
-            logger.info("Adding game_role_code column to game_players table...")
-            try:
-                cursor.execute("ALTER TABLE game_players ADD COLUMN game_role_code TEXT")
-                self.conn.commit()
-                logger.info("game_role_code column added successfully!")
-            except Exception as e:
-                logger.warning(f"Failed to add game_role_code column: {e}")
-        
-        if 'outcome' in columns:
-            # Check if the outcome column has the old constraint (without 'stuff', 'assist', or 'fault')
-            cursor.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='contacts'")
-            result = cursor.fetchone()
-            if result and result[0]:
-                sql = result[0]
-                # Check if 'stuff', 'assist', or 'fault' is missing from the outcome constraint
-                if "'stuff'" not in sql or "'assist'" not in sql or "'fault'" not in sql:
-                    missing = []
-                    if "'stuff'" not in sql:
-                        missing.append("'stuff'")
-                    if "'assist'" not in sql:
-                        missing.append("'assist'")
-                    if "'fault'" not in sql:
-                        missing.append("'fault'")
-                    logger.info(f"Migrating outcome column constraint to include {', '.join(missing)}...")
-                    try:
-                        # Create new table with updated constraint
-                        cursor.execute("""
-                            CREATE TABLE contacts_new (
-                                contact_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                                rally_id INTEGER NOT NULL,
-                                sequence_number INTEGER NOT NULL,
-                                player_id INTEGER,
-                                contact_type TEXT NOT NULL CHECK(contact_type IN ('serve', 'pass', 'set', 'attack', 'block', 'receive', 'freeball', 'down', 'net')),
-                                team_id INTEGER NOT NULL,
-                                x INTEGER,
-                                y INTEGER,
-                                timecode INTEGER,
-                                outcome TEXT DEFAULT 'continue' CHECK(outcome IN ('continue', 'ace', 'kill', 'error', 'down', 'stuff', 'assist', 'fault')),
-                                rating INTEGER,
-                                outcome_manual INTEGER DEFAULT 0,
-                                rating_manual INTEGER DEFAULT 0,
-                                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                                FOREIGN KEY (rally_id) REFERENCES rallies(rally_id),
-                                FOREIGN KEY (player_id) REFERENCES players(player_id),
-                                FOREIGN KEY (team_id) REFERENCES teams(team_id)
-                            )
-                        """)
-                        
-                        # Copy data - check if rating and manual columns exist in old table
-                        cursor.execute("PRAGMA table_info(contacts)")
-                        old_columns = [row[1] for row in cursor.fetchall()]
-                        has_rating = 'rating' in old_columns
-                        has_outcome_manual = 'outcome_manual' in old_columns
-                        has_rating_manual = 'rating_manual' in old_columns
-                        
-                        select_cols = "contact_id, rally_id, sequence_number, player_id, contact_type, team_id, x, y, timecode, outcome"
-                        if has_rating:
-                            select_cols += ", rating"
-                        else:
-                            select_cols += ", NULL as rating"
-                        if has_outcome_manual:
-                            select_cols += ", outcome_manual"
-                        else:
-                            select_cols += ", 0 as outcome_manual"
-                        if has_rating_manual:
-                            select_cols += ", rating_manual"
-                        else:
-                            select_cols += ", 0 as rating_manual"
-                        select_cols += ", timestamp, created_at"
-                        
-                        cursor.execute(f"""
-                            INSERT INTO contacts_new 
-                            SELECT {select_cols}
-                            FROM contacts
-                        """)
-                        
-                        # Drop old table and rename new one
-                        cursor.execute("DROP TABLE contacts")
-                        cursor.execute("ALTER TABLE contacts_new RENAME TO contacts")
-                        
-                        # Recreate indexes
-                        cursor.execute("CREATE INDEX IF NOT EXISTS idx_contacts_rally ON contacts(rally_id)")
-                        cursor.execute("CREATE INDEX IF NOT EXISTS idx_contacts_player ON contacts(player_id)")
-                        cursor.execute("CREATE INDEX IF NOT EXISTS idx_contacts_type ON contacts(contact_type)")
-                        
-                        self.conn.commit()
-                        logger.info("Outcome column constraint migration completed successfully!")
-                    except Exception as e:
-                        self.conn.rollback()
-                        logger.error(f"Migration failed: {e}. You may need to manually migrate the database.")
-        
-        # Add video_file_path column to games table if it doesn't exist
-        cursor.execute("PRAGMA table_info(games)")
-        columns = [row[1] for row in cursor.fetchall()]
-        if 'video_file_path' not in columns:
-            logger.info("Adding video_file_path column to games table...")
-            try:
-                cursor.execute("ALTER TABLE games ADD COLUMN video_file_path TEXT")
-                self.conn.commit()
-                logger.info("video_file_path column added successfully!")
-            except Exception as e:
-                logger.warning(f"Failed to add video_file_path column: {e}")
-        
-        # Add still_image_path column to games table if it doesn't exist
-        if 'still_image_path' not in columns:
-            logger.info("Adding still_image_path column to games table...")
-            try:
-                cursor.execute("ALTER TABLE games ADD COLUMN still_image_path TEXT")
-                self.conn.commit()
-                logger.info("still_image_path column added successfully!")
-            except Exception as e:
-                logger.warning(f"Failed to add still_image_path column: {e}")
-        
-        # Add is_ended column to games table if it doesn't exist
-        # Refresh columns list after previous additions
-        cursor.execute("PRAGMA table_info(games)")
-        columns = [row[1] for row in cursor.fetchall()]
-        if 'is_ended' not in columns:
-            logger.info("Adding is_ended column to games table...")
-            try:
-                cursor.execute("ALTER TABLE games ADD COLUMN is_ended BOOLEAN DEFAULT 0")
-                self.conn.commit()
-                logger.info("is_ended column added successfully!")
-            except Exception as e:
-                logger.warning(f"Failed to add is_ended column: {e}")
-        
-        # Add court boundary columns to games table if they don't exist
-        court_columns = [
-            'court_corner_tl_x', 'court_corner_tl_y',
-            'court_corner_tr_x', 'court_corner_tr_y',
-            'court_corner_bl_x', 'court_corner_bl_y',
-            'court_corner_br_x', 'court_corner_br_y',
-            'court_centerline_top_x', 'court_centerline_top_y',
-            'court_centerline_bottom_x', 'court_centerline_bottom_y',
-            'court_y200_left_x', 'court_y200_left_y',
-            'court_y200_right_x', 'court_y200_right_y',
-            'court_y400_left_x', 'court_y400_left_y',
-            'court_y400_right_x', 'court_y400_right_y'
-        ]
-        for col in court_columns:
-            if col not in columns:
-                logger.info(f"Adding {col} column to games table...")
-                try:
-                    cursor.execute(f"ALTER TABLE games ADD COLUMN {col} REAL")
-                    self.conn.commit()
-                    logger.info(f"{col} column added successfully!")
-                except Exception as e:
-                    logger.warning(f"Failed to add {col} column: {e}")
-        
-        # Add homography_matrix column to games table if it doesn't exist
-        if 'homography_matrix' not in columns:
-            logger.info("Adding homography_matrix column to games table...")
-            try:
-                cursor.execute("ALTER TABLE games ADD COLUMN homography_matrix TEXT")
-                self.conn.commit()
-                logger.info("homography_matrix column added successfully!")
-            except Exception as e:
-                logger.warning(f"Failed to add homography_matrix column: {e}")
-        
-        # Add scroll offset columns to games table if they don't exist
-        scroll_columns = ['scroll_offset_x', 'scroll_offset_y', 'video_offset_x', 'video_offset_y',
-                         'video_width', 'video_height', 'scene_width', 'scene_height']
-        for col in scroll_columns:
-            col_type = 'REAL' if col in ['video_width', 'video_height', 'scene_width', 'scene_height'] else 'INTEGER'
-            if col not in columns:
-                logger.info(f"Adding {col} column to games table...")
-                try:
-                    cursor.execute(f"ALTER TABLE games ADD COLUMN {col} {col_type} DEFAULT 0")
-                    self.conn.commit()
-                    logger.info(f"{col} column added successfully!")
-                except Exception as e:
-                    logger.warning(f"Failed to add {col} column: {e}")
-        
-        # The game_players table will be created automatically if it doesn't exist
-        # No migration needed as it's a new table
-        
-        # Check if player_stats table exists, if not create it
-        cursor.execute("""
-            SELECT name FROM sqlite_master 
-            WHERE type='table' AND name='player_stats'
-        """)
-        if not cursor.fetchone():
-            logger.info("Creating player_stats table...")
-            cursor.execute("""
-                CREATE TABLE player_stats (
-                    stat_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    game_id INTEGER NOT NULL,
-                    player_id INTEGER NOT NULL,
-                    -- Receive statistics
-                    receive_attempts INTEGER DEFAULT 0,
-                    receive_0 INTEGER DEFAULT 0,
-                    receive_1 INTEGER DEFAULT 0,
-                    receive_2 INTEGER DEFAULT 0,
-                    receive_3 INTEGER DEFAULT 0,
-                    receive_avg_rating REAL DEFAULT 0.0,
-                    -- Attack statistics
-                    attack_attempts INTEGER DEFAULT 0,
-                    attack_kills INTEGER DEFAULT 0,
-                    attack_errors INTEGER DEFAULT 0,
-                    attack_kill_pct REAL DEFAULT 0.0,
-                    attack_hitting_pct REAL DEFAULT 0.0,
-                    attack_efficiency REAL DEFAULT 0.0,
-                    -- Set statistics
-                    set_attempts INTEGER DEFAULT 0,
-                    set_assists INTEGER DEFAULT 0,
-                    -- Serve statistics
-                    serve_attempts INTEGER DEFAULT 0,
-                    serve_aces INTEGER DEFAULT 0,
-                    serve_errors INTEGER DEFAULT 0,
-                    serve_ace_pct REAL DEFAULT 0.0,
-                    serve_in_pct REAL DEFAULT 0.0,
-                    -- Dig statistics
-                    dig_attempts INTEGER DEFAULT 0,
-                    dig_successful INTEGER DEFAULT 0,
-                    -- Block statistics
-                    block_solo INTEGER DEFAULT 0,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (game_id) REFERENCES games(game_id) ON DELETE CASCADE,
-                    FOREIGN KEY (player_id) REFERENCES players(player_id),
-                    UNIQUE(game_id, player_id)
-                )
-            """)
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_player_stats_game ON player_stats(game_id)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_player_stats_player ON player_stats(player_id)")
-            self.conn.commit()
-            logger.info("player_stats table created successfully!")
-        
-        # Add new columns to players table for lineup management
-        cursor.execute("PRAGMA table_info(players)")
-        columns = [row[1] for row in cursor.fetchall()]
-        
-        if 'role_code' not in columns:
-            logger.info("Adding role_code column to players table...")
-            try:
-                cursor.execute("ALTER TABLE players ADD COLUMN role_code TEXT")
-                self.conn.commit()
-                logger.info("role_code column added successfully!")
-            except Exception as e:
-                logger.warning(f"Failed to add role_code column: {e}")
-        
-        if 'is_active' not in columns:
-            logger.info("Adding is_active column to players table...")
-            try:
-                cursor.execute("ALTER TABLE players ADD COLUMN is_active BOOLEAN DEFAULT 0")
-                self.conn.commit()
-                logger.info("is_active column added successfully!")
-            except Exception as e:
-                logger.warning(f"Failed to add is_active column: {e}")
-        
-        if 'jersey' not in columns:
-            logger.info("Adding jersey column to players table...")
-            try:
-                cursor.execute("ALTER TABLE players ADD COLUMN jersey INTEGER")
-                self.conn.commit()
-                logger.info("jersey column added successfully!")
-            except Exception as e:
-                logger.warning(f"Failed to add jersey column: {e}")
-        
-        # Ensure positions table is populated
-        cursor.execute("SELECT COUNT(*) FROM positions")
-        if cursor.fetchone()[0] == 0:
-            logger.info("Populating positions table...")
-            positions_data = [
-                (1, 'Right Back', 'RB', 'Back', 'Right', 299, 0),
-                (2, 'Right Front', 'RF', 'Front', 'Right', 299, 299),
-                (3, 'Middle Front', 'MF', 'Front', 'Middle', 150, 299),
-                (4, 'Left Front', 'LF', 'Front', 'Left', 0, 299),
-                (5, 'Left Back', 'LB', 'Back', 'Left', 0, 0),
-                (6, 'Middle Back', 'MB', 'Back', 'Middle', 150, 0)
-            ]
-            cursor.executemany(
-                "INSERT INTO positions (number, name, abbrev, row, side, x, y) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                positions_data
-            )
-            self.conn.commit()
-            logger.info("Positions table populated successfully!")
     
     # Helper methods for common operations
     
@@ -1181,9 +70,10 @@ class VideoStatsDB:
         if not self.conn:
             self.connect()
         cursor = self.conn.cursor()
-        cursor.execute("INSERT INTO teams (name) VALUES (?)", (name,))
+        cursor.execute("INSERT INTO teams (name) VALUES (%s) RETURNING team_id", (name,))
+        team_id = cursor.fetchone()[0]
         self.conn.commit()
-        return cursor.lastrowid
+        return team_id
     
     def get_all_teams(self) -> list:
         """Get all teams from the database.
@@ -1197,12 +87,12 @@ class VideoStatsDB:
         cursor.execute("SELECT team_id, name FROM teams ORDER BY name")
         return cursor.fetchall()
     
-    def get_team_by_id(self, team_id: int) -> Optional[sqlite3.Row]:
+    def get_team_by_id(self, team_id: int) -> Optional[dict]:
         """Get a team by ID."""
         if not self.conn:
             self.connect()
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT * FROM teams WHERE team_id = ?", (team_id,))
+        cursor = self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cursor.execute("SELECT * FROM teams WHERE team_id = %s", (team_id,))
         return cursor.fetchone()
     
     def add_player(self, team_id: int, player_number: str, name: Optional[str] = None) -> int:
@@ -1219,11 +109,12 @@ class VideoStatsDB:
         # Convert to string to ensure alphanumeric support
         player_number_str = str(player_number).strip()
         cursor.execute(
-            "INSERT INTO players (team_id, player_number, name) VALUES (?, ?, ?)",
+            "INSERT INTO players (team_id, player_number, name) VALUES (%s, %s, %s) RETURNING player_id",
             (team_id, player_number_str, name)
         )
+        player_id = cursor.fetchone()[0]
         self.conn.commit()
-        return cursor.lastrowid
+        return player_id
     
     def start_game(self, team_us_id: int, team_them_id: int, notes: Optional[str] = None, game_date: Optional[datetime] = None) -> int:
         """Start a new game and return game_id.
@@ -1244,16 +135,17 @@ class VideoStatsDB:
         cursor = self.conn.cursor()
         if game_date:
             cursor.execute(
-                "INSERT INTO games (team_us_id, team_them_id, notes, game_date) VALUES (?, ?, ?, ?)",
+                "INSERT INTO games (team_us_id, team_them_id, notes, game_date) VALUES (%s, %s, %s, %s) RETURNING game_id",
                 (team_us_id, team_them_id, notes, game_date)
             )
         else:
             cursor.execute(
-                "INSERT INTO games (team_us_id, team_them_id, notes) VALUES (?, ?, ?)",
+                "INSERT INTO games (team_us_id, team_them_id, notes) VALUES (%s, %s, %s) RETURNING game_id",
                 (team_us_id, team_them_id, notes)
             )
+        game_id = cursor.fetchone()[0]
         self.conn.commit()
-        return cursor.lastrowid
+        return game_id
     
     def start_rally(self, game_id: int, rally_number: int, serving_team_id: int) -> int:
         """Start a new rally and return rally_id."""
@@ -1262,11 +154,12 @@ class VideoStatsDB:
         cursor = self.conn.cursor()
         cursor.execute(
             """INSERT INTO rallies (game_id, rally_number, serving_team_id, rally_start_time)
-               VALUES (?, ?, ?, ?)""",
+               VALUES (%s, %s, %s, %s) RETURNING rally_id""",
             (game_id, rally_number, serving_team_id, datetime.now())
         )
+        rally_id = cursor.fetchone()[0]
         self.conn.commit()
-        return cursor.lastrowid
+        return rally_id
     
     def add_contact(self, rally_id: int, sequence_number: int, contact_type: str, 
                    team_id: int, player_id: Optional[int] = None, 
@@ -1292,11 +185,12 @@ class VideoStatsDB:
         cursor = self.conn.cursor()
         cursor.execute(
             """INSERT INTO contacts (rally_id, sequence_number, contact_type, team_id, player_id, x, y, timecode, outcome, rating)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING contact_id""",
             (rally_id, sequence_number, contact_type, team_id, player_id, x, y, timecode, outcome, rating)
         )
+        contact_id = cursor.fetchone()[0]
         self.conn.commit()
-        return cursor.lastrowid
+        return contact_id
     
     def end_rally(self, rally_id: int, point_winner_id: int, rally_end_time: Optional[datetime] = None):
         """End a rally and record the point winner.
@@ -1312,8 +206,8 @@ class VideoStatsDB:
         end_time = rally_end_time if rally_end_time is not None else datetime.now()
         cursor.execute(
             """UPDATE rallies 
-               SET point_winner_id = ?, rally_end_time = ?
-               WHERE rally_id = ?""",
+               SET point_winner_id = %s, rally_end_time = %s
+               WHERE rally_id = %s""",
             (point_winner_id, end_time, rally_id)
         )
         self.conn.commit()
@@ -1330,7 +224,7 @@ class VideoStatsDB:
         cursor.execute(
             """UPDATE rallies 
                SET point_winner_id = NULL, rally_end_time = NULL
-               WHERE rally_id = ?""",
+               WHERE rally_id = %s""",
             (rally_id,)
         )
         self.conn.commit()
@@ -1346,7 +240,7 @@ class VideoStatsDB:
             self.connect()
         cursor = self.conn.cursor()
         cursor.execute(
-            "UPDATE contacts SET outcome = ? WHERE contact_id = ?",
+            "UPDATE contacts SET outcome = %s WHERE contact_id = %s",
             (outcome, contact_id)
         )
         self.conn.commit()
@@ -1364,7 +258,7 @@ class VideoStatsDB:
             self.connect()
         try:
             cursor = self.conn.cursor()
-            cursor.execute("DELETE FROM contacts WHERE contact_id = ?", (contact_id,))
+            cursor.execute("DELETE FROM contacts WHERE contact_id = %s", (contact_id,))
             self.conn.commit()
             return cursor.rowcount > 0
         except Exception as e:
@@ -1382,18 +276,18 @@ class VideoStatsDB:
         """
         if not self.conn:
             self.connect()
-        cursor = self.conn.cursor()
+        cursor = self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cursor.execute(
             """SELECT contact_id, rally_id, sequence_number, player_id, contact_type, 
                       team_id, x, y, outcome, timestamp
                FROM contacts 
-               WHERE rally_id = ?
+               WHERE rally_id = %s
                ORDER BY sequence_number""",
             (rally_id,)
         )
         return cursor.fetchall()
     
-    def get_last_contact(self, rally_id: int) -> Optional[sqlite3.Row]:
+    def get_last_contact(self, rally_id: int) -> Optional[dict]:
         """Get the most recent contact in a rally.
         
         Args:
@@ -1405,12 +299,12 @@ class VideoStatsDB:
         """
         if not self.conn:
             self.connect()
-        cursor = self.conn.cursor()
+        cursor = self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cursor.execute(
             """SELECT contact_id, rally_id, sequence_number, player_id, contact_type, 
                       team_id, x, y, outcome, timestamp
                FROM contacts 
-               WHERE rally_id = ?
+               WHERE rally_id = %s
                ORDER BY sequence_number DESC
                LIMIT 1""",
             (rally_id,)
@@ -1435,20 +329,20 @@ class VideoStatsDB:
         cursor.execute("""
             DELETE FROM contacts 
             WHERE rally_id IN (
-                SELECT rally_id FROM rallies WHERE game_id = ?
+                SELECT rally_id FROM rallies WHERE game_id = %s
             )
         """, (game_id,))
         contacts_deleted = cursor.rowcount
         
         # Then, delete all rallies for this game
-        cursor.execute("DELETE FROM rallies WHERE game_id = ?", (game_id,))
+        cursor.execute("DELETE FROM rallies WHERE game_id = %s", (game_id,))
         rallies_deleted = cursor.rowcount
         
         self.conn.commit()
         
         return (contacts_deleted, rallies_deleted)
     
-    def get_player_by_number(self, team_id: int, player_number: str) -> Optional[sqlite3.Row]:
+    def get_player_by_number(self, team_id: int, player_number: str) -> Optional[dict]:
         """Get a player by team and number.
         
         Args:
@@ -1457,9 +351,9 @@ class VideoStatsDB:
         """
         if not self.conn:
             self.connect()
-        cursor = self.conn.cursor()
+        cursor = self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cursor.execute(
-            "SELECT * FROM players WHERE team_id = ? AND player_number = ?",
+            "SELECT * FROM players WHERE team_id = %s AND player_number = %s",
             (team_id, str(player_number).strip())
         )
         return cursor.fetchone()
@@ -1470,7 +364,7 @@ class VideoStatsDB:
             self.connect()
         cursor = self.conn.cursor()
         cursor.execute(
-            "SELECT MAX(sequence_number) FROM contacts WHERE rally_id = ?",
+            "SELECT MAX(sequence_number) FROM contacts WHERE rally_id = %s",
             (rally_id,)
         )
         result = cursor.fetchone()[0]
@@ -1490,21 +384,23 @@ class VideoStatsDB:
         cursor = self.conn.cursor()
         try:
             cursor.execute(
-                "INSERT INTO game_players (game_id, team_id, player_id, game_role_code) VALUES (?, ?, ?, ?)",
+                "INSERT INTO game_players (game_id, team_id, player_id, game_role_code) VALUES (%s, %s, %s, %s) RETURNING game_player_id",
                 (game_id, team_id, player_id, game_role_code)
             )
+            game_player_id = cursor.fetchone()[0]
             self.conn.commit()
-            return cursor.lastrowid
-        except sqlite3.IntegrityError:
+            return game_player_id
+        except psycopg2.IntegrityError:
+            self.conn.rollback()
             # Player already in game roster - update game_role_code if provided
             if game_role_code is not None:
                 cursor.execute(
-                    "UPDATE game_players SET game_role_code = ? WHERE game_id = ? AND team_id = ? AND player_id = ?",
+                    "UPDATE game_players SET game_role_code = %s WHERE game_id = %s AND team_id = %s AND player_id = %s",
                     (game_role_code, game_id, team_id, player_id)
                 )
                 self.conn.commit()
             cursor.execute(
-                "SELECT game_player_id FROM game_players WHERE game_id = ? AND team_id = ? AND player_id = ?",
+                "SELECT game_player_id FROM game_players WHERE game_id = %s AND team_id = %s AND player_id = %s",
                 (game_id, team_id, player_id)
             )
             result = cursor.fetchone()
@@ -1514,15 +410,15 @@ class VideoStatsDB:
         """Get all players for a specific team in a specific game."""
         if not self.conn:
             self.connect()
-        cursor = self.conn.cursor()
+        cursor = self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cursor.execute("""
             SELECT p.player_id, p.player_number, p.name, p.team_id
             FROM players p
             INNER JOIN game_players gp ON p.player_id = gp.player_id
-            WHERE gp.game_id = ? AND gp.team_id = ?
+            WHERE gp.game_id = %s AND gp.team_id = %s
             ORDER BY 
                 CASE 
-                    WHEN CAST(p.player_number AS INTEGER) IS NOT NULL 
+                    WHEN p.player_number ~ '^[0-9]+$' 
                     THEN CAST(p.player_number AS INTEGER)
                     ELSE 999999
                 END,
@@ -1536,12 +432,12 @@ class VideoStatsDB:
             self.connect()
         cursor = self.conn.cursor()
         cursor.execute(
-            "DELETE FROM game_players WHERE game_id = ? AND team_id = ? AND player_id = ?",
+            "DELETE FROM game_players WHERE game_id = %s AND team_id = %s AND player_id = %s",
             (game_id, team_id, player_id)
         )
         self.conn.commit()
     
-    def get_player_by_number_for_game(self, game_id: int, team_id: int, player_number: str) -> Optional[sqlite3.Row]:
+    def get_player_by_number_for_game(self, game_id: int, team_id: int, player_number: str) -> Optional[dict]:
         """Get a player by number for a specific game and team.
         
         Args:
@@ -1551,12 +447,12 @@ class VideoStatsDB:
         """
         if not self.conn:
             self.connect()
-        cursor = self.conn.cursor()
+        cursor = self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cursor.execute("""
             SELECT p.*
             FROM players p
             INNER JOIN game_players gp ON p.player_id = gp.player_id
-            WHERE gp.game_id = ? AND gp.team_id = ? AND p.player_number = ?
+            WHERE gp.game_id = %s AND gp.team_id = %s AND p.player_number = %s
         """, (game_id, team_id, str(player_number).strip()))
         return cursor.fetchone()
     
@@ -1571,7 +467,7 @@ class VideoStatsDB:
             self.connect()
         cursor = self.conn.cursor()
         cursor.execute(
-            "UPDATE games SET video_file_path = ? WHERE game_id = ?",
+            "UPDATE games SET video_file_path = %s WHERE game_id = %s",
             (video_file_path, game_id)
         )
         self.conn.commit()
@@ -1589,7 +485,7 @@ class VideoStatsDB:
             self.connect()
         cursor = self.conn.cursor()
         cursor.execute(
-            "SELECT video_file_path FROM games WHERE game_id = ?",
+            "SELECT video_file_path FROM games WHERE game_id = %s",
             (game_id,)
         )
         result = cursor.fetchone()
@@ -1606,7 +502,7 @@ class VideoStatsDB:
             self.connect()
         cursor = self.conn.cursor()
         cursor.execute(
-            "UPDATE games SET still_image_path = ? WHERE game_id = ?",
+            "UPDATE games SET still_image_path = %s WHERE game_id = %s",
             (still_image_path, game_id)
         )
         self.conn.commit()
@@ -1624,7 +520,7 @@ class VideoStatsDB:
             self.connect()
         cursor = self.conn.cursor()
         cursor.execute(
-            "SELECT still_image_path FROM games WHERE game_id = ?",
+            "SELECT still_image_path FROM games WHERE game_id = %s",
             (game_id,)
         )
         result = cursor.fetchone()
@@ -1683,26 +579,26 @@ class VideoStatsDB:
         
         cursor.execute("""
             UPDATE games SET
-                court_corner_tl_x = ?, court_corner_tl_y = ?,
-                court_corner_tr_x = ?, court_corner_tr_y = ?,
-                court_corner_bl_x = ?, court_corner_bl_y = ?,
-                court_corner_br_x = ?, court_corner_br_y = ?,
-                court_centerline_top_x = ?, court_centerline_top_y = ?,
-                court_centerline_bottom_x = ?, court_centerline_bottom_y = ?,
-                court_y200_left_x = ?, court_y200_left_y = ?,
-                court_y200_right_x = ?, court_y200_right_y = ?,
-                court_y400_left_x = ?, court_y400_left_y = ?,
-                court_y400_right_x = ?, court_y400_right_y = ?,
-                homography_matrix = ?,
-                scroll_offset_x = ?,
-                scroll_offset_y = ?,
-                video_offset_x = ?,
-                video_offset_y = ?,
-                video_width = ?,
-                video_height = ?,
-                scene_width = ?,
-                scene_height = ?
-            WHERE game_id = ?
+                court_corner_tl_x = %s, court_corner_tl_y = %s,
+                court_corner_tr_x = %s, court_corner_tr_y = %s,
+                court_corner_bl_x = %s, court_corner_bl_y = %s,
+                court_corner_br_x = %s, court_corner_br_y = %s,
+                court_centerline_top_x = %s, court_centerline_top_y = %s,
+                court_centerline_bottom_x = %s, court_centerline_bottom_y = %s,
+                court_y200_left_x = %s, court_y200_left_y = %s,
+                court_y200_right_x = %s, court_y200_right_y = %s,
+                court_y400_left_x = %s, court_y400_left_y = %s,
+                court_y400_right_x = %s, court_y400_right_y = %s,
+                homography_matrix = %s,
+                scroll_offset_x = %s,
+                scroll_offset_y = %s,
+                video_offset_x = %s,
+                video_offset_y = %s,
+                video_width = %s,
+                video_height = %s,
+                scene_width = %s,
+                scene_height = %s
+            WHERE game_id = %s
         """, (tl_x, tl_y, tr_x, tr_y, bl_x, bl_y, br_x, br_y, ct_x, ct_y, cb_x, cb_y,
               y200l_x, y200l_y, y200r_x, y200r_y, y400l_x, y400l_y, y400r_x, y400r_y,
               homography_json, scroll_offset_x, scroll_offset_y, video_offset_x, video_offset_y,
@@ -1738,7 +634,7 @@ class VideoStatsDB:
                    video_offset_x, video_offset_y,
                    video_width, video_height,
                    scene_width, scene_height
-            FROM games WHERE game_id = ?
+            FROM games WHERE game_id = %s
         """, (game_id,))
         result = cursor.fetchone()
         
@@ -1835,7 +731,7 @@ class VideoStatsDB:
             cursor.execute("""
                 SELECT game_id, team_us_id, team_them_id 
                 FROM games 
-                WHERE game_id = ?
+                WHERE game_id = %s
             """, (game_id,))
             game = cursor.fetchone()
             
@@ -1859,41 +755,41 @@ class VideoStatsDB:
             cursor.execute("""
                 DELETE FROM contacts 
                 WHERE rally_id IN (
-                    SELECT rally_id FROM rallies WHERE game_id = ?
+                    SELECT rally_id FROM rallies WHERE game_id = %s
                 )
             """, (game_id,))
             deleted_counts['contacts'] = cursor.rowcount
             
             # 2. Delete rallies
-            cursor.execute("DELETE FROM rallies WHERE game_id = ?", (game_id,))
+            cursor.execute("DELETE FROM rallies WHERE game_id = %s", (game_id,))
             deleted_counts['rallies'] = cursor.rowcount
             
             # 3. Delete game_players
-            cursor.execute("DELETE FROM game_players WHERE game_id = ?", (game_id,))
+            cursor.execute("DELETE FROM game_players WHERE game_id = %s", (game_id,))
             deleted_counts['game_players'] = cursor.rowcount
             
             # 4. Delete player_stats
-            cursor.execute("DELETE FROM player_stats WHERE game_id = ?", (game_id,))
+            cursor.execute("DELETE FROM player_stats WHERE game_id = %s", (game_id,))
             deleted_counts['player_stats'] = cursor.rowcount
             
             # 5. Delete substitutions
-            cursor.execute("DELETE FROM substitutions WHERE game_id = ?", (game_id,))
+            cursor.execute("DELETE FROM substitutions WHERE game_id = %s", (game_id,))
             deleted_counts['substitutions'] = cursor.rowcount
             
             # 6. Delete libero_actions
-            cursor.execute("DELETE FROM libero_actions WHERE game_id = ?", (game_id,))
+            cursor.execute("DELETE FROM libero_actions WHERE game_id = %s", (game_id,))
             deleted_counts['libero_actions'] = cursor.rowcount
             
             # 7. Delete active_lineup for the game
-            cursor.execute("DELETE FROM active_lineup WHERE game_id = ?", (game_id,))
+            cursor.execute("DELETE FROM active_lineup WHERE game_id = %s", (game_id,))
             deleted_counts['active_lineup'] = cursor.rowcount
             
             # 8. Delete rotation_state for the game
-            cursor.execute("DELETE FROM rotation_state WHERE game_id = ?", (game_id,))
+            cursor.execute("DELETE FROM rotation_state WHERE game_id = %s", (game_id,))
             deleted_counts['rotation_state'] = cursor.rowcount
             
             # 9. Finally, delete the game itself
-            cursor.execute("DELETE FROM games WHERE game_id = ?", (game_id,))
+            cursor.execute("DELETE FROM games WHERE game_id = %s", (game_id,))
             deleted_counts['game'] = cursor.rowcount
             
             self.conn.commit()
@@ -1914,7 +810,7 @@ class VideoStatsDB:
             self.connect()
         cursor = self.conn.cursor()
         cursor.execute(
-            "UPDATE games SET is_ended = 1 WHERE game_id = ?",
+            "UPDATE games SET is_ended = TRUE WHERE game_id = %s",
             (game_id,)
         )
         self.conn.commit()
@@ -1932,7 +828,7 @@ class VideoStatsDB:
             self.connect()
         cursor = self.conn.cursor()
         cursor.execute(
-            "SELECT is_ended FROM games WHERE game_id = ?",
+            "SELECT is_ended FROM games WHERE game_id = %s",
             (game_id,)
         )
         result = cursor.fetchone()
@@ -1942,8 +838,16 @@ class VideoStatsDB:
 
 
 if __name__ == "__main__":
-    # Initialize the database
+    # Initialize the database connection
+    # Make sure PostgreSQL is running and configuration is correct
     db = VideoStatsDB()
-    db.initialize_database()
-    logger.info("VideoStats database initialized successfully!")
+    try:
+        db.connect()
+        logger.info("VideoStats PostgreSQL database connection successful!")
+        logger.info("Use migration files to create/update schema.")
+        db.close()
+    except Exception as e:
+        logger.error(f"Failed to connect to PostgreSQL database: {e}")
+        logger.info("Please check your database configuration and ensure PostgreSQL is running.")
+
 

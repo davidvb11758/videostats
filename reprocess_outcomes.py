@@ -14,7 +14,7 @@ It will apply all the current outcome rules:
 Note: Contacts with outcome_manual = 1 will not be updated.
 """
 
-import sqlite3
+import psycopg2.extras
 import argparse
 from database import VideoStatsDB
 
@@ -24,13 +24,13 @@ def assign_rally_outcomes(db, rally_id: int, point_winner_id: int, team_us_id: i
         db.connect()
     
     # Get all contacts in this rally WITH outcome_manual flag
-    cursor = db.conn.cursor()
+    cursor = db.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cursor.execute("""
         SELECT contact_id, rally_id, sequence_number, player_id, contact_type, 
                team_id, x, y, outcome, timestamp,
                COALESCE(outcome_manual, 0) as outcome_manual
         FROM contacts 
-        WHERE rally_id = ?
+        WHERE rally_id = %s
         ORDER BY sequence_number
     """, (rally_id,))
     contacts = cursor.fetchall()
@@ -46,8 +46,8 @@ def assign_rally_outcomes(db, rally_id: int, point_winner_id: int, team_us_id: i
     last_losing_team_contact = None
     
     for contact in contacts:
-        contact_type = contact[4]
-        team_id = contact[5]
+        contact_type = contact['contact_type']
+        team_id = contact['team_id']
         
         # Skip floor contacts ('down')
         if contact_type == 'down':
@@ -61,7 +61,7 @@ def assign_rally_outcomes(db, rally_id: int, point_winner_id: int, team_us_id: i
     # Get the very last player contact (not floor contact)
     last_player_contact = None
     for contact in reversed(contacts):
-        if contact[4] != 'down':  # contact_type != 'down'
+        if contact['contact_type'] != 'down':  # contact_type != 'down'
             last_player_contact = contact
             break
     
@@ -70,23 +70,23 @@ def assign_rally_outcomes(db, rally_id: int, point_winner_id: int, team_us_id: i
     
     # Mark the last losing team contact as error (if it exists)
     if last_losing_team_contact:
-        losing_contact_id = last_losing_team_contact[0]
-        losing_outcome_manual = last_losing_team_contact[10] if len(last_losing_team_contact) > 10 else 0
+        losing_contact_id = last_losing_team_contact['contact_id']
+        losing_outcome_manual = last_losing_team_contact.get('outcome_manual', 0)
         # Only update if outcome is not manually set
         if losing_outcome_manual == 0:
             db.update_contact_outcome(losing_contact_id, 'error')
     
     # Process the last contact by the winning team
     if last_winning_team_contact:
-        contact_id = last_winning_team_contact[0]
-        contact_type = last_winning_team_contact[4]
-        winning_outcome_manual = last_winning_team_contact[10] if len(last_winning_team_contact) > 10 else 0
+        contact_id = last_winning_team_contact['contact_id']
+        contact_type = last_winning_team_contact['contact_type']
+        winning_outcome_manual = last_winning_team_contact.get('outcome_manual', 0)
         
         # Check if it's a serve (could be an ace)
         if contact_type == 'serve':
             opponent_contacts_after_serve = 0
             for contact in contacts:
-                if contact[4] != 'down' and contact[5] == losing_team_id:
+                if contact['contact_type'] != 'down' and contact['team_id'] == losing_team_id:
                     opponent_contacts_after_serve += 1
             
             if opponent_contacts_after_serve <= 1:
@@ -111,31 +111,31 @@ def assign_rally_outcomes(db, rally_id: int, point_winner_id: int, team_us_id: i
     db.conn.commit()  # Ensure all previous updates are committed
     
     # Get contacts with outcome_manual field for assist assignment
-    cursor = db.conn.cursor()
+    cursor = db.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cursor.execute("""
         SELECT contact_id, rally_id, sequence_number, player_id, contact_type, 
                team_id, x, y, outcome, timestamp,
                COALESCE(outcome_manual, 0) as outcome_manual
         FROM contacts 
-        WHERE rally_id = ?
+        WHERE rally_id = %s
         ORDER BY sequence_number
     """, (rally_id,))
     contacts = cursor.fetchall()
     
     for i, contact in enumerate(contacts):
-        contact_id = contact[0]
-        contact_type = contact[4]
-        contact_team_id = contact[5]
-        current_outcome = contact[8]  # outcome is at index 8
+        contact_id = contact['contact_id']
+        contact_type = contact['contact_type']
+        contact_team_id = contact['team_id']
+        current_outcome = contact['outcome']
         
         # Rule 1: If this is a receive with error, find prior serve and mark it as ace
         if contact_type == 'receive' and current_outcome == 'error':
             for j in range(i - 1, -1, -1):
                 prior_contact = contacts[j]
-                prior_contact_id = prior_contact[0]
-                prior_contact_type = prior_contact[4]
-                prior_contact_team_id = prior_contact[5]
-                prior_outcome_manual = prior_contact[10] if len(prior_contact) > 10 else 0
+                prior_contact_id = prior_contact['contact_id']
+                prior_contact_type = prior_contact['contact_type']
+                prior_contact_team_id = prior_contact['team_id']
+                prior_outcome_manual = prior_contact.get('outcome_manual', 0)
                 
                 # Only mark serve as ace if it was by the winning team
                 if prior_contact_type == 'serve' and prior_contact_team_id == point_winner_id:
@@ -148,10 +148,10 @@ def assign_rally_outcomes(db, rally_id: int, point_winner_id: int, team_us_id: i
         elif contact_type == 'pass' and current_outcome == 'error':
             for j in range(i - 1, -1, -1):
                 prior_contact = contacts[j]
-                prior_contact_id = prior_contact[0]
-                prior_contact_type = prior_contact[4]
-                prior_contact_team_id = prior_contact[5]
-                prior_outcome_manual = prior_contact[10] if len(prior_contact) > 10 else 0
+                prior_contact_id = prior_contact['contact_id']
+                prior_contact_type = prior_contact['contact_type']
+                prior_contact_team_id = prior_contact['team_id']
+                prior_outcome_manual = prior_contact.get('outcome_manual', 0)
                 
                 # Only mark as kill if the prior contact was by the winning team
                 if prior_contact_type in ['attack', 'freeball', 'block'] and prior_contact_team_id == point_winner_id:
@@ -164,9 +164,9 @@ def assign_rally_outcomes(db, rally_id: int, point_winner_id: int, team_us_id: i
         elif contact_type == 'block' and current_outcome == 'stuff':
             for j in range(i - 1, -1, -1):
                 prior_contact = contacts[j]
-                prior_contact_id = prior_contact[0]
-                prior_contact_type = prior_contact[4]
-                prior_outcome_manual = prior_contact[10] if len(prior_contact) > 10 else 0
+                prior_contact_id = prior_contact['contact_id']
+                prior_contact_type = prior_contact['contact_type']
+                prior_outcome_manual = prior_contact.get('outcome_manual', 0)
                 
                 # Skip 'down' contacts
                 if prior_contact_type == 'down':
@@ -182,7 +182,7 @@ def assign_rally_outcomes(db, rally_id: int, point_winner_id: int, team_us_id: i
         elif contact_type == 'set':
             set_contact_id = contact_id
             set_team_id = contact_team_id
-            outcome_manual = contact[10] if len(contact) > 10 else 0  # outcome_manual is at index 10
+            outcome_manual = contact.get('outcome_manual', 0)
             
             # Skip if outcome_manual = 1 (manually set, don't override)
             if outcome_manual == 1:
@@ -191,9 +191,9 @@ def assign_rally_outcomes(db, rally_id: int, point_winner_id: int, team_us_id: i
             # Look forward for the next contact by the same team
             for j in range(i + 1, len(contacts)):
                 next_contact = contacts[j]
-                next_contact_type = next_contact[4]
-                next_contact_team_id = next_contact[5]
-                next_contact_outcome = next_contact[8]  # outcome is at index 8
+                next_contact_type = next_contact['contact_type']
+                next_contact_team_id = next_contact['team_id']
+                next_contact_outcome = next_contact['outcome']
                 
                 # Skip 'down' contacts
                 if next_contact_type == 'down':
@@ -225,7 +225,7 @@ if __name__ == "__main__":
     # Validate game_id if provided
     if game_id is not None:
         cursor = db.conn.cursor()
-        cursor.execute("SELECT game_id FROM games WHERE game_id = ?", (game_id,))
+        cursor.execute("SELECT game_id FROM games WHERE game_id = %s", (game_id,))
         if not cursor.fetchone():
             print(f"Error: Game ID {game_id} does not exist in the database.")
             db.close()
@@ -240,7 +240,7 @@ if __name__ == "__main__":
         WHERE r.point_winner_id IS NOT NULL
     """
     if game_id is not None:
-        query += " AND r.game_id = ?"
+        query += " AND r.game_id = %s"
     query += " ORDER BY r.rally_id"
     
     if game_id is not None:
@@ -265,7 +265,7 @@ if __name__ == "__main__":
         cursor.execute("""
             UPDATE contacts 
             SET outcome = 'continue'
-            WHERE rally_id IN (SELECT rally_id FROM rallies WHERE game_id = ?)
+            WHERE rally_id IN (SELECT rally_id FROM rallies WHERE game_id = %s)
               AND outcome != 'down' 
               AND COALESCE(outcome_manual, 0) = 0
         """, (game_id,))
@@ -289,32 +289,32 @@ if __name__ == "__main__":
 
     for rally_id, point_winner_id, team_us_id, team_them_id in rallies:
         # Count outcomes before
-        cursor.execute("SELECT COUNT(*) FROM contacts WHERE rally_id = ? AND outcome = 'ace'", (rally_id,))
+        cursor.execute("SELECT COUNT(*) FROM contacts WHERE rally_id = %s AND outcome = 'ace'", (rally_id,))
         aces_before = cursor.fetchone()[0]
         
-        cursor.execute("SELECT COUNT(*) FROM contacts WHERE rally_id = ? AND outcome = 'kill'", (rally_id,))
+        cursor.execute("SELECT COUNT(*) FROM contacts WHERE rally_id = %s AND outcome = 'kill'", (rally_id,))
         kills_before = cursor.fetchone()[0]
         
-        cursor.execute("SELECT COUNT(*) FROM contacts WHERE rally_id = ? AND outcome = 'error'", (rally_id,))
+        cursor.execute("SELECT COUNT(*) FROM contacts WHERE rally_id = %s AND outcome = 'error'", (rally_id,))
         errors_before = cursor.fetchone()[0]
         
-        cursor.execute("SELECT COUNT(*) FROM contacts WHERE rally_id = ? AND outcome = 'assist'", (rally_id,))
+        cursor.execute("SELECT COUNT(*) FROM contacts WHERE rally_id = %s AND outcome = 'assist'", (rally_id,))
         assists_before = cursor.fetchone()[0]
         
         # Process the rally
         assign_rally_outcomes(db, rally_id, point_winner_id, team_us_id, team_them_id)
         
         # Count outcomes after
-        cursor.execute("SELECT COUNT(*) FROM contacts WHERE rally_id = ? AND outcome = 'ace'", (rally_id,))
+        cursor.execute("SELECT COUNT(*) FROM contacts WHERE rally_id = %s AND outcome = 'ace'", (rally_id,))
         aces_after = cursor.fetchone()[0]
         
-        cursor.execute("SELECT COUNT(*) FROM contacts WHERE rally_id = ? AND outcome = 'kill'", (rally_id,))
+        cursor.execute("SELECT COUNT(*) FROM contacts WHERE rally_id = %s AND outcome = 'kill'", (rally_id,))
         kills_after = cursor.fetchone()[0]
         
-        cursor.execute("SELECT COUNT(*) FROM contacts WHERE rally_id = ? AND outcome = 'error'", (rally_id,))
+        cursor.execute("SELECT COUNT(*) FROM contacts WHERE rally_id = %s AND outcome = 'error'", (rally_id,))
         errors_after = cursor.fetchone()[0]
         
-        cursor.execute("SELECT COUNT(*) FROM contacts WHERE rally_id = ? AND outcome = 'assist'", (rally_id,))
+        cursor.execute("SELECT COUNT(*) FROM contacts WHERE rally_id = %s AND outcome = 'assist'", (rally_id,))
         assists_after = cursor.fetchone()[0]
         
         # Track changes
@@ -345,7 +345,7 @@ if __name__ == "__main__":
             SELECT outcome, COUNT(*) as count
             FROM contacts c
             INNER JOIN rallies r ON c.rally_id = r.rally_id
-            WHERE r.game_id = ?
+            WHERE r.game_id = %s
             GROUP BY outcome
             ORDER BY count DESC
         """, (game_id,))
@@ -372,4 +372,5 @@ if __name__ == "__main__":
     print(f"{'='*80}\n")
 
     db.close()
+
 

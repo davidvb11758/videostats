@@ -115,3 +115,4 @@ class ClipCollection:
             created_at=created_at,
             clip_ids=data.get('clip_ids', [])
         )
+

@@ -213,3 +213,4 @@ class VoiceRecognizer(QObject):
             self.pyaudio_instance.terminate()
             self.pyaudio_instance = None
 
+

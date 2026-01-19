@@ -607,7 +607,7 @@ class DataEntryWindow(QMainWindow):
         cursor.execute(
             """SELECT point_winner_id, COUNT(*) 
                FROM rallies 
-               WHERE game_id = ? AND point_winner_id IS NOT NULL
+               WHERE game_id = %s AND point_winner_id IS NOT NULL
                GROUP BY point_winner_id""",
             (self.game_id,)
         )
@@ -624,7 +624,7 @@ class DataEntryWindow(QMainWindow):
         
         # Get current rally number
         cursor.execute(
-            "SELECT MAX(rally_number) FROM rallies WHERE game_id = ?",
+            "SELECT MAX(rally_number) FROM rallies WHERE game_id = %s",
             (self.game_id,)
         )
         result = cursor.fetchone()
@@ -634,7 +634,7 @@ class DataEntryWindow(QMainWindow):
             cursor.execute(
                 """SELECT rally_id, serving_team_id 
                    FROM rallies 
-                   WHERE game_id = ? AND rally_number = ? AND point_winner_id IS NULL""",
+                   WHERE game_id = %s AND rally_number = %s AND point_winner_id IS NULL""",
                 (self.game_id, self.current_rally_number)
             )
             incomplete = cursor.fetchone()
@@ -644,7 +644,7 @@ class DataEntryWindow(QMainWindow):
                 self.rally_in_progress = True
                 # Get current sequence
                 cursor.execute(
-                    "SELECT MAX(sequence_number) FROM contacts WHERE rally_id = ?",
+                    "SELECT MAX(sequence_number) FROM contacts WHERE rally_id = %s",
                     (self.current_rally_id,)
                 )
                 seq_result = cursor.fetchone()
@@ -665,7 +665,7 @@ class DataEntryWindow(QMainWindow):
             cursor.execute("""
                 SELECT team_id, serving
                 FROM rotation_state 
-                WHERE game_id = ? AND team_id = ?
+                WHERE game_id = %s AND team_id = %s
             """, (self.game_id, self.team_us_id))
             team_us_rotation = cursor.fetchone()
             if team_us_rotation and team_us_rotation[1] == 1:
@@ -884,7 +884,7 @@ class DataEntryWindow(QMainWindow):
         cursor.execute("""
             SELECT COUNT(*) 
             FROM contacts 
-            WHERE rally_id = ? AND team_id = ? AND contact_type != 'down'
+            WHERE rally_id = %s AND team_id = %s AND contact_type != 'down'
             ORDER BY sequence_number
         """, (self.current_rally_id, team_id))
         
@@ -912,7 +912,7 @@ class DataEntryWindow(QMainWindow):
         cursor.execute("""
             SELECT team_id, contact_type, sequence_number
             FROM contacts 
-            WHERE rally_id = ? AND contact_type != 'down'
+            WHERE rally_id = %s AND contact_type != 'down'
             ORDER BY sequence_number DESC
         """, (self.current_rally_id,))
         
@@ -957,7 +957,7 @@ class DataEntryWindow(QMainWindow):
                        p.name
                 FROM active_lineup al
                 INNER JOIN players p ON al.player_id = p.player_id
-                WHERE al.team_id = ?
+                WHERE al.team_id = %s
                 ORDER BY al.position_number
             """, (team_id,))
             players = cursor.fetchall()
@@ -968,7 +968,7 @@ class DataEntryWindow(QMainWindow):
                     SELECT p.player_id, p.player_number, p.name
                     FROM players p
                     INNER JOIN game_players gp ON p.player_id = gp.player_id
-                    WHERE gp.game_id = ? AND gp.team_id = ?
+                    WHERE gp.game_id = %s AND gp.team_id = %s
                     ORDER BY CASE 
                         WHEN CAST(p.player_number AS INTEGER) IS NOT NULL 
                         THEN CAST(p.player_number AS INTEGER)
@@ -983,7 +983,7 @@ class DataEntryWindow(QMainWindow):
                 SELECT p.player_id, p.player_number, p.name
                 FROM players p
                 INNER JOIN game_players gp ON p.player_id = gp.player_id
-                WHERE gp.game_id = ? AND gp.team_id = ?
+                WHERE gp.game_id = %s AND gp.team_id = %s
                 ORDER BY CASE 
                     WHEN CAST(p.player_number AS INTEGER) IS NOT NULL 
                     THEN CAST(p.player_number AS INTEGER)
@@ -1031,7 +1031,7 @@ class DataEntryWindow(QMainWindow):
                        al.is_server
                 FROM active_lineup al
                 INNER JOIN players p ON al.player_id = p.player_id
-                WHERE al.game_id = ? AND al.team_id = ?
+                WHERE al.game_id = %s AND al.team_id = %s
                 ORDER BY al.position_number
             """, (self.game_id, team_id))
             results = cursor.fetchall()
@@ -1222,7 +1222,7 @@ class DataEntryWindow(QMainWindow):
                         SELECT al.player_id, COALESCE(p.jersey, p.player_number) as player_number, p.name
                         FROM active_lineup al
                         INNER JOIN players p ON al.player_id = p.player_id
-                        WHERE al.game_id = ? AND al.team_id = ? AND al.is_server = 1
+                        WHERE al.game_id = %s AND al.team_id = %s AND al.is_server = 1
                     """, (self.game_id, team_id))
                     result = cursor.fetchone()
                     
@@ -1235,7 +1235,7 @@ class DataEntryWindow(QMainWindow):
                             SELECT al.player_id, COALESCE(p.jersey, p.player_number) as player_number, p.name
                             FROM active_lineup al
                             INNER JOIN players p ON al.player_id = p.player_id
-                            WHERE al.game_id = ? AND al.team_id = ? AND al.position_number = 1
+                            WHERE al.game_id = %s AND al.team_id = %s AND al.position_number = 1
                         """, (self.game_id, team_id))
                         result = cursor.fetchone()
                         if result:
@@ -1251,7 +1251,7 @@ class DataEntryWindow(QMainWindow):
                     cursor.execute("""
                         SELECT player_number, name, jersey
                         FROM players
-                        WHERE player_id = ?
+                        WHERE player_id = %s
                     """, (server_player_id,))
                     result = cursor.fetchone()
                     if result:
@@ -1435,7 +1435,7 @@ class DataEntryWindow(QMainWindow):
             cursor.execute("""
                 SELECT contact_type, team_id 
                 FROM contacts 
-                WHERE rally_id = ? AND contact_type != 'down'
+                WHERE rally_id = %s AND contact_type != 'down'
                 ORDER BY sequence_number DESC 
                 LIMIT 1
             """, (self.current_rally_id,))
@@ -1455,7 +1455,7 @@ class DataEntryWindow(QMainWindow):
             cursor.execute("""
                 SELECT team_id 
                 FROM contacts 
-                WHERE rally_id = ? AND contact_type != 'down'
+                WHERE rally_id = %s AND contact_type != 'down'
                 ORDER BY sequence_number DESC 
                 LIMIT 1
             """, (self.current_rally_id,))
@@ -1556,7 +1556,7 @@ class DataEntryWindow(QMainWindow):
                             cursor.execute("""
                                 SELECT contact_id, sequence_number, player_id, contact_type
                                 FROM contacts
-                                WHERE rally_id = ? AND team_id = ?
+                                WHERE rally_id = %s AND team_id = %s
                                 ORDER BY sequence_number DESC
                                 LIMIT 1
                             """, (self.current_rally_id, self.team_us_id))
@@ -1566,7 +1566,7 @@ class DataEntryWindow(QMainWindow):
                                 # Update the outcome to fault
                                 self.db.update_contact_outcome(contact_id, "fault")
                                 # Get player info for status
-                                cursor.execute("SELECT player_number, name FROM players WHERE player_id = ?", (player_id,))
+                                cursor.execute("SELECT player_number, name FROM players WHERE player_id = %s", (player_id,))
                                 player_info = cursor.fetchone()
                                 if player_info:
                                     player_number, player_name = player_info
@@ -2202,7 +2202,7 @@ class DataEntryWindow(QMainWindow):
                             cursor.execute("""
                                 SELECT contact_id, sequence_number, player_id, contact_type
                                 FROM contacts
-                                WHERE rally_id = ? AND team_id = ?
+                                WHERE rally_id = %s AND team_id = %s
                                 ORDER BY sequence_number DESC
                                 LIMIT 1
                             """, (self.current_rally_id, self.team_us_id))
@@ -2212,7 +2212,7 @@ class DataEntryWindow(QMainWindow):
                                 # Update the outcome to fault
                                 self.db.update_contact_outcome(contact_id, "fault")
                                 # Get player info for status
-                                cursor.execute("SELECT player_number, name FROM players WHERE player_id = ?", (player_id,))
+                                cursor.execute("SELECT player_number, name FROM players WHERE player_id = %s", (player_id,))
                                 player_info = cursor.fetchone()
                                 if player_info:
                                     player_number, player_name = player_info
@@ -2286,7 +2286,7 @@ class DataEntryWindow(QMainWindow):
                         cursor.execute("""
                             SELECT player_number, name
                             FROM players
-                            WHERE player_id = ?
+                            WHERE player_id = %s
                         """, (player_id_or_down,))
                         player_info = cursor.fetchone()
                         if player_info:
@@ -2573,7 +2573,7 @@ class DataEntryWindow(QMainWindow):
                             cursor.execute("""
                                 SELECT contact_id, sequence_number, player_id, contact_type
                                 FROM contacts
-                                WHERE rally_id = ? AND team_id = ?
+                                WHERE rally_id = %s AND team_id = %s
                                 ORDER BY sequence_number DESC
                                 LIMIT 1
                             """, (self.current_rally_id, self.team_us_id))
@@ -2583,7 +2583,7 @@ class DataEntryWindow(QMainWindow):
                                 # Update the outcome to fault
                                 self.db.update_contact_outcome(contact_id, "fault")
                                 # Get player info for status
-                                cursor.execute("SELECT player_number, name FROM players WHERE player_id = ?", (player_id,))
+                                cursor.execute("SELECT player_number, name FROM players WHERE player_id = %s", (player_id,))
                                 player_info = cursor.fetchone()
                                 if player_info:
                                     player_number, player_name = player_info
@@ -2617,7 +2617,7 @@ class DataEntryWindow(QMainWindow):
                         cursor.execute("""
                             SELECT player_number, name
                             FROM players
-                            WHERE player_id = ?
+                            WHERE player_id = %s
                         """, (player_id_or_down,))
                         player_info = cursor.fetchone()
                         if player_info:
@@ -2791,8 +2791,8 @@ class DataEntryWindow(QMainWindow):
                 SELECT p.player_id, p.player_number, p.name, p.jersey
                 FROM active_lineup al
                 INNER JOIN players p ON al.player_id = p.player_id
-                WHERE al.game_id = ? AND al.team_id = ? 
-                AND (p.player_number = ? OR CAST(p.jersey AS TEXT) = ?)
+                WHERE al.game_id = %s AND al.team_id = %s 
+                AND (p.player_number = %s OR CAST(p.jersey AS TEXT) = %s)
             """, (self.game_id, self.team_us_id, player_number_str, player_number_str))
             result = cursor.fetchone()
             if result:
@@ -2847,8 +2847,8 @@ class DataEntryWindow(QMainWindow):
                 SELECT p.player_id, p.player_number, p.name, p.jersey
                 FROM active_lineup al
                 INNER JOIN players p ON al.player_id = p.player_id
-                WHERE al.game_id = ? AND al.team_id = ? 
-                AND (p.player_number = ? OR CAST(p.jersey AS TEXT) = ?)
+                WHERE al.game_id = %s AND al.team_id = %s 
+                AND (p.player_number = %s OR CAST(p.jersey AS TEXT) = %s)
             """, (self.game_id, self.team_us_id, player_number_str, player_number_str))
             result = cursor.fetchone()
             if result:
@@ -3208,7 +3208,7 @@ class DataEntryWindow(QMainWindow):
             if not self.db.conn:
                 self.db.connect()
             cursor = self.db.conn.cursor()
-            cursor.execute("SELECT rating FROM contacts WHERE contact_id = ?", (contact_id,))
+            cursor.execute("SELECT rating FROM contacts WHERE contact_id = %s", (contact_id,))
             rating_result = cursor.fetchone()
             if rating_result and rating_result[0] is not None:
                 contact_event_payload["rating"] = rating_result[0]
@@ -3224,7 +3224,7 @@ class DataEntryWindow(QMainWindow):
                 cursor.execute("""
                     SELECT contact_id, contact_type, team_id
                     FROM contacts
-                    WHERE rally_id = ? AND sequence_number < ?
+                    WHERE rally_id = %s AND sequence_number < %s
                     ORDER BY sequence_number DESC
                     LIMIT 1
                 """, (self.current_rally_id, self.current_sequence))
@@ -3259,9 +3259,9 @@ class DataEntryWindow(QMainWindow):
             # Update status with recorded info
             if self.use_coordinate_mapper:
                 self.use_coordinate_mapper = False
-                self.status_label.setText(f"Contact recorded: #{recorded_player_number or '?'} {contact_type}. Click for next location.")
+                self.status_label.setText(f"Contact recorded: #{recorded_player_number or '%s'} {contact_type}. Click for next location.")
             else:
-                self.status_label.setText(f"Contact recorded: #{recorded_player_number or '?'} {contact_type}. Select player for next contact.")
+                self.status_label.setText(f"Contact recorded: #{recorded_player_number or '%s'} {contact_type}. Select player for next contact.")
             
             self.update_ui_state()
             
@@ -3294,7 +3294,7 @@ class DataEntryWindow(QMainWindow):
         cursor.execute("""
             SELECT contact_id, rally_id, sequence_number, player_id, contact_type, team_id, outcome
             FROM contacts
-            WHERE contact_id = ?
+            WHERE contact_id = %s
         """, (contact_id,))
         contact_row = cursor.fetchone()
         if not contact_row:
@@ -3312,7 +3312,7 @@ class DataEntryWindow(QMainWindow):
         player_name = None
         player_number = None
         if player_id is not None:
-            cursor.execute("SELECT name, player_number FROM players WHERE player_id = ?", (player_id,))
+            cursor.execute("SELECT name, player_number FROM players WHERE player_id = %s", (player_id,))
             player_result = cursor.fetchone()
             if player_result:
                 player_name = player_result[0]
@@ -3324,7 +3324,7 @@ class DataEntryWindow(QMainWindow):
             cursor.execute("""
                 SELECT contact_id, contact_type
                 FROM contacts
-                WHERE rally_id = ? AND sequence_number < ?
+                WHERE rally_id = %s AND sequence_number < %s
                 ORDER BY sequence_number DESC
                 LIMIT 1
             """, (rally_id, sequence_number))
@@ -3342,7 +3342,7 @@ class DataEntryWindow(QMainWindow):
             cursor.execute("""
                 SELECT contact_id, contact_type, outcome
                 FROM contacts
-                WHERE rally_id = ? AND sequence_number < ? AND contact_type = 'serve'
+                WHERE rally_id = %s AND sequence_number < %s AND contact_type = 'serve'
                 ORDER BY sequence_number DESC
                 LIMIT 1
             """, (rally_id, sequence_number))
@@ -3355,7 +3355,7 @@ class DataEntryWindow(QMainWindow):
             cursor.execute("""
                 SELECT contact_id, contact_type, outcome
                 FROM contacts
-                WHERE rally_id = ? AND sequence_number < ? 
+                WHERE rally_id = %s AND sequence_number < %s 
                 AND contact_type IN ('attack', 'freeball', 'block')
                 ORDER BY sequence_number DESC
                 LIMIT 1
@@ -3373,7 +3373,7 @@ class DataEntryWindow(QMainWindow):
         self.logger.debug(f"Deleted contact {contact_id} ({contact_type})")
         
         # Check if rally was ended (has point_winner_id)
-        cursor.execute("SELECT point_winner_id FROM rallies WHERE rally_id = ?", (rally_id,))
+        cursor.execute("SELECT point_winner_id FROM rallies WHERE rally_id = %s", (rally_id,))
         rally_result = cursor.fetchone()
         rally_was_ended = False
         if rally_result and rally_result[0] is not None:
@@ -3388,12 +3388,12 @@ class DataEntryWindow(QMainWindow):
         if sequence_number == 1:
             # This was the first contact (serve) - rally should be deleted
             # Get rally_number before deleting the rally
-            cursor.execute("SELECT rally_number FROM rallies WHERE rally_id = ?", (rally_id,))
+            cursor.execute("SELECT rally_number FROM rallies WHERE rally_id = %s", (rally_id,))
             rally_number_result = cursor.fetchone()
             rally_number = rally_number_result[0] if rally_number_result else None
             
             # Delete the rally from the database (since serve is the only contact)
-            cursor.execute("DELETE FROM rallies WHERE rally_id = ?", (rally_id,))
+            cursor.execute("DELETE FROM rallies WHERE rally_id = %s", (rally_id,))
             self.db.conn.commit()
             self.logger.debug(f"Deleted rally {rally_id} (rally_number={rally_number})")
             
@@ -3407,7 +3407,7 @@ class DataEntryWindow(QMainWindow):
             # the next serve can create a new rally without unique constraint violation
             # Get MAX rally_number from database
             cursor.execute(
-                "SELECT MAX(rally_number) FROM rallies WHERE game_id = ?",
+                "SELECT MAX(rally_number) FROM rallies WHERE game_id = %s",
                 (self.game_id,)
             )
             result = cursor.fetchone()
@@ -3450,7 +3450,7 @@ class DataEntryWindow(QMainWindow):
                 cursor.execute("""
                     SELECT MAX(sequence_number) as last_team_us_seq
                     FROM contacts
-                    WHERE rally_id = ? AND team_id = ?
+                    WHERE rally_id = %s AND team_id = %s
                 """, (self.current_rally_id, self.team_us_id))
                 result = cursor.fetchone()
                 if result and result[0]:
@@ -3458,7 +3458,7 @@ class DataEntryWindow(QMainWindow):
                     cursor.execute("""
                         SELECT COUNT(*) 
                         FROM contacts
-                        WHERE rally_id = ? AND team_id = ? AND sequence_number > ?
+                        WHERE rally_id = %s AND team_id = %s AND sequence_number > %s
                     """, (self.current_rally_id, self.team_them_id, last_team_us_seq))
                     count_result = cursor.fetchone()
                     self.opponent_contact_count = count_result[0] if count_result else 0
@@ -3494,7 +3494,7 @@ class DataEntryWindow(QMainWindow):
             cursor.execute("""
                 SELECT rally_id 
                 FROM rallies 
-                WHERE game_id = ?
+                WHERE game_id = %s
                 ORDER BY rally_id DESC
                 LIMIT 1
             """, (self.game_id,))
@@ -3533,7 +3533,7 @@ class DataEntryWindow(QMainWindow):
         cursor.execute("""
             SELECT id, team_id, event_type, payload, created_at
             FROM events
-            WHERE game_id = ? AND event_type != 'initial_setup'
+            WHERE game_id = %s AND event_type != 'initial_setup'
             ORDER BY created_at DESC, id DESC
             LIMIT 1
         """, (self.game_id,))
@@ -3574,7 +3574,7 @@ class DataEntryWindow(QMainWindow):
             
             # If undo was successful, delete the event record
             if result is not None:
-                cursor.execute("DELETE FROM events WHERE id = ?", (event_id,))
+                cursor.execute("DELETE FROM events WHERE id = %s", (event_id,))
                 self.db.conn.commit()
             
             return result
@@ -3695,12 +3695,12 @@ class DataEntryWindow(QMainWindow):
         out_name = None
         in_name = None
         if out_player_id:
-            cursor.execute("SELECT name, player_number FROM players WHERE player_id = ?", (out_player_id,))
+            cursor.execute("SELECT name, player_number FROM players WHERE player_id = %s", (out_player_id,))
             out_result = cursor.fetchone()
             if out_result:
                 out_name = out_result[0] or f"#{out_result[1]}"
         if in_player_id:
-            cursor.execute("SELECT name, player_number FROM players WHERE player_id = ?", (in_player_id,))
+            cursor.execute("SELECT name, player_number FROM players WHERE player_id = %s", (in_player_id,))
             in_result = cursor.fetchone()
             if in_result:
                 in_name = in_result[0] or f"#{in_result[1]}"
@@ -4004,7 +4004,7 @@ class DataEntryWindow(QMainWindow):
             cursor.execute("""
                 SELECT rally_id 
                 FROM rallies 
-                WHERE game_id = ? AND point_winner_id IS NULL
+                WHERE game_id = %s AND point_winner_id IS NULL
                 ORDER BY rally_id DESC
                 LIMIT 1
             """, (self.game_id,))
@@ -4017,7 +4017,7 @@ class DataEntryWindow(QMainWindow):
                 cursor.execute("""
                     SELECT rally_id 
                     FROM rallies 
-                    WHERE game_id = ?
+                    WHERE game_id = %s
                     ORDER BY rally_id DESC
                     LIMIT 1
                 """, (self.game_id,))
@@ -4097,7 +4097,7 @@ class DataEntryWindow(QMainWindow):
                 cursor.execute("""
                     SELECT contact_type, team_id 
                     FROM contacts 
-                    WHERE rally_id = ? 
+                    WHERE rally_id = %s 
                     ORDER BY sequence_number ASC 
                     LIMIT 1
                 """, (rally_id_to_update,))
@@ -4192,7 +4192,7 @@ class DataEntryWindow(QMainWindow):
             cursor.execute("""
                 SELECT rally_id, serving_team_id, rally_number
                 FROM rallies 
-                WHERE game_id = ? AND point_winner_id = ?
+                WHERE game_id = %s AND point_winner_id = %s
                 ORDER BY rally_number DESC
                 LIMIT 1
             """, (self.game_id, point_winner_id))
@@ -4203,7 +4203,7 @@ class DataEntryWindow(QMainWindow):
                 cursor.execute("""
                     SELECT contact_type, team_id 
                     FROM contacts 
-                    WHERE rally_id = ? AND contact_type = 'serve'
+                    WHERE rally_id = %s AND contact_type = 'serve'
                     ORDER BY sequence_number ASC 
                     LIMIT 1
                 """, (completed_rally_id,))
@@ -4221,7 +4221,7 @@ class DataEntryWindow(QMainWindow):
                         cursor.execute("""
                             SELECT rally_id, serving_team_id
                             FROM rallies 
-                            WHERE game_id = ? AND rally_number = ?
+                            WHERE game_id = %s AND rally_number = %s
                         """, (self.game_id, rally_number - 1))
                         prev_rally = cursor.fetchone()
                         if prev_rally:
@@ -4230,7 +4230,7 @@ class DataEntryWindow(QMainWindow):
                             cursor.execute("""
                                 SELECT contact_type, team_id 
                                 FROM contacts 
-                                WHERE rally_id = ? AND contact_type = 'serve'
+                                WHERE rally_id = %s AND contact_type = 'serve'
                                 ORDER BY sequence_number ASC 
                                 LIMIT 1
                             """, (prev_rally_id,))
@@ -4281,7 +4281,7 @@ class DataEntryWindow(QMainWindow):
             cursor.execute("""
                 SELECT rally_id, rally_end_time
                 FROM rallies 
-                WHERE game_id = ? AND point_winner_id = ?
+                WHERE game_id = %s AND point_winner_id = %s
                 ORDER BY rally_id DESC
                 LIMIT 1
             """, (self.game_id, point_winner_id))
@@ -4357,7 +4357,7 @@ class DataEntryWindow(QMainWindow):
         cursor.execute("""
             SELECT position_number 
             FROM active_lineup 
-            WHERE game_id = ? AND team_id = ? AND player_id = ? AND position_number = 4
+            WHERE game_id = %s AND team_id = %s AND player_id = %s AND position_number = 4
         """, (self.game_id, self.team_us_id, libero_id))
         
         result = cursor.fetchone()
@@ -4380,7 +4380,7 @@ class DataEntryWindow(QMainWindow):
             cursor.execute("""
                 SELECT replaced_player_id 
                 FROM libero_actions 
-                WHERE game_id = ? AND team_id = ? AND replaced_position = ? AND action = 'enter'
+                WHERE game_id = %s AND team_id = %s AND replaced_position = %s AND action = 'enter'
                 ORDER BY created_at DESC
                 LIMIT 1
             """, (self.game_id, self.team_us_id, 5))
@@ -4393,7 +4393,7 @@ class DataEntryWindow(QMainWindow):
                 cursor.execute("""
                     SELECT replaced_player_id 
                     FROM libero_actions 
-                    WHERE game_id = ? AND team_id = ? AND replaced_position = ? AND action = 'enter'
+                    WHERE game_id = %s AND team_id = %s AND replaced_position = %s AND action = 'enter'
                     ORDER BY created_at DESC
                     LIMIT 1
                 """, (self.game_id, self.team_us_id, position))
@@ -4406,7 +4406,7 @@ class DataEntryWindow(QMainWindow):
                     cursor.execute("""
                         SELECT replaced_player_id 
                         FROM libero_actions 
-                        WHERE game_id = ? AND team_id = ? AND action = 'enter'
+                        WHERE game_id = %s AND team_id = %s AND action = 'enter'
                         ORDER BY created_at DESC
                         LIMIT 1
                     """, (self.game_id, self.team_us_id))
@@ -4431,7 +4431,7 @@ class DataEntryWindow(QMainWindow):
         cursor.execute("""
             SELECT COALESCE(p.jersey, p.player_number) as player_number, p.name
             FROM players p
-            WHERE p.player_id = ?
+            WHERE p.player_id = %s
         """, (replaced_player_id,))
         player_info = cursor.fetchone()
         player_number = player_info[0] if player_info else "Unknown"
@@ -4493,7 +4493,7 @@ class DataEntryWindow(QMainWindow):
                        al.is_server
                 FROM active_lineup al
                 INNER JOIN players p ON al.player_id = p.player_id
-                WHERE al.game_id = ? AND al.team_id = ?
+                WHERE al.game_id = %s AND al.team_id = %s
                 ORDER BY al.position_number
             """, (self.game_id, self.team_us_id))
             
@@ -4630,7 +4630,7 @@ class DataEntryWindow(QMainWindow):
                        al.role_code
                 FROM active_lineup al
                 INNER JOIN players p ON al.player_id = p.player_id
-                WHERE al.team_id = ?
+                WHERE al.team_id = %s
                 ORDER BY al.position_number
             """, (self.team_us_id,))
             
@@ -4654,7 +4654,7 @@ class DataEntryWindow(QMainWindow):
                         name_display = player_name if player_name else "Unknown"
                         # Get role code for bench player
                         cursor.execute("""
-                            SELECT role_code FROM players WHERE player_id = ?
+                            SELECT role_code FROM players WHERE player_id = %s
                         """, (player_id,))
                         role_result = cursor.fetchone()
                         role_code = role_result[0] if role_result and role_result[0] else "N/A"
@@ -4692,7 +4692,7 @@ class DataEntryWindow(QMainWindow):
                    p.name
             FROM players p
             INNER JOIN game_players gp ON p.player_id = gp.player_id
-            WHERE gp.game_id = ? AND gp.team_id = ?
+            WHERE gp.game_id = %s AND gp.team_id = %s
             ORDER BY CASE 
                 WHEN CAST(COALESCE(p.jersey, p.player_number) AS INTEGER) IS NOT NULL 
                 THEN CAST(COALESCE(p.jersey, p.player_number) AS INTEGER)
@@ -4707,7 +4707,7 @@ class DataEntryWindow(QMainWindow):
         cursor.execute("""
             SELECT player_id
             FROM active_lineup
-            WHERE game_id = ? AND team_id = ?
+            WHERE game_id = %s AND team_id = %s
         """, (self.game_id, team_id))
         
         active_player_ids = {row[0] for row in cursor.fetchall()}
@@ -4741,7 +4741,7 @@ class DataEntryWindow(QMainWindow):
                    al.position_number
             FROM active_lineup al
             INNER JOIN players p ON al.player_id = p.player_id
-            WHERE al.game_id = ? AND al.team_id = ?
+            WHERE al.game_id = %s AND al.team_id = %s
             ORDER BY al.position_number
         """, (self.game_id, team_id))
         
@@ -4788,10 +4788,10 @@ class DataEntryWindow(QMainWindow):
             self.db.connect()
         cursor = self.db.conn.cursor()
         active_player_ids = [p[0] for p in active_players]
-        placeholders = ','.join('?' * len(active_player_ids))
+        placeholders = ','.join('%s' * len(active_player_ids))
         
         # Check if this is team_us
-        cursor.execute("SELECT team_us_id FROM games WHERE game_id = ?", (self.game_id,))
+        cursor.execute("SELECT team_us_id FROM games WHERE game_id = %s", (self.game_id,))
         game_result = cursor.fetchone()
         is_team_us = game_result and game_result[0] == self.team_us_id
         
@@ -4803,7 +4803,7 @@ class DataEntryWindow(QMainWindow):
                        COALESCE(gp.game_role_code, '') as role_code
                 FROM players p
                 INNER JOIN game_players gp ON p.player_id = gp.player_id
-                WHERE gp.game_id = ? AND gp.team_id = ? AND p.player_id IN ({placeholders})
+                WHERE gp.game_id = %s AND gp.team_id = %s AND p.player_id IN ({placeholders})
             """, (self.game_id, self.team_us_id, *active_player_ids))
         else:
             # Use role_code from players for team_them
@@ -4817,7 +4817,7 @@ class DataEntryWindow(QMainWindow):
         # Get jersey numbers and role codes for bench players
         bench_player_ids = [p[0] for p in bench_players]
         if bench_player_ids:
-            placeholders = ','.join('?' * len(bench_player_ids))
+            placeholders = ','.join('%s' * len(bench_player_ids))
             if is_team_us:
                 # Use game_role_code from game_players for team_us
                 cursor.execute(f"""
@@ -4826,7 +4826,7 @@ class DataEntryWindow(QMainWindow):
                            COALESCE(gp.game_role_code, '') as role_code
                     FROM players p
                     INNER JOIN game_players gp ON p.player_id = gp.player_id
-                    WHERE gp.game_id = ? AND gp.team_id = ? AND p.player_id IN ({placeholders})
+                    WHERE gp.game_id = %s AND gp.team_id = %s AND p.player_id IN ({placeholders})
                 """, (self.game_id, self.team_us_id, *bench_player_ids))
             else:
                 # Use role_code from players for team_them
@@ -5069,7 +5069,7 @@ class DataEntryWindow(QMainWindow):
                 cursor.execute("""
                     SELECT COALESCE(p.jersey, p.player_number) as player_number, p.name
                     FROM players p
-                    WHERE p.player_id = ?
+                    WHERE p.player_id = %s
                 """, (out_player_id,))
                 out_player_info = cursor.fetchone()
                 out_player_display = ""
@@ -5083,7 +5083,7 @@ class DataEntryWindow(QMainWindow):
                 cursor.execute("""
                     SELECT COALESCE(p.jersey, p.player_number) as player_number, p.name
                     FROM players p
-                    WHERE p.player_id = ?
+                    WHERE p.player_id = %s
                 """, (in_player_id,))
                 in_player_info = cursor.fetchone()
                 in_player_display = ""
@@ -5152,7 +5152,7 @@ class DataEntryWindow(QMainWindow):
         cursor.execute("""
             SELECT player_id 
             FROM players 
-            WHERE team_id = ? AND role_code = 'Lib'
+            WHERE team_id = %s AND role_code = 'Lib'
             LIMIT 1
         """, (team_id,))
         
@@ -5178,7 +5178,7 @@ class DataEntryWindow(QMainWindow):
         cursor.execute("""
             SELECT position_number 
             FROM active_lineup 
-            WHERE game_id = ? AND team_id = ? AND player_id = ?
+            WHERE game_id = %s AND team_id = %s AND player_id = %s
         """, (self.game_id, self.team_us_id, libero_id))
         if cursor.fetchone():
             QMessageBox.warning(self, "Libero Already On Court", "The libero is already on the court.")
@@ -5195,7 +5195,7 @@ class DataEntryWindow(QMainWindow):
                        p.name
                 FROM active_lineup al
                 INNER JOIN players p ON al.player_id = p.player_id
-                WHERE al.game_id = ? AND al.team_id = ? AND al.position_number = ?
+                WHERE al.game_id = %s AND al.team_id = %s AND al.position_number = %s
             """, (self.game_id, self.team_us_id, pos))
             result = cursor.fetchone()
             if result:
@@ -5321,7 +5321,7 @@ class DataEntryWindow(QMainWindow):
         cursor.execute("""
             SELECT position_number 
             FROM active_lineup 
-            WHERE game_id = ? AND team_id = ? AND player_id = ?
+            WHERE game_id = %s AND team_id = %s AND player_id = %s
         """, (self.game_id, self.team_us_id, libero_id))
         
         libero_positions = cursor.fetchall()
@@ -5333,7 +5333,7 @@ class DataEntryWindow(QMainWindow):
         cursor.execute("""
             SELECT replaced_player_id, replaced_position
             FROM libero_actions 
-            WHERE game_id = ? AND team_id = ? AND action = 'enter'
+            WHERE game_id = %s AND team_id = %s AND action = 'enter'
             ORDER BY created_at DESC
             LIMIT 1
         """, (self.game_id, self.team_us_id))
@@ -5366,7 +5366,7 @@ class DataEntryWindow(QMainWindow):
         cursor.execute("""
             SELECT COALESCE(p.jersey, p.player_number) as player_number, p.name
             FROM players p
-            WHERE p.player_id = ?
+            WHERE p.player_id = %s
         """, (replaced_player_id,))
         player_info = cursor.fetchone()
         if not player_info:
@@ -5494,10 +5494,10 @@ class DataEntryWindow(QMainWindow):
         
         # Get team names
         cursor = self.db.conn.cursor()
-        cursor.execute("SELECT name FROM teams WHERE team_id = ?", (self.team_us_id,))
+        cursor.execute("SELECT name FROM teams WHERE team_id = %s", (self.team_us_id,))
         result = cursor.fetchone()
         team_us_name = result[0] if result else "Us"
-        cursor.execute("SELECT name FROM teams WHERE team_id = ?", (self.team_them_id,))
+        cursor.execute("SELECT name FROM teams WHERE team_id = %s", (self.team_them_id,))
         result = cursor.fetchone()
         team_them_name = result[0] if result else "Them"
         
@@ -5544,7 +5544,7 @@ class DataEntryWindow(QMainWindow):
                    p.name
             FROM active_lineup al
             INNER JOIN players p ON al.player_id = p.player_id
-            WHERE al.game_id = ? AND al.team_id = ?
+            WHERE al.game_id = %s AND al.team_id = %s
             ORDER BY al.position_number
         """, (self.game_id, self.team_us_id))
         active_players = cursor.fetchall()
@@ -5560,7 +5560,7 @@ class DataEntryWindow(QMainWindow):
             self.db.connect()
         cursor = self.db.conn.cursor()
         player_ids = [p[0] for p in active_players]
-        placeholders = ','.join('?' * len(player_ids))
+        placeholders = ','.join('%s' * len(player_ids))
         cursor.execute(f"""
             SELECT player_id, COALESCE(jersey, player_number) as jersey
             FROM players
@@ -5714,7 +5714,7 @@ class DataEntryWindow(QMainWindow):
             cursor.execute("""
                 SELECT contact_type, team_id
                 FROM contacts 
-                WHERE rally_id = ? AND contact_type != 'down'
+                WHERE rally_id = %s AND contact_type != 'down'
                 ORDER BY sequence_number DESC 
                 LIMIT 1
             """, (self.current_rally_id,))
@@ -5827,7 +5827,7 @@ class DataEntryWindow(QMainWindow):
         # Confirm with user
         reply = QMessageBox.question(
             self, "Confirm Reset",
-            "Are you sure you want to reset this game?\n\n"
+            "Are you sure you want to reset this game%s\n\n"
             "This will delete ALL rallies and contacts for this game.\n"
             "This action cannot be undone.",
             QMessageBox.Yes | QMessageBox.No,
@@ -5845,7 +5845,7 @@ class DataEntryWindow(QMainWindow):
                 cursor = self.db.conn.cursor()
                 cursor.execute("""
                     DELETE FROM events 
-                    WHERE game_id = ? AND event_type != 'initial_setup'
+                    WHERE game_id = %s AND event_type != 'initial_setup'
                 """, (self.game_id,))
                 events_deleted = cursor.rowcount
                 self.db.conn.commit()
@@ -5958,3 +5958,4 @@ if __name__ == "__main__":
     else:
         print("Failed to load UI file")
         sys.exit(1)
+

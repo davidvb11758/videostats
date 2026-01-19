@@ -4,7 +4,7 @@ Handles lineup initialization, rotations, substitutions, libero actions, and rol
 """
 
 import json
-import sqlite3
+import psycopg2.extras
 from datetime import datetime, timezone
 from typing import List, Tuple, Optional, Dict
 from database import VideoStatsDB
@@ -36,7 +36,7 @@ class LineupManager:
             raise ValueError("game_id is required for logging events")
         cursor = self.db.conn.cursor()
         cursor.execute(
-            "INSERT INTO events (game_id, team_id, event_type, payload) VALUES (?, ?, ?, ?)",
+            "INSERT INTO events (game_id, team_id, event_type, payload) VALUES (%s, %s, %s, %s)",
             (game_id, team_id, event_type, json.dumps(payload))
         )
         self.db.conn.commit()
@@ -47,7 +47,7 @@ class LineupManager:
         cursor.execute("""
             SELECT position_number, player_id, role_code, is_server, placed_at
             FROM active_lineup
-            WHERE game_id = ? AND team_id = ?
+            WHERE game_id = %s AND team_id = %s
         """, (game_id, team_id))
         
         lineup = {}
@@ -83,7 +83,7 @@ class LineupManager:
         cursor.execute("""
             SELECT rotation_order, rotation_index, serving, term_of_service_start
             FROM rotation_state
-            WHERE game_id = ? AND team_id = ?
+            WHERE game_id = %s AND team_id = %s
         """, (game_id, team_id))
         
         row = cursor.fetchone()
@@ -138,21 +138,21 @@ class LineupManager:
         if game_id is not None and team_id is not None:
             # Check if this team_id is team_us for this game
             cursor.execute("""
-                SELECT team_us_id FROM games WHERE game_id = ?
+                SELECT team_us_id FROM games WHERE game_id = %s
             """, (game_id,))
             result = cursor.fetchone()
             if result and result[0] == team_id:
                 # This is team_us - use game_role_code from game_players
                 cursor.execute("""
                     SELECT game_role_code FROM game_players
-                    WHERE game_id = ? AND team_id = ? AND player_id = ?
+                    WHERE game_id = %s AND team_id = %s AND player_id = %s
                 """, (game_id, team_id, player_id))
                 row = cursor.fetchone()
                 if row and row[0]:
                     return row[0]
         
         # Fallback to role_code from players table (for team_them or when game_id not provided)
-        cursor.execute("SELECT role_code FROM players WHERE player_id = ?", (player_id,))
+        cursor.execute("SELECT role_code FROM players WHERE player_id = %s", (player_id,))
         row = cursor.fetchone()
         return row[0] if row and row[0] else None
     
@@ -160,7 +160,7 @@ class LineupManager:
         """Update player's is_active status."""
         cursor = self.db.conn.cursor()
         cursor.execute(
-            "UPDATE players SET is_active = ? WHERE player_id = ?",
+            "UPDATE players SET is_active = %s WHERE player_id = %s",
             (1 if is_active else 0, player_id)
         )
         self.db.conn.commit()
@@ -208,7 +208,7 @@ class LineupManager:
                 cursor.execute("""
                     UPDATE active_lineup
                     SET role_code = 'RS'
-                    WHERE game_id = ? AND team_id = ? AND position_number = ?
+                    WHERE game_id = %s AND team_id = %s AND position_number = %s
                 """, (game_id, team_id, pos))
         
         self.db.conn.commit()
@@ -243,7 +243,7 @@ class LineupManager:
         cursor = self.db.conn.cursor()
         try:
             # Clear existing lineup for this game
-            cursor.execute("DELETE FROM active_lineup WHERE game_id = ? AND team_id = ?", (game_id, team_id))
+            cursor.execute("DELETE FROM active_lineup WHERE game_id = %s AND team_id = %s", (game_id, team_id))
             
             # Insert new lineup
             now = datetime.now(timezone.utc)
@@ -259,7 +259,7 @@ class LineupManager:
                 
                 cursor.execute("""
                     INSERT INTO active_lineup (game_id, team_id, position_number, player_id, role_code, is_server, placed_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
                 """, (game_id, team_id, pos, player_id, role, 1 if is_server else 0, now))
                 
                 # Mark player as active
@@ -275,7 +275,7 @@ class LineupManager:
             cursor.execute("""
                 INSERT OR REPLACE INTO rotation_state 
                 (game_id, team_id, rotation_order, rotation_index, serving, term_of_service_start)
-                VALUES (?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s)
             """, (game_id, team_id, rotation_order_json, 0, 1 if serving else 0, term_start))
             
             # Run role adjustment check
@@ -331,7 +331,7 @@ class LineupManager:
             
             # Update active_lineup
             cursor = self.db.conn.cursor()
-            cursor.execute("DELETE FROM active_lineup WHERE game_id = ? AND team_id = ?", (game_id, team_id))
+            cursor.execute("DELETE FROM active_lineup WHERE game_id = %s AND team_id = %s", (game_id, team_id))
             
             now = datetime.now(timezone.utc)
             for new_pos, entry in new_lineup.items():
@@ -339,15 +339,15 @@ class LineupManager:
                 cursor.execute("""
                     INSERT INTO active_lineup 
                     (game_id, team_id, position_number, player_id, role_code, is_server, placed_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
                 """, (game_id, team_id, new_pos, entry.player_id, entry.role_code, 1 if is_server else 0, now))
             
             # Update rotation_index
             new_rotation_index = (rotation_state.rotation_index + 1) % 6
             cursor.execute("""
                 UPDATE rotation_state
-                SET rotation_index = ?
-                WHERE game_id = ? AND team_id = ?
+                SET rotation_index = %s
+                WHERE game_id = %s AND team_id = %s
             """, (new_rotation_index, game_id, team_id))
             
             # Run role adjustment check
@@ -397,14 +397,14 @@ class LineupManager:
         cursor.execute("""
             UPDATE active_lineup
             SET is_server = 1
-            WHERE game_id = ? AND team_id = ? AND position_number = 1
+            WHERE game_id = %s AND team_id = %s AND position_number = 1
         """, (game_id, team_id))
         
         # Clear is_server for other positions
         cursor.execute("""
             UPDATE active_lineup
             SET is_server = 0
-            WHERE game_id = ? AND team_id = ? AND position_number != 1
+            WHERE game_id = %s AND team_id = %s AND position_number != 1
         """, (game_id, team_id))
         
         # Update rotation_state if serving state changed
@@ -412,8 +412,8 @@ class LineupManager:
             now = datetime.now(timezone.utc)
             cursor.execute("""
                 UPDATE rotation_state
-                SET serving = 1, term_of_service_start = ?
-                WHERE game_id = ? AND team_id = ?
+                SET serving = 1, term_of_service_start = %s
+                WHERE game_id = %s AND team_id = %s
             """, (now, game_id, team_id))
         
         # Log server change event
@@ -449,27 +449,27 @@ class LineupManager:
         cursor = self.db.conn.cursor()
         
         # Validate in_player exists
-        cursor.execute("SELECT player_id FROM players WHERE player_id = ?", (in_player_id,))
+        cursor.execute("SELECT player_id FROM players WHERE player_id = %s", (in_player_id,))
         if not cursor.fetchone():
             raise ValueError(f"Player {in_player_id} not found")
         
         # Validate in_player is on bench (not in active_lineup)
         cursor.execute("""
             SELECT player_id FROM active_lineup
-            WHERE game_id = ? AND team_id = ? AND player_id = ?
+            WHERE game_id = %s AND team_id = %s AND player_id = %s
         """, (game_id, team_id, in_player_id))
         if cursor.fetchone():
             raise ValueError(f"Player {in_player_id} is already on court")
         
         # Validate out_player exists
-        cursor.execute("SELECT player_id FROM players WHERE player_id = ?", (out_player_id,))
+        cursor.execute("SELECT player_id FROM players WHERE player_id = %s", (out_player_id,))
         if not cursor.fetchone():
             raise ValueError(f"Player {out_player_id} not found")
         
         # Validate out_player is on court (in active_lineup)
         cursor.execute("""
             SELECT player_id FROM active_lineup
-            WHERE game_id = ? AND team_id = ? AND player_id = ?
+            WHERE game_id = %s AND team_id = %s AND player_id = %s
         """, (game_id, team_id, out_player_id))
         if not cursor.fetchone():
             raise ValueError(f"Player {out_player_id} is not on court")
@@ -477,7 +477,7 @@ class LineupManager:
         # Find out_player's current position
         cursor.execute("""
             SELECT position_number FROM active_lineup
-            WHERE game_id = ? AND team_id = ? AND player_id = ?
+            WHERE game_id = %s AND team_id = %s AND player_id = %s
         """, (game_id, team_id, out_player_id))
         position_row = cursor.fetchone()
         if not position_row:
@@ -505,8 +505,8 @@ class LineupManager:
             in_role_normalized = self._normalize_role_code(in_role) if in_role else 'OH'
             cursor.execute("""
                 UPDATE active_lineup
-                SET player_id = ?, role_code = ?
-                WHERE game_id = ? AND team_id = ? AND position_number = ?
+                SET player_id = %s, role_code = %s
+                WHERE game_id = %s AND team_id = %s AND position_number = %s
             """, (in_player_id, in_role_normalized, game_id, team_id, target_position))
             
             # Update player active status
@@ -517,7 +517,7 @@ class LineupManager:
             cursor.execute("""
                 INSERT INTO substitutions 
                 (game_id, team_id, out_player_id, in_player_id, out_position, in_position, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
             """, (game_id, team_id, out_player_id, in_player_id, target_position, target_position, datetime.now(timezone.utc)))
             substitution_id = cursor.lastrowid
             
@@ -580,7 +580,7 @@ class LineupManager:
                 # Validate replaced player is on court at this position
                 cursor.execute("""
                     SELECT player_id FROM active_lineup
-                    WHERE game_id = ? AND team_id = ? AND position_number = ?
+                    WHERE game_id = %s AND team_id = %s AND position_number = %s
                 """, (game_id, team_id, replaced_position))
                 pos_row = cursor.fetchone()
                 if not pos_row or pos_row[0] != replaced_player_id:
@@ -589,8 +589,8 @@ class LineupManager:
                 # Replace in active_lineup
                 cursor.execute("""
                     UPDATE active_lineup
-                    SET player_id = ?, role_code = 'Lib'
-                    WHERE game_id = ? AND team_id = ? AND position_number = ?
+                    SET player_id = %s, role_code = 'Lib'
+                    WHERE game_id = %s AND team_id = %s AND position_number = %s
                 """, (libero_id, game_id, team_id, replaced_position))
                 
                 # Mark players
@@ -601,7 +601,7 @@ class LineupManager:
                 # Validate libero is at this position
                 cursor.execute("""
                     SELECT player_id FROM active_lineup
-                    WHERE game_id = ? AND team_id = ? AND position_number = ?
+                    WHERE game_id = %s AND team_id = %s AND position_number = %s
                 """, (game_id, team_id, replaced_position))
                 pos_row = cursor.fetchone()
                 if not pos_row or pos_row[0] != libero_id:
@@ -615,8 +615,8 @@ class LineupManager:
                 
                 cursor.execute("""
                     UPDATE active_lineup
-                    SET player_id = ?, role_code = ?
-                    WHERE game_id = ? AND team_id = ? AND position_number = ?
+                    SET player_id = %s, role_code = %s
+                    WHERE game_id = %s AND team_id = %s AND position_number = %s
                 """, (replaced_player_id, original_role_normalized, game_id, team_id, replaced_position))
                 
                 # Mark players
@@ -627,7 +627,7 @@ class LineupManager:
             cursor.execute("""
                 INSERT INTO libero_actions
                 (game_id, team_id, libero_id, replaced_player_id, replaced_position, action, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
             """, (game_id, team_id, libero_id, replaced_player_id, replaced_position, action, datetime.now(timezone.utc)))
             libero_action_id = cursor.lastrowid
             
@@ -662,7 +662,7 @@ class LineupManager:
         result = {}
         for pos, entry in lineup.items():
             cursor.execute("""
-                SELECT name, jersey, player_number FROM players WHERE player_id = ?
+                SELECT name, jersey, player_number FROM players WHERE player_id = %s
             """, (entry.player_id,))
             player_row = cursor.fetchone()
             
@@ -710,7 +710,7 @@ class LineupManager:
         cursor.execute("""
             SELECT payload, created_at
             FROM events
-            WHERE game_id = ? AND team_id = ? AND event_type = 'initial_setup'
+            WHERE game_id = %s AND team_id = %s AND event_type = 'initial_setup'
             ORDER BY created_at ASC
             LIMIT 1
         """, (game_id, team_id))
@@ -739,16 +739,16 @@ class LineupManager:
             # Get current active lineup players for this game before clearing
             cursor.execute("""
                 SELECT player_id FROM active_lineup 
-                WHERE game_id = ? AND team_id = ?
+                WHERE game_id = %s AND team_id = %s
             """, (game_id, team_id))
             current_active_players = [row[0] for row in cursor.fetchall()]
             
             # Clear current active lineup for this game only
-            cursor.execute("DELETE FROM active_lineup WHERE game_id = ? AND team_id = ?", (game_id, team_id))
+            cursor.execute("DELETE FROM active_lineup WHERE game_id = %s AND team_id = %s", (game_id, team_id))
             
             # Mark only players who were active in THIS game as inactive
             if current_active_players:
-                placeholders = ','.join('?' * len(current_active_players))
+                placeholders = ','.join('%s' * len(current_active_players))
                 cursor.execute(f"""
                     UPDATE players 
                     SET is_active = 0 
@@ -768,7 +768,7 @@ class LineupManager:
                 
                 cursor.execute("""
                     INSERT INTO active_lineup (game_id, team_id, position_number, player_id, role_code, is_server, placed_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
                 """, (game_id, team_id, int(pos), player_id, role_code, 1 if is_server else 0, now))
                 
                 # Mark player as active
@@ -783,14 +783,14 @@ class LineupManager:
             cursor.execute("""
                 INSERT OR REPLACE INTO rotation_state 
                 (game_id, team_id, rotation_order, rotation_index, serving, term_of_service_start)
-                VALUES (?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s)
             """, (game_id, team_id, rotation_order_json, 0, 1 if serving else 0, term_start))
             
             # Delete all substitutions for this game
-            cursor.execute("DELETE FROM substitutions WHERE game_id = ?", (game_id,))
+            cursor.execute("DELETE FROM substitutions WHERE game_id = %s", (game_id,))
             
             # Delete all libero actions for this game
-            cursor.execute("DELETE FROM libero_actions WHERE game_id = ?", (game_id,))
+            cursor.execute("DELETE FROM libero_actions WHERE game_id = %s", (game_id,))
             
             # Run role adjustment check
             self.role_adjustment_check(game_id, team_id)
@@ -813,13 +813,13 @@ class LineupManager:
         cursor = self.db.conn.cursor()
         
         # Clear current active lineup for this game/team
-        cursor.execute("DELETE FROM active_lineup WHERE game_id = ? AND team_id = ?", (game_id, team_id))
+        cursor.execute("DELETE FROM active_lineup WHERE game_id = %s AND team_id = %s", (game_id, team_id))
         
         # Mark all players from this team as inactive first
         cursor.execute("""
             UPDATE players 
             SET is_active = 0 
-            WHERE team_id = ?
+            WHERE team_id = %s
         """, (team_id,))
         
         # Restore lineup from snapshot
@@ -832,7 +832,7 @@ class LineupManager:
             
             cursor.execute("""
                 INSERT INTO active_lineup (game_id, team_id, position_number, player_id, role_code, is_server, placed_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
             """, (game_id, team_id, pos, player_id, role_code, 1 if is_server else 0, now))
             
             # Mark player as active
@@ -865,7 +865,7 @@ class LineupManager:
         cursor.execute("""
             INSERT OR REPLACE INTO rotation_state 
             (game_id, team_id, rotation_order, rotation_index, serving, term_of_service_start)
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s)
         """, (game_id, team_id, rotation_order_json, rotation_index, 1 if serving else 0, term_start))
     
     def _delete_substitution(self, substitution_id: int):
@@ -875,7 +875,7 @@ class LineupManager:
             substitution_id: Substitution ID to delete
         """
         cursor = self.db.conn.cursor()
-        cursor.execute("DELETE FROM substitutions WHERE id = ?", (substitution_id,))
+        cursor.execute("DELETE FROM substitutions WHERE id = %s", (substitution_id,))
         self.db.conn.commit()
     
     def _delete_libero_action(self, libero_action_id: int):
@@ -885,6 +885,8 @@ class LineupManager:
             libero_action_id: Libero action ID to delete
         """
         cursor = self.db.conn.cursor()
-        cursor.execute("DELETE FROM libero_actions WHERE id = ?", (libero_action_id,))
+        cursor.execute("DELETE FROM libero_actions WHERE id = %s", (libero_action_id,))
         self.db.conn.commit()
+
+
 

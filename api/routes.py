@@ -621,7 +621,7 @@ def get_game_players(game_id):
         cursor.execute("""
             SELECT team_us_id, team_them_id
             FROM games
-            WHERE game_id = ?
+            WHERE game_id = %s
         """, (game_id,))
         
         result = cursor.fetchone()
@@ -657,3 +657,4 @@ def get_game_players(game_id):
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+

@@ -54,20 +54,20 @@ class CollectionService:
             if collection.collection_id:
                 cursor.execute("""
                     UPDATE clip_collections
-                    SET name = ?, description = ?
-                    WHERE collection_id = ?
+                    SET name = %s, description = %s
+                    WHERE collection_id = %s
                 """, (collection.name, collection.description, collection.collection_id))
                 collection_id = collection.collection_id
                 
                 # Delete existing clips
                 cursor.execute("""
                     DELETE FROM collection_clips
-                    WHERE collection_id = ?
+                    WHERE collection_id = %s
                 """, (collection_id,))
             else:
                 cursor.execute("""
                     INSERT INTO clip_collections (name, description, created_at)
-                    VALUES (?, ?, ?)
+                    VALUES (%s, %s, %s)
                 """, (collection.name, collection.description, collection.created_at))
                 collection_id = cursor.lastrowid
             
@@ -87,13 +87,13 @@ class CollectionService:
                 if has_is_selected:
                     cursor.execute("""
                         INSERT INTO collection_clips (collection_id, contact_id, game_id, order_index, is_selected)
-                        VALUES (?, ?, ?, ?, ?)
+                        VALUES (%s, %s, %s, %s, %s)
                     """, (collection_id, clip.contact_id, clip.game_id, order_index, 1 if is_selected else 0))
                 else:
                     # Fallback if column doesn't exist yet
                     cursor.execute("""
                         INSERT INTO collection_clips (collection_id, contact_id, game_id, order_index)
-                        VALUES (?, ?, ?, ?)
+                        VALUES (%s, %s, %s, %s)
                     """, (collection_id, clip.contact_id, clip.game_id, order_index))
             
             self.db.conn.commit()
@@ -122,7 +122,7 @@ class CollectionService:
         cursor.execute("""
             SELECT collection_id, name, description, created_at
             FROM clip_collections
-            WHERE collection_id = ?
+            WHERE collection_id = %s
         """, (collection_id,))
         result = cursor.fetchone()
         
@@ -162,7 +162,7 @@ class CollectionService:
                     LEFT JOIN players p ON c.player_id = p.player_id
                     INNER JOIN games g ON r.game_id = g.game_id
                     INNER JOIN teams t2 ON g.team_them_id = t2.team_id
-                    WHERE cc.collection_id = ?
+                    WHERE cc.collection_id = %s
                     ORDER BY cc.order_index
                 """, (collection_id,))
             else:
@@ -179,7 +179,7 @@ class CollectionService:
                     LEFT JOIN players p ON c.player_id = p.player_id
                     INNER JOIN games g ON r.game_id = g.game_id
                     INNER JOIN teams t2 ON g.team_them_id = t2.team_id
-                    WHERE cc.collection_id = ?
+                    WHERE cc.collection_id = %s
                     ORDER BY cc.order_index
                 """, (collection_id,))
             
@@ -302,7 +302,7 @@ class CollectionService:
             # Clips will be deleted automatically due to CASCADE
             cursor.execute("""
                 DELETE FROM clip_collections
-                WHERE collection_id = ?
+                WHERE collection_id = %s
             """, (collection_id,))
             self.db.conn.commit()
             return cursor.rowcount > 0
@@ -310,3 +310,5 @@ class CollectionService:
             print(f"Error deleting collection: {e}")
             self.db.conn.rollback()
             return False
+
+
