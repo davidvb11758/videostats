@@ -12,40 +12,62 @@ from typing import Optional
 from logging_config import get_logger
 import os
 
+# Import query classes
+from dbstuff.queries import (
+    TeamQueries, PlayerQueries, GameQueries, RallyQueries,
+    ContactQueries, LineupQueries, RotationQueries, 
+    SubstitutionQueries, EventQueries, StatsQueries,
+    CollectionQueries, GamePlayerQueries
+)
+
 logger = get_logger('database')
 
 
 class VideoStatsDB:
     """Database manager for VideoStats volleyball tracking."""
     
-    def __init__(self, db_config: dict = None):
+    def __init__(self, connection_string: str = None):
         """Initialize the database connection.
-        
-        Args:
-            db_config: Optional dictionary with PostgreSQL connection parameters:
-                {
-                    'host': 'localhost',
-                    'port': 5432,
-                    'database': 'videstats',
-                    'user': 'postgres',
-                    'password': 'password'
-                }
-                If None, will use environment variables or defaults.
         """
-        db_config = {
-            'host': os.getenv('POSTGRES_HOST', 'localhost'),
-            'port': int(os.getenv('POSTGRES_PORT', 5432)),
-            'database': os.getenv('POSTGRES_DB', 'videstats'),
-            'user': os.getenv('POSTGRES_USER', 'postgres'),
-            'password': os.getenv('POSTGRES_PASSWORD', 'videostats.local.pg.135!')
-        }
-        self.db_config = VideoStatsDB(db_config=db_config)
+        # Check for connection string (priority order: parameter > env var)
+        if connection_string is None:
+            connection_string = os.getenv('SUPABASE_URL')
+        
+        if connection_string:
+            # Use connection string (for Supabase or other hosted PostgreSQL)
+            self.db_config = connection_string
+        else:
+            raise ValueError("No connection string provided")
+        
         self.conn = None
+        
+        # Query class instances (initialized lazily)
+        # self._teams = None
+        # self._players = None
+        # self._games = None
+        # self._rallies = None
+        # self._contacts = None
+        # self._lineup = None
+        # self._rotation = None
+        # self._substitutions = None
+        # self._events = None
+        # self._stats = None
+        # self._collections = None
+        # self._game_players = None
         
     def connect(self):
         """Connect to the database."""
-        self.conn = psycopg2.connect(**self.db_config)
+        # Handle both connection string and config dict
+        if isinstance(self.db_config, str):
+            # Connection string (DSN) format
+            self.conn = psycopg2.connect(self.db_config)
+        else:
+            # Dictionary config format
+            self.conn = psycopg2.connect(**self.db_config)
+        
         self.conn.set_session(autocommit=False)
+        # Reset query instances when connection changes
+        self._reset_query_instances()
         return self.conn
     
     def close(self):
@@ -53,6 +75,107 @@ class VideoStatsDB:
         if self.conn:
             self.conn.close()
             self.conn = None
+            self._reset_query_instances()
+    
+    def _reset_query_instances(self):
+        """Reset all query class instances."""
+        self._teams = None
+        self._players = None
+        self._games = None
+        self._rallies = None
+        self._contacts = None
+        self._lineup = None
+        self._rotation = None
+        self._substitutions = None
+        self._events = None
+        self._stats = None
+        self._collections = None
+        self._game_players = None
+    
+    # Properties for query classes (lazy initialization)
+    @property
+    def teams(self) -> TeamQueries:
+        """Get TeamQueries instance."""
+        if self._teams is None:
+            self._teams = TeamQueries(self.conn)
+        return self._teams
+    
+    @property
+    def players(self) -> PlayerQueries:
+        """Get PlayerQueries instance."""
+        if self._players is None:
+            self._players = PlayerQueries(self.conn)
+        return self._players
+    
+    @property
+    def games(self) -> GameQueries:
+        """Get GameQueries instance."""
+        if self._games is None:
+            self._games = GameQueries(self.conn)
+        return self._games
+    
+    @property
+    def rallies(self) -> RallyQueries:
+        """Get RallyQueries instance."""
+        if self._rallies is None:
+            self._rallies = RallyQueries(self.conn)
+        return self._rallies
+    
+    @property
+    def contacts(self) -> ContactQueries:
+        """Get ContactQueries instance."""
+        if self._contacts is None:
+            self._contacts = ContactQueries(self.conn)
+        return self._contacts
+    
+    @property
+    def lineup(self) -> LineupQueries:
+        """Get LineupQueries instance."""
+        if self._lineup is None:
+            self._lineup = LineupQueries(self.conn)
+        return self._lineup
+    
+    @property
+    def rotation(self) -> RotationQueries:
+        """Get RotationQueries instance."""
+        if self._rotation is None:
+            self._rotation = RotationQueries(self.conn)
+        return self._rotation
+    
+    @property
+    def substitutions(self) -> SubstitutionQueries:
+        """Get SubstitutionQueries instance."""
+        if self._substitutions is None:
+            self._substitutions = SubstitutionQueries(self.conn)
+        return self._substitutions
+    
+    @property
+    def events(self) -> EventQueries:
+        """Get EventQueries instance."""
+        if self._events is None:
+            self._events = EventQueries(self.conn)
+        return self._events
+    
+    @property
+    def stats(self) -> StatsQueries:
+        """Get StatsQueries instance."""
+        if self._stats is None:
+            self._stats = StatsQueries(self.conn)
+        return self._stats
+    
+    @property
+    def collections(self) -> CollectionQueries:
+        """Get CollectionQueries instance."""
+        if self._collections is None:
+            self._collections = CollectionQueries(self.conn)
+        return self._collections
+    
+    @property
+    def game_players(self) -> GamePlayerQueries:
+        """Get GamePlayerQueries instance."""
+        if self._game_players is None:
+            self._game_players = GamePlayerQueries(self.conn)
+        return self._game_players
     
     
     def initialize_database(self):
@@ -63,470 +186,193 @@ class VideoStatsDB:
         logger.info("Database initialization called. Use migration files to create PostgreSQL schema.")
     
     
-    # Helper methods for common operations
+    # ============================================================================
+    # BACKWARD COMPATIBILITY METHODS
+    # These methods delegate to the query classes for backward compatibility.
+    # New code should use db.teams.method(), db.players.method(), etc.
+    # ============================================================================
     
     def add_team(self, name: str) -> int:
         """Add a team and return team_id."""
         if not self.conn:
             self.connect()
-        cursor = self.conn.cursor()
-        cursor.execute("INSERT INTO teams (name) VALUES (%s) RETURNING team_id", (name,))
-        team_id = cursor.fetchone()[0]
-        self.conn.commit()
-        return team_id
+        return self.teams.add_team(name)
     
     def get_all_teams(self) -> list:
-        """Get all teams from the database.
-        
-        Returns:
-            List of tuples (team_id, name) ordered by name
-        """
+        """Get all teams from the database."""
         if not self.conn:
             self.connect()
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT team_id, name FROM teams ORDER BY name")
-        return cursor.fetchall()
+        return self.teams.get_all_teams()
     
     def get_team_by_id(self, team_id: int) -> Optional[dict]:
         """Get a team by ID."""
         if not self.conn:
             self.connect()
-        cursor = self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cursor.execute("SELECT * FROM teams WHERE team_id = %s", (team_id,))
-        return cursor.fetchone()
+        return self.teams.get_team_by_id(team_id)
     
     def add_player(self, team_id: int, player_number: str, name: Optional[str] = None) -> int:
-        """Add a player and return player_id.
-        
-        Args:
-            team_id: The team ID
-            player_number: Player number (can be alphanumeric, e.g., "1", "10", "A1", "12B")
-            name: Optional player name
-        """
+        """Add a player and return player_id."""
         if not self.conn:
             self.connect()
-        cursor = self.conn.cursor()
-        # Convert to string to ensure alphanumeric support
-        player_number_str = str(player_number).strip()
-        cursor.execute(
-            "INSERT INTO players (team_id, player_number, name) VALUES (%s, %s, %s) RETURNING player_id",
-            (team_id, player_number_str, name)
-        )
-        player_id = cursor.fetchone()[0]
-        self.conn.commit()
-        return player_id
+        return self.players.add_player(team_id, player_number, name)
     
     def start_game(self, team_us_id: int, team_them_id: int, notes: Optional[str] = None, game_date: Optional[datetime] = None) -> int:
-        """Start a new game and return game_id.
-        
-        Args:
-            team_us_id: ID of team_us
-            team_them_id: ID of team_them
-            notes: Optional notes for the game
-            game_date: Optional game date (datetime object). If None, uses CURRENT_TIMESTAMP.
-        
-        Raises ValueError if both teams are the same.
-        """
-        if team_us_id == team_them_id:
-            raise ValueError("A game must have two different teams. team_us_id and team_them_id cannot be the same.")
-        
+        """Start a new game and return game_id."""
         if not self.conn:
             self.connect()
-        cursor = self.conn.cursor()
-        if game_date:
-            cursor.execute(
-                "INSERT INTO games (team_us_id, team_them_id, notes, game_date) VALUES (%s, %s, %s, %s) RETURNING game_id",
-                (team_us_id, team_them_id, notes, game_date)
-            )
-        else:
-            cursor.execute(
-                "INSERT INTO games (team_us_id, team_them_id, notes) VALUES (%s, %s, %s) RETURNING game_id",
-                (team_us_id, team_them_id, notes)
-            )
-        game_id = cursor.fetchone()[0]
-        self.conn.commit()
-        return game_id
+        return self.games.start_game(team_us_id, team_them_id, notes, game_date)
     
     def start_rally(self, game_id: int, rally_number: int, serving_team_id: int) -> int:
         """Start a new rally and return rally_id."""
         if not self.conn:
             self.connect()
-        cursor = self.conn.cursor()
-        cursor.execute(
-            """INSERT INTO rallies (game_id, rally_number, serving_team_id, rally_start_time)
-               VALUES (%s, %s, %s, %s) RETURNING rally_id""",
-            (game_id, rally_number, serving_team_id, datetime.now())
-        )
-        rally_id = cursor.fetchone()[0]
-        self.conn.commit()
-        return rally_id
+        return self.rallies.start_rally(game_id, rally_number, serving_team_id)
     
     def add_contact(self, rally_id: int, sequence_number: int, contact_type: str, 
                    team_id: int, player_id: Optional[int] = None, 
                    x: Optional[int] = None, y: Optional[int] = None,
                    timecode: Optional[int] = None,
                    outcome: str = 'continue', rating: Optional[int] = None) -> int:
-        """Add a ball contact and return contact_id.
-        
-        Args:
-            rally_id: The rally ID
-            sequence_number: The sequence number within the rally
-            contact_type: Type of contact (serve, pass, set, attack, etc.)
-            team_id: The team ID
-            player_id: Optional player ID
-            x: Optional x coordinate on the court
-            y: Optional y coordinate on the court
-            timecode: Optional video timecode in milliseconds
-            outcome: Outcome of the contact (continue, ace, kill, error, down, stuff). Defaults to 'continue'
-            rating: Optional rating (integer) for the contact
-        """
+        """Add a ball contact and return contact_id."""
         if not self.conn:
             self.connect()
-        cursor = self.conn.cursor()
-        cursor.execute(
-            """INSERT INTO contacts (rally_id, sequence_number, contact_type, team_id, player_id, x, y, timecode, outcome, rating)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING contact_id""",
-            (rally_id, sequence_number, contact_type, team_id, player_id, x, y, timecode, outcome, rating)
-        )
-        contact_id = cursor.fetchone()[0]
-        self.conn.commit()
-        return contact_id
+        return self.contacts.add_contact(rally_id, sequence_number, contact_type, team_id, 
+                                        player_id, x, y, timecode, outcome, rating)
     
     def end_rally(self, rally_id: int, point_winner_id: int, rally_end_time: Optional[datetime] = None):
-        """End a rally and record the point winner.
-        
-        Args:
-            rally_id: The rally ID to update
-            point_winner_id: The team that won the point
-            rally_end_time: Optional datetime for rally_end_time. If None, uses current time.
-        """
+        """End a rally and record the point winner."""
         if not self.conn:
             self.connect()
-        cursor = self.conn.cursor()
-        end_time = rally_end_time if rally_end_time is not None else datetime.now()
-        cursor.execute(
-            """UPDATE rallies 
-               SET point_winner_id = %s, rally_end_time = %s
-               WHERE rally_id = %s""",
-            (point_winner_id, end_time, rally_id)
-        )
-        self.conn.commit()
+        return self.rallies.end_rally(rally_id, point_winner_id, rally_end_time)
     
     def unend_rally(self, rally_id: int) -> None:
-        """Reset a rally's point_winner_id and rally_end_time to NULL (un-end the rally).
-        
-        Args:
-            rally_id: The rally ID to update
-        """
+        """Reset a rally's point_winner_id and rally_end_time to NULL."""
         if not self.conn:
             self.connect()
-        cursor = self.conn.cursor()
-        cursor.execute(
-            """UPDATE rallies 
-               SET point_winner_id = NULL, rally_end_time = NULL
-               WHERE rally_id = %s""",
-            (rally_id,)
-        )
-        self.conn.commit()
+        return self.rallies.unend_rally(rally_id)
     
     def update_contact_outcome(self, contact_id: int, outcome: str):
-        """Update the outcome of a contact.
-        
-        Args:
-            contact_id: The contact ID to update
-            outcome: The outcome value (continue, ace, kill, error, down, stuff)
-        """
+        """Update the outcome of a contact."""
         if not self.conn:
             self.connect()
-        cursor = self.conn.cursor()
-        cursor.execute(
-            "UPDATE contacts SET outcome = %s WHERE contact_id = %s",
-            (outcome, contact_id)
-        )
-        self.conn.commit()
+        return self.contacts.update_contact_outcome(contact_id, outcome)
     
     def delete_contact(self, contact_id: int) -> bool:
-        """Delete a contact by ID.
-        
-        Args:
-            contact_id: The contact ID to delete
-            
-        Returns:
-            True if successful, False otherwise
-        """
+        """Delete a contact by ID."""
         if not self.conn:
             self.connect()
-        try:
-            cursor = self.conn.cursor()
-            cursor.execute("DELETE FROM contacts WHERE contact_id = %s", (contact_id,))
-            self.conn.commit()
-            return cursor.rowcount > 0
-        except Exception as e:
-            logger.error(f"Error deleting contact {contact_id}: {e}")
-            return False
+        return self.contacts.delete_contact(contact_id)
     
     def get_rally_contacts(self, rally_id: int) -> list:
-        """Get all contacts for a rally, ordered by sequence number.
-        
-        Args:
-            rally_id: The rally ID
-            
-        Returns:
-            List of contact rows
-        """
+        """Get all contacts for a rally, ordered by sequence number."""
         if not self.conn:
             self.connect()
-        cursor = self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cursor.execute(
-            """SELECT contact_id, rally_id, sequence_number, player_id, contact_type, 
-                      team_id, x, y, outcome, timestamp
-               FROM contacts 
-               WHERE rally_id = %s
-               ORDER BY sequence_number""",
-            (rally_id,)
-        )
-        return cursor.fetchall()
+        return self.contacts.get_rally_contacts(rally_id)
     
     def get_last_contact(self, rally_id: int) -> Optional[dict]:
-        """Get the most recent contact in a rally.
-        
-        Args:
-            rally_id: The rally ID
-            
-        Returns:
-            Contact row (contact_id, rally_id, sequence_number, player_id, contact_type, 
-            team_id, x, y, outcome, timestamp) or None if no contacts exist
-        """
+        """Get the most recent contact in a rally."""
         if not self.conn:
             self.connect()
-        cursor = self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cursor.execute(
-            """SELECT contact_id, rally_id, sequence_number, player_id, contact_type, 
-                      team_id, x, y, outcome, timestamp
-               FROM contacts 
-               WHERE rally_id = %s
-               ORDER BY sequence_number DESC
-               LIMIT 1""",
-            (rally_id,)
-        )
-        return cursor.fetchone()
+        return self.contacts.get_last_contact(rally_id)
     
     def delete_game_rallies_and_contacts(self, game_id: int) -> tuple[int, int]:
-        """Delete all rallies and contacts for a given game.
-        
-        Args:
-            game_id: The ID of the game to delete rallies and contacts for
-            
-        Returns:
-            Tuple of (contacts_deleted, rallies_deleted) counts
-        """
+        """Delete all rallies and contacts for a given game."""
         if not self.conn:
             self.connect()
-        
-        cursor = self.conn.cursor()
-        
-        # First, delete all contacts for rallies in this game
-        cursor.execute("""
-            DELETE FROM contacts 
-            WHERE rally_id IN (
-                SELECT rally_id FROM rallies WHERE game_id = %s
-            )
-        """, (game_id,))
-        contacts_deleted = cursor.rowcount
-        
-        # Then, delete all rallies for this game
-        cursor.execute("DELETE FROM rallies WHERE game_id = %s", (game_id,))
-        rallies_deleted = cursor.rowcount
-        
-        self.conn.commit()
-        
-        return (contacts_deleted, rallies_deleted)
+        return self.rallies.delete_game_rallies_and_contacts(game_id)
     
     def get_player_by_number(self, team_id: int, player_number: str) -> Optional[dict]:
-        """Get a player by team and number.
-        
-        Args:
-            team_id: The team ID
-            player_number: Player number (can be alphanumeric)
-        """
+        """Get a player by team and number."""
         if not self.conn:
             self.connect()
-        cursor = self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cursor.execute(
-            "SELECT * FROM players WHERE team_id = %s AND player_number = %s",
-            (team_id, str(player_number).strip())
-        )
-        return cursor.fetchone()
+        return self.players.get_player_by_number(team_id, player_number)
     
     def get_current_rally_sequence(self, rally_id: int) -> int:
         """Get the next sequence number for a rally."""
         if not self.conn:
             self.connect()
-        cursor = self.conn.cursor()
-        cursor.execute(
-            "SELECT MAX(sequence_number) FROM contacts WHERE rally_id = %s",
-            (rally_id,)
-        )
-        result = cursor.fetchone()[0]
-        return (result or 0) + 1
+        return self.contacts.get_current_rally_sequence(rally_id)
     
     def add_player_to_game(self, game_id: int, team_id: int, player_id: int, game_role_code: str = None) -> int:
-        """Add a player to a specific game's roster and return game_player_id.
-        
-        Args:
-            game_id: The game ID
-            team_id: The team ID
-            player_id: The player ID
-            game_role_code: Optional role code for this player in this game (e.g., 'OH', 'S', 'RS', etc.)
-        """
+        """Add a player to a specific game's roster."""
         if not self.conn:
             self.connect()
-        cursor = self.conn.cursor()
-        try:
-            cursor.execute(
-                "INSERT INTO game_players (game_id, team_id, player_id, game_role_code) VALUES (%s, %s, %s, %s) RETURNING game_player_id",
-                (game_id, team_id, player_id, game_role_code)
-            )
-            game_player_id = cursor.fetchone()[0]
-            self.conn.commit()
-            return game_player_id
-        except psycopg2.IntegrityError:
-            self.conn.rollback()
-            # Player already in game roster - update game_role_code if provided
-            if game_role_code is not None:
-                cursor.execute(
-                    "UPDATE game_players SET game_role_code = %s WHERE game_id = %s AND team_id = %s AND player_id = %s",
-                    (game_role_code, game_id, team_id, player_id)
-                )
-                self.conn.commit()
-            cursor.execute(
-                "SELECT game_player_id FROM game_players WHERE game_id = %s AND team_id = %s AND player_id = %s",
-                (game_id, team_id, player_id)
-            )
-            result = cursor.fetchone()
-            return result[0] if result else None
+        return self.game_players.add_player_to_game(game_id, team_id, player_id, game_role_code)
     
     def get_game_players(self, game_id: int, team_id: int) -> list:
         """Get all players for a specific team in a specific game."""
         if not self.conn:
             self.connect()
-        cursor = self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cursor.execute("""
-            SELECT p.player_id, p.player_number, p.name, p.team_id
-            FROM players p
-            INNER JOIN game_players gp ON p.player_id = gp.player_id
-            WHERE gp.game_id = %s AND gp.team_id = %s
-            ORDER BY 
-                CASE 
-                    WHEN p.player_number ~ '^[0-9]+$' 
-                    THEN CAST(p.player_number AS INTEGER)
-                    ELSE 999999
-                END,
-                p.player_number
-        """, (game_id, team_id))
-        return cursor.fetchall()
+        return self.game_players.get_game_players(game_id, team_id)
     
     def remove_player_from_game(self, game_id: int, team_id: int, player_id: int):
         """Remove a player from a game's roster."""
         if not self.conn:
             self.connect()
-        cursor = self.conn.cursor()
-        cursor.execute(
-            "DELETE FROM game_players WHERE game_id = %s AND team_id = %s AND player_id = %s",
-            (game_id, team_id, player_id)
-        )
-        self.conn.commit()
+        return self.game_players.remove_player_from_game(game_id, team_id, player_id)
     
     def get_player_by_number_for_game(self, game_id: int, team_id: int, player_number: str) -> Optional[dict]:
-        """Get a player by number for a specific game and team.
-        
-        Args:
-            game_id: The game ID
-            team_id: The team ID
-            player_number: Player number (can be alphanumeric)
-        """
+        """Get a player by number for a specific game and team."""
         if not self.conn:
             self.connect()
-        cursor = self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cursor.execute("""
-            SELECT p.*
-            FROM players p
-            INNER JOIN game_players gp ON p.player_id = gp.player_id
-            WHERE gp.game_id = %s AND gp.team_id = %s AND p.player_number = %s
-        """, (game_id, team_id, str(player_number).strip()))
-        return cursor.fetchone()
+        return self.game_players.get_player_by_number_for_game(game_id, team_id, player_number)
     
     def update_game_video_path(self, game_id: int, video_file_path: Optional[str]):
-        """Update the video file path for a game.
-        
-        Args:
-            game_id: The game ID
-            video_file_path: Path to the video file (or None to clear it)
-        """
+        """Update the video file path for a game."""
         if not self.conn:
             self.connect()
-        cursor = self.conn.cursor()
-        cursor.execute(
-            "UPDATE games SET video_file_path = %s WHERE game_id = %s",
-            (video_file_path, game_id)
-        )
-        self.conn.commit()
+        return self.games.update_game_video_path(game_id, video_file_path)
     
     def get_game_video_path(self, game_id: int) -> Optional[str]:
-        """Get the video file path for a game.
-        
-        Args:
-            game_id: The game ID
-            
-        Returns:
-            The video file path, or None if not set
-        """
+        """Get the video file path for a game."""
         if not self.conn:
             self.connect()
-        cursor = self.conn.cursor()
-        cursor.execute(
-            "SELECT video_file_path FROM games WHERE game_id = %s",
-            (game_id,)
-        )
-        result = cursor.fetchone()
-        return result[0] if result and result[0] else None
+        return self.games.get_game_video_path(game_id)
     
     def update_game_still_image_path(self, game_id: int, still_image_path: Optional[str]):
-        """Update the still image file path for a game.
-        
-        Args:
-            game_id: The game ID
-            still_image_path: Path to the still image file (or None to clear it)
-        """
+        """Update the still image file path for a game."""
         if not self.conn:
             self.connect()
-        cursor = self.conn.cursor()
-        cursor.execute(
-            "UPDATE games SET still_image_path = %s WHERE game_id = %s",
-            (still_image_path, game_id)
-        )
-        self.conn.commit()
+        return self.games.update_game_still_image_path(game_id, still_image_path)
     
     def get_game_still_image_path(self, game_id: int) -> Optional[str]:
-        """Get the still image file path for a game.
-        
-        Args:
-            game_id: The game ID
-            
-        Returns:
-            The still image file path, or None if not set
-        """
+        """Get the still image file path for a game."""
         if not self.conn:
             self.connect()
-        cursor = self.conn.cursor()
-        cursor.execute(
-            "SELECT still_image_path FROM games WHERE game_id = %s",
-            (game_id,)
-        )
-        result = cursor.fetchone()
-        return result[0] if result and result[0] else None
+        return self.games.get_game_still_image_path(game_id)
     
     def save_game_court_boundaries(self, game_id: int, court_points: dict, homography_matrix=None):
+        """Save court boundary coordinates for a game."""
+        if not self.conn:
+            self.connect()
+        return self.games.save_game_court_boundaries(game_id, court_points, homography_matrix)
+    
+    def get_game_court_boundaries(self, game_id: int) -> Optional[dict]:
+        """Get court boundary coordinates for a game."""
+        if not self.conn:
+            self.connect()
+        return self.games.get_game_court_boundaries(game_id)
+    
+    def delete_game(self, game_id: int) -> dict:
+        """Delete a single game and all related data."""
+        if not self.conn:
+            self.connect()
+        return self.games.delete_game(game_id)
+    
+    def mark_game_ended(self, game_id: int):
+        """Mark a game as ended."""
+        if not self.conn:
+            self.connect()
+        return self.games.mark_game_ended(game_id)
+    
+    def is_game_ended(self, game_id: int) -> bool:
+        """Check if a game is ended."""
+        if not self.conn:
+            self.connect()
+        return self.games.is_game_ended(game_id)
+    
+    # DEPRECATED - use property accessors instead
+    def _save_game_court_boundaries_old(self, game_id: int, court_points: dict, homography_matrix=None):
         """Save court boundary coordinates for a game.
         
         Args:

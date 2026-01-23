@@ -23,14 +23,14 @@ This document summarizes the conversion of the VideoStats application from SQLit
 
 **Configuration:**
 ```python
-# Environment Variables
+# Option 1: Environment Variables (Local PostgreSQL)
 POSTGRES_HOST=localhost
 POSTGRES_PORT=5432
 POSTGRES_DB=videstats
 POSTGRES_USER=postgres
 POSTGRES_PASSWORD=your_password
 
-# OR pass config dict
+# Option 2: Config dict (Local PostgreSQL)
 db_config = {
     'host': 'localhost',
     'port': 5432,
@@ -39,7 +39,16 @@ db_config = {
     'password': 'password'
 }
 db = VideoStatsDB(db_config=db_config)
+
+# Option 3: Supabase Connection String (Hosted PostgreSQL)
+SUPABASE_CONNECTION_STRING="postgresql://postgres.[project-ref]:[password]@aws-0-us-west-1.pooler.supabase.com:6543/postgres"
+db = VideoStatsDB()  # Automatically uses SUPABASE_CONNECTION_STRING
+
+# OR pass connection string directly
+db = VideoStatsDB(connection_string="postgresql://...")
 ```
+
+**See `database/SUPABASE_SETUP.md` for detailed Supabase configuration.**
 
 #### 2. reprocess_outcomes.py
 **Status:** ✓ Complete

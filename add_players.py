@@ -172,25 +172,13 @@ class AddPlayersDialog(QDialog):
         if not self.db.conn:
             self.db.connect()
         
-        cursor = self.db.conn.cursor()
-        
         # Load our team players
         if self.team_us_id:
-            cursor.execute(
-                """SELECT player_id, player_number, name FROM players 
-                   WHERE team_id = %s 
-                   ORDER BY 
-                       CASE 
-                           WHEN CAST(player_number AS INTEGER) IS NOT NULL 
-                           THEN CAST(player_number AS INTEGER)
-                           ELSE 999999
-                       END,
-                       player_number""",
-                (self.team_us_id,)
-            )
-            our_players = cursor.fetchall()
+            our_players = self.db.players.get_players_by_team(self.team_us_id)
             for player in our_players:
-                player_id, player_number, player_name = player
+                player_id = player['player_id']
+                player_number = player['player_number']
+                player_name = player.get('name')
                 display_text = f"{player_number}"
                 if player_name:
                     display_text += f" - {player_name}"
@@ -198,21 +186,11 @@ class AddPlayersDialog(QDialog):
         
         # Load opponent team players
         if self.team_them_id:
-            cursor.execute(
-                """SELECT player_id, player_number, name FROM players 
-                   WHERE team_id = %s 
-                   ORDER BY 
-                       CASE 
-                           WHEN CAST(player_number AS INTEGER) IS NOT NULL 
-                           THEN CAST(player_number AS INTEGER)
-                           ELSE 999999
-                       END,
-                       player_number""",
-                (self.team_them_id,)
-            )
-            them_players = cursor.fetchall()
+            them_players = self.db.players.get_players_by_team(self.team_them_id)
             for player in them_players:
-                player_id, player_number, player_name = player
+                player_id = player['player_id']
+                player_number = player['player_number']
+                player_name = player.get('name')
                 display_text = f"{player_number}"
                 if player_name:
                     display_text += f" - {player_name}"
@@ -259,30 +237,25 @@ class AddPlayersDialog(QDialog):
         """Load players for a specific team in this game into the table."""
         if not self.game_id:
             # Fallback to all team players if no game_id
-            cursor = self.db.conn.cursor()
-            cursor.execute(
-                """SELECT player_id, player_number, name FROM players 
-                   WHERE team_id = %s 
-                   ORDER BY 
-                       CASE 
-                           WHEN CAST(player_number AS INTEGER) IS NOT NULL 
-                           THEN CAST(player_number AS INTEGER)
-                           ELSE 999999
-                       END,
-                       player_number""",
-                (team_id,)
-            )
-            players = cursor.fetchall()
+            players = self.db.players.get_players_by_team(team_id)
         else:
             # Load only players in this game
-            players = self.db.get_game_players(self.game_id, team_id)
+            players = self.db.game_players.get_game_players(self.game_id, team_id)
         
         table.setRowCount(len(players))
         for row, player in enumerate(players):
-            table.setItem(row, 0, QTableWidgetItem(str(player[1])))  # number
-            table.setItem(row, 1, QTableWidgetItem(player[2] or ""))  # name
+            # Handle both dict (from query classes) and tuple (old format)
+            if isinstance(player, dict):
+                player_id = player['player_id']
+                player_number = player['player_number']
+                player_name = player.get('name', '')
+            else:
+                player_id, player_number, player_name = player[0], player[1], player[2]
+            
+            table.setItem(row, 0, QTableWidgetItem(str(player_number)))
+            table.setItem(row, 1, QTableWidgetItem(player_name or ""))
             # Store player_id in the item for deletion
-            table.item(row, 0).setData(Qt.UserRole, player[0])
+            table.item(row, 0).setData(Qt.UserRole, player_id)
     
     def add_player(self, team_id: int, player_number: str, player_name: str, team_type: str):
         """Add a player to the specified team and game roster.
@@ -317,23 +290,17 @@ class AddPlayersDialog(QDialog):
                 self.db.connect()
             
             # Check if player already exists for this team
-            cursor = self.db.conn.cursor()
-            cursor.execute(
-                "SELECT player_id FROM players WHERE team_id = %s AND player_number = %s",
-                (team_id, player_number)
-            )
-            existing_player = cursor.fetchone()
+            existing_player = self.db.players.get_player_by_number(team_id, player_number)
             
-            player_id = None
             if existing_player:
                 # Player already exists, use existing player_id
-                player_id = existing_player[0]
+                player_id = existing_player['player_id']
             else:
                 # Create new player
-                player_id = self.db.add_player(team_id, player_number, player_name)
+                player_id = self.db.players.add_player(team_id, player_number, player_name)
             
             # Add player to game roster
-            self.db.add_player_to_game(self.game_id, team_id, player_id)
+            self.db.game_players.add_player_to_game(self.game_id, team_id, player_id)
             
             # Refresh the appropriate table
             if team_type == "our":
@@ -395,9 +362,7 @@ if __name__ == "__main__":
     db.connect()
     
     # Get team IDs (assuming teams exist)
-    cursor = db.conn.cursor()
-    cursor.execute("SELECT team_id, name FROM teams LIMIT 2")
-    teams = cursor.fetchall()
+    teams = db.teams.get_all_teams()[:2]  # Get first 2 teams
     
     team_us_id = teams[0][0] if len(teams) > 0 else None
     team_them_id = teams[1][0] if len(teams) > 1 else None
