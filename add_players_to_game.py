@@ -6,7 +6,7 @@ If game_id is not provided, it will prompt you to enter it.
 
 import sys
 from PySide6.QtWidgets import QApplication, QMessageBox
-from database import VideoStatsDB
+from dbstuff.database import VideoStatsDB
 from add_players import AddPlayersDialog
 
 
@@ -41,19 +41,9 @@ def main():
     db.connect()
     
     # Get game information
-    cursor = db.conn.cursor()
-    cursor.execute("""
-        SELECT g.team_us_id, g.team_them_id,
-               t1.name as team_us_name, t2.name as team_them_name
-        FROM games g
-        INNER JOIN teams t1 ON g.team_us_id = t1.team_id
-        INNER JOIN teams t2 ON g.team_them_id = t2.team_id
-        WHERE g.game_id = %s
-    """, (game_id,))
+    game = db.games.get_game_by_id(game_id)
     
-    result = cursor.fetchone()
-    
-    if not result:
+    if not game:
         QMessageBox.critical(
             None,
             "Game Not Found",
@@ -62,7 +52,10 @@ def main():
         db.close()
         sys.exit(1)
     
-    team_us_id, team_them_id, team_us_name, team_them_name = result
+    team_us_id = game['team_us_id']
+    team_them_id = game['team_them_id']
+    team_us_name = db.teams.get_team_name(team_us_id)
+    team_them_name = db.teams.get_team_name(team_them_id)
     
     # Show add players dialog
     try:

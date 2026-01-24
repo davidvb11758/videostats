@@ -5,7 +5,7 @@ Use this to prepare a fresh/clean game for testing.
 
 import sys
 import json
-from database import VideoStatsDB
+from dbstuff.database import VideoStatsDB
 from lineup_manager import LineupManager
 from lineup_models import DEFAULT_ROTATION_ORDER
 

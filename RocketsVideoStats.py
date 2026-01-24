@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QMessageBox, QDialog
 )
 from PySide6.QtCore import Qt
-from database import VideoStatsDB
+from dbstuff.database import VideoStatsDB
 from create_team_dialog import CreateTeamDialog
 from edit_team_dialog import EditTeamDialog
 from create_game_dialog import CreateGameDialog

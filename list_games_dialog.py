@@ -14,7 +14,7 @@ from PySide6.QtCore import Qt, QUrl, QRectF
 from PySide6.QtGui import QFont, QPainter
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
-from database import VideoStatsDB
+from dbstuff.database import VideoStatsDB
 
 
 class ListGamesDialog(QDialog):
@@ -149,16 +149,7 @@ class ListGamesDialog(QDialog):
         if not self.db.conn:
             self.db.connect()
         
-        cursor = self.db.conn.cursor()
-        cursor.execute("""
-            SELECT g.game_id, g.game_date, 
-                   t1.name as team_us_name, t2.name as team_them_name,
-                   g.video_file_path, g.notes, g.is_ended
-            FROM games g
-            INNER JOIN teams t1 ON g.team_us_id = t1.team_id
-            INNER JOIN teams t2 ON g.team_them_id = t2.team_id
-        """)
-        games = cursor.fetchall()
+        games = self.db.games.get_all_games_with_teams()
         
         self.game_list.clear()
         
@@ -166,7 +157,13 @@ class ListGamesDialog(QDialog):
         game_items = []
         
         for game in games:
-            game_id, game_date, team_us_name, team_them_name, video_file_path, notes, is_ended = game
+            game_id = game['game_id']
+            game_date = game['game_date']
+            team_us_name = game['team_us_name']
+            team_them_name = game['team_them_name']
+            video_file_path = game.get('video_file_path')
+            notes = game.get('notes')
+            is_ended = game.get('is_ended')
             
             # Format game date to show only the date (YYYY-MM-DD)
             date_display = game_date
@@ -321,60 +318,32 @@ class ListGamesDialog(QDialog):
         if not self.db.conn:
             self.db.connect()
         
-        cursor = self.db.conn.cursor()
-        
-        # Get game info (team IDs and names)
-        cursor.execute("""
-            SELECT g.team_us_id, g.team_them_id,
-                   t1.name as team_us_name, t2.name as team_them_name
-            FROM games g
-            INNER JOIN teams t1 ON g.team_us_id = t1.team_id
-            INNER JOIN teams t2 ON g.team_them_id = t2.team_id
-            WHERE g.game_id = %s
-        """, (game_id,))
-        
-        game_info = cursor.fetchone()
-        if not game_info:
+        # Get game info
+        game = self.db.games.get_game_by_id(game_id)
+        if not game:
             return None
         
-        team_us_id, team_them_id, team_us_name, team_them_name = game_info
+        team_us_id = game['team_us_id']
+        team_them_id = game['team_them_id']
+        team_us_name = self.db.teams.get_team_name(team_us_id)
+        team_them_name = self.db.teams.get_team_name(team_them_id)
         
         # Count rallies
-        cursor.execute("SELECT COUNT(*) FROM rallies WHERE game_id = %s", (game_id,))
-        num_rallies = cursor.fetchone()[0] or 0
+        num_rallies = self.db.rallies.count_rallies(game_id)
         
         # Count contacts
-        cursor.execute("""
-            SELECT COUNT(*) 
-            FROM contacts c
-            INNER JOIN rallies r ON c.rally_id = r.rally_id
-            WHERE r.game_id = %s
-        """, (game_id,))
-        num_contacts = cursor.fetchone()[0] or 0
+        num_contacts = self.db.contacts.count_contacts_for_game(game_id)
         
         # Count points for Us and Them
-        cursor.execute("""
-            SELECT point_winner_id, COUNT(*) 
-            FROM rallies 
-            WHERE game_id = %s AND point_winner_id IS NOT NULL
-            GROUP BY point_winner_id
-        """, (game_id,))
-        
-        points_us = 0
-        points_them = 0
-        for point_winner_id, count in cursor.fetchall():
-            if point_winner_id == team_us_id:
-                points_us = count
-            elif point_winner_id == team_them_id:
-                points_them = count
+        score_summary = self.db.rallies.get_score_summary(game_id)
+        points_us = score_summary.get(team_us_id, 0)
+        points_them = score_summary.get(team_them_id, 0)
         
         # Count game players
-        cursor.execute("SELECT COUNT(*) FROM game_players WHERE game_id = %s", (game_id,))
-        num_game_players = cursor.fetchone()[0] or 0
+        num_game_players = self.db.game_players.count_game_players(game_id)
         
         # Count player stats
-        cursor.execute("SELECT COUNT(*) FROM player_stats WHERE game_id = %s", (game_id,))
-        num_player_stats = cursor.fetchone()[0] or 0
+        num_player_stats = self.db.stats.count_player_stats(game_id)
         
         return {
             'game_id': game_id,
@@ -437,7 +406,7 @@ class ListGamesDialog(QDialog):
                 deleted_stats = stats.copy()
                 
                 # Delete the game
-                deleted_counts = self.db.delete_game(self.current_game_id)
+                deleted_counts = self.db.games.delete_game(self.current_game_id)
                 
                 # Show success message with the same format as confirmation
                 success_message = (

@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
     QMessageBox
 )
 from PySide6.QtCore import Qt
-from database import VideoStatsDB
+from dbstuff.database import VideoStatsDB
 from typing import Optional
 
 

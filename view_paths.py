@@ -21,7 +21,7 @@ from PySide6.QtGui import QPen, QBrush, QColor, QPainterPath, QPolygonF, QPainte
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
 from PySide6.QtUiTools import QUiLoader
-from database import VideoStatsDB
+from dbstuff.database import VideoStatsDB   
 from coordinate_mapper import CoordinateMapper
 from utils import resource_path, get_ffmpeg_path
 from typing import Optional, List, Tuple
@@ -942,18 +942,14 @@ class ContactEditDialog(QDialog):
         if not self.db.conn:
             self.db.connect()
         
-        cursor = self.db.conn.cursor()
         # Get rally_id and sequence_number for this contact
-        cursor.execute("SELECT rally_id, sequence_number FROM contacts WHERE contact_id = %s", (self.contact_id,))
-        result = cursor.fetchone()
-        if result:
-            rally_id, seq_num = result
+        position = self.db.contacts.get_contact_position(self.contact_id)
+        if position:
+            rally_id, seq_num = position
             # Get next contact
-            cursor.execute("SELECT x, y FROM contacts WHERE rally_id = %s AND sequence_number = %s", 
-                          (rally_id, seq_num + 1))
-            next_result = cursor.fetchone()
-            if next_result and next_result[0] is not None and next_result[1] is not None:
-                self.dest_x, self.dest_y = next_result
+            next_contact = self.db.contacts.get_next_contact_in_rally(rally_id, seq_num)
+            if next_contact and next_contact['x'] is not None and next_contact['y'] is not None:
+                self.dest_x, self.dest_y = next_contact['x'], next_contact['y']
                 print(f"Loaded destination coordinates: ({self.dest_x}, {self.dest_y}) for contact {self.contact_id}")
             else:
                 print(f"No destination coordinates found for contact {self.contact_id}")
@@ -1338,48 +1334,21 @@ class ContactEditDialog(QDialog):
         if not self.db.conn:
             self.db.connect()
         
-        cursor = self.db.conn.cursor()
         # Get team IDs
-        cursor.execute("SELECT team_us_id, team_them_id FROM games WHERE game_id = %s", (self.game_id,))
-        result = cursor.fetchone()
-        if not result:
+        game_teams = self.db.games.get_game_teams(self.game_id)
+        if not game_teams:
             return
-        team_us_id, team_them_id = result
+        team_us_id, team_them_id = game_teams
         
         # Get all team_us players from game_players (all roster players for this game)
-        cursor.execute("""
-            SELECT p.player_id, 
-                   COALESCE(p.jersey, p.player_number) as player_number,
-                   p.name
-            FROM game_players gp
-            INNER JOIN players p ON gp.player_id = p.player_id
-            WHERE gp.game_id = %s AND gp.team_id = %s
-            ORDER BY CASE 
-                WHEN CAST(p.player_number AS INTEGER) IS NOT NULL 
-                THEN CAST(p.player_number AS INTEGER)
-                ELSE 999999
-            END,
-            p.player_number
-        """, (self.game_id, team_us_id))
-        
-        players = cursor.fetchall()
+        players = self.db.game_players.get_game_players(self.game_id, team_us_id)
         
         # If no game_players found, fall back to all team players
         if not players:
-            cursor.execute("""
-                SELECT p.player_id, 
-                       COALESCE(p.jersey, p.player_number) as player_number,
-                       p.name
-                FROM players p
-                WHERE p.team_id = %s
-                ORDER BY CASE 
-                    WHEN CAST(p.player_number AS INTEGER) IS NOT NULL 
-                    THEN CAST(p.player_number AS INTEGER)
-                    ELSE 999999
-                END,
-                p.player_number
-            """, (team_us_id,))
-            players = cursor.fetchall()
+            players = self.db.players.get_players_by_team(team_us_id)
+        
+        # Convert to tuples for compatibility (player_id, player_number, name)
+        players = [(p['player_id'], p.get('player_number', p.get('jersey', '')), p.get('name', '')) for p in players]
         
         # Add "Floor" option (no player)
         floor_rb = QRadioButton("Floor")
@@ -1411,9 +1380,8 @@ class ContactEditDialog(QDialog):
             opponent_rb.setChecked(True)
         elif current_player_id:
             # Check if player is from team_them
-            cursor.execute("SELECT team_id FROM players WHERE player_id = %s", (current_player_id,))
-            player_team_result = cursor.fetchone()
-            if player_team_result and player_team_result[0] == team_them_id:
+            player = self.db.players.get_player_by_id(current_player_id)
+            if player and player['team_id'] == team_them_id:
                 opponent_rb.setChecked(True)
     
     def load_video(self):
@@ -1421,15 +1389,12 @@ class ContactEditDialog(QDialog):
         if not self.db.conn:
             self.db.connect()
         
-        cursor = self.db.conn.cursor()
-        cursor.execute("SELECT video_file_path FROM games WHERE game_id = %s", (self.game_id,))
-        result = cursor.fetchone()
+        video_path = self.db.games.get_game_video_path(self.game_id)
         
-        if not result or not result[0]:
+        if not video_path:
             QMessageBox.warning(self, "No Video", "No video file associated with this game.")
             return
         
-        video_path = result[0]
         if not Path(video_path).exists():
             QMessageBox.warning(self, "Video Not Found", f"Video file not found:\n{video_path}")
             return
@@ -1529,18 +1494,7 @@ class ContactEditDialog(QDialog):
             selected_rating_button = self.rating_button_group.checkedButton()
             rating = int(selected_rating_button.text()) if selected_rating_button else None
             
-            # Check if we need to add manual edit flags to database
-            # First, check if columns exist
-            cursor.execute("PRAGMA table_info(contacts)")
-            columns = [row[1] for row in cursor.fetchall()]
-            
-            # Add columns if they don't exist
-            if 'outcome_manual' not in columns:
-                cursor.execute("ALTER TABLE contacts ADD COLUMN outcome_manual INTEGER DEFAULT 0")
-            if 'rating_manual' not in columns:
-                cursor.execute("ALTER TABLE contacts ADD COLUMN rating_manual INTEGER DEFAULT 0")
-            
-            # Update contact
+            # Update contact (assume schema is correct)
             update_query = """
                 UPDATE contacts 
                 SET player_id = %s, contact_type = %s, outcome = %s, rating = %s, timecode = %s,

@@ -5,7 +5,7 @@ This module handles calculation of player statistics, including receive ratings.
 
 import json
 import os
-from database import VideoStatsDB
+from dbstuff.database import VideoStatsDB
 from typing import Dict, Optional
 from utils import resource_path
 from logging_config import get_logger
@@ -103,28 +103,14 @@ class StatsCalculator:
         logger.info(f"Computing receive ratings for game {game_id} before calculating stats...")
         self.compute_receive_ratings_for_game(db, game_id)
         
-        cursor = db.conn.cursor()
-        
         # Delete existing stats for this game
-        cursor.execute("DELETE FROM player_stats WHERE game_id = %s", (game_id,))
-        deleted_count = cursor.rowcount
+        db.stats.delete_game_stats(game_id)
+        deleted_count = db.stats.count_player_stats(game_id)
         if deleted_count > 0:
             logger.info(f"Deleted {deleted_count} existing stat records for game {game_id}")
         
-        # Get all contacts for this game, joining with rallies to get game_id
-        cursor.execute("""
-            SELECT 
-                c.player_id,
-                c.contact_type,
-                c.outcome,
-                c.rating
-            FROM contacts c
-            INNER JOIN rallies r ON c.rally_id = r.rally_id
-            WHERE r.game_id = %s AND c.player_id IS NOT NULL
-            ORDER BY c.player_id, c.contact_type
-        """, (game_id,))
-        
-        contacts = cursor.fetchall()
+        # Get all contacts for this game
+        contacts = db.contacts.get_contacts_for_game(game_id)
         
         if not contacts:
             logger.warning(f"No contacts found for game {game_id}")
@@ -225,15 +211,7 @@ class StatsCalculator:
             
             # Count aces (outcome = 'ace') during the main loop
             # We'll count them separately here
-            cursor.execute("""
-                SELECT COUNT(*) as ace_count
-                FROM contacts c
-                INNER JOIN rallies r ON c.rally_id = r.rally_id
-                WHERE r.game_id = %s AND c.player_id = %s 
-                AND c.contact_type = 'serve' AND c.outcome = 'ace'
-            """, (game_id, player_id))
-            ace_result = cursor.fetchone()
-            serve_aces = ace_result[0] if ace_result else 0
+            serve_aces = db.contacts.count_aces_for_player(game_id, player_id)
             
             # Calculate serve ace percentage as decimal (0.123 = 12.3%) (rounded to 3 decimal places)
             serve_ace_pct = 0.0
@@ -247,44 +225,39 @@ class StatsCalculator:
                 serve_in_pct = 0.0
             
             # Count set assists (outcome = 'assist')
-            cursor.execute("""
-                SELECT COUNT(*) as assist_count
-                FROM contacts c
-                INNER JOIN rallies r ON c.rally_id = r.rally_id
-                WHERE r.game_id = %s AND c.player_id = %s 
-                AND c.contact_type = 'set' AND c.outcome = 'assist'
-            """, (game_id, player_id))
-            assist_result = cursor.fetchone()
-            set_assists = assist_result[0] if assist_result else 0
+            set_assists = db.contacts.count_assists_for_player(game_id, player_id)
             
             # Insert or update player stats
-            cursor.execute("""
-                INSERT INTO player_stats (
-                    game_id, player_id,
-                    receive_attempts, receive_0, receive_1, receive_2, receive_3, receive_avg_rating,
-                    attack_attempts, attack_kills, attack_errors, attack_kill_pct, attack_hitting_pct,
-                    set_attempts, set_assists,
-                    serve_attempts, serve_aces, serve_errors, serve_ace_pct, serve_in_pct,
-                    dig_attempts, dig_successful,
-                    block_solo
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """, (
-                game_id, player_id,
-                stats['receive_attempts'], stats['receive_0'], stats['receive_1'], stats['receive_2'], stats['receive_3'], receive_avg_rating,
-                stats['attack_attempts'], stats['attack_kills'], stats['attack_errors'], attack_kill_pct, attack_hitting_pct,
-                stats['set_attempts'], set_assists,
-                stats['serve_attempts'], serve_aces, stats['serve_errors'], serve_ace_pct, serve_in_pct,
-                0, 0,  # dig_attempts, dig_successful (not calculated yet)
-                stats['block_attempts']  # block_solo (using block_attempts as solo blocks for now)
-            ))
+            db.stats.upsert_player_stats(game_id, player_id, {
+                'receive_attempts': stats['receive_attempts'],
+                'receive_0': stats['receive_0'],
+                'receive_1': stats['receive_1'],
+                'receive_2': stats['receive_2'],
+                'receive_3': stats['receive_3'],
+                'receive_avg_rating': receive_avg_rating,
+                'attack_attempts': stats['attack_attempts'],
+                'attack_kills': stats['attack_kills'],
+                'attack_errors': stats['attack_errors'],
+                'attack_kill_pct': attack_kill_pct,
+                'attack_hitting_pct': attack_hitting_pct,
+                'set_attempts': stats['set_attempts'],
+                'set_assists': set_assists,
+                'serve_attempts': stats['serve_attempts'],
+                'serve_aces': serve_aces,
+                'serve_errors': stats['serve_errors'],
+                'serve_ace_pct': serve_ace_pct,
+                'serve_in_pct': serve_in_pct,
+                'dig_attempts': 0,
+                'dig_successful': 0,
+                'block_solo': stats['block_attempts']
+            })
         
         db.conn.commit()
         logger.info(f"Calculated and stored stats for {len(player_stats)} players for game {game_id}")
         
         # Print summary for each player
         for player_id, stats in player_stats.items():
-            cursor.execute("SELECT player_number, name FROM players WHERE player_id = %s", (player_id,))
-            player_info = cursor.fetchone()
+            player_info = db.players.get_player_number_and_name(player_id)
             player_name = f"{player_info[0] if player_info else 'Unknown'}" + (f" ({player_info[1]})" if player_info and player_info[1] else "")
             logger.debug(f"  Player {player_name}: "
                   f"Serves={stats['serve_attempts']}, "
@@ -304,13 +277,10 @@ class StatsCalculator:
         if not db.conn:
             db.connect()
         
-        cursor = db.conn.cursor()
-        cursor.execute("SELECT DISTINCT game_id FROM rallies ORDER BY game_id")
-        games = cursor.fetchall()
+        games = db.stats.get_all_games_with_rallies()
         
         logger.info(f"Calculating stats for {len(games)} games...")
-        for game_row in games:
-            game_id = game_row['game_id']
+        for game_id in games:
             logger.info(f"Processing game {game_id}...")
             self.calculate_game_stats(db, game_id)
         
@@ -431,22 +401,13 @@ class StatsCalculator:
         if not db.conn:
             db.connect()
         
-        cursor = db.conn.cursor()
-        
         # Get team IDs for this game
-        cursor.execute("""
-            SELECT team_us_id, team_them_id
-            FROM games
-            WHERE game_id = %s
-        """, (game_id,))
-        
-        game_result = cursor.fetchone()
-        if not game_result:
+        game_teams = db.games.get_game_teams(game_id)
+        if not game_teams:
             logger.warning(f"Game {game_id} not found")
             return
         
-        team_us_id = game_result['team_us_id']
-        team_them_id = game_result['team_them_id']
+        team_us_id, team_them_id = game_teams
         logger.debug(f"Team IDs - team_us_id={team_us_id}, team_them_id={team_them_id}")
         
         # Check if receive_rating config is loaded
@@ -458,20 +419,7 @@ class StatsCalculator:
             logger.debug(f"receive_rating config loaded - {len(self.receive_rating)} rows, {len(self.receive_rating[0]) if self.receive_rating[0] else 0} columns")
         
         # Get all receive contacts for this game, ordered by rally and sequence
-        cursor.execute("""
-            SELECT 
-                c.contact_id,
-                c.rally_id,
-                c.sequence_number,
-                c.team_id as receive_team_id,
-                COALESCE(c.rating_manual, 0) as rating_manual
-            FROM contacts c
-            INNER JOIN rallies r ON c.rally_id = r.rally_id
-            WHERE r.game_id = %s AND c.contact_type = 'receive'
-            ORDER BY c.rally_id, c.sequence_number
-        """, (game_id,))
-        
-        receive_contacts = cursor.fetchall()
+        receive_contacts = db.contacts.get_receive_contacts_for_game(game_id, team_us_id)
         
         if not receive_contacts:
             logger.info(f"No receive contacts found for game {game_id}")
@@ -499,19 +447,7 @@ class StatsCalculator:
                 continue
             
             # Find the next contact in the same rally
-            cursor.execute("""
-                SELECT 
-                    contact_type,
-                    team_id,
-                    x,
-                    y
-                FROM contacts
-                WHERE rally_id = %s AND sequence_number > %s
-                ORDER BY sequence_number
-                LIMIT 1
-            """, (rally_id, sequence_number))
-            
-            next_contact = cursor.fetchone()
+            next_contact = db.contacts.get_next_contact_in_rally(rally_id, sequence_number)
             
             # Extract next contact information
             next_contact_type = next_contact['contact_type'] if next_contact else None
@@ -537,11 +473,7 @@ class StatsCalculator:
             # Update the contact with the rating
             if rating is not None:
                 logger.debug(f"  Updating contact_id={contact_id} with rating={rating}")
-                cursor.execute("""
-                    UPDATE contacts
-                    SET rating = %s
-                    WHERE contact_id = %s
-                """, (rating, contact_id))
+                db.contacts.update_contact_rating(contact_id, rating)
                 updated_count += 1
                 logger.debug(f"  [OK] Successfully updated contact {contact_id} with rating {rating}")
             else:
@@ -563,13 +495,10 @@ class StatsCalculator:
         if not db.conn:
             db.connect()
         
-        cursor = db.conn.cursor()
-        cursor.execute("SELECT DISTINCT game_id FROM rallies ORDER BY game_id")
-        games = cursor.fetchall()
+        games = db.stats.get_all_games_with_rallies()
         
         logger.info(f"Computing receive ratings for {len(games)} games...")
-        for game_row in games:
-            game_id = game_row['game_id']
+        for game_id in games:
             logger.info(f"Processing game {game_id}...")
             self.compute_receive_ratings_for_game(db, game_id)
         

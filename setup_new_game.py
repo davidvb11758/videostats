@@ -5,7 +5,7 @@ This script copies players, starting positions, libero status, serving team, etc
 
 import sys
 import json
-from database import VideoStatsDB
+from dbstuff.database import VideoStatsDB
 from lineup_manager import LineupManager
 from lineup_models import DEFAULT_ROTATION_ORDER
 
@@ -27,64 +27,46 @@ def setup_new_game_from_template(template_game_id: int = 37):
     try:
         # 1. Get template game information
         print(f"Reading template game {template_game_id}...")
-        cursor.execute("""
-            SELECT game_id, team_us_id, team_them_id, notes,
-                   video_file_path, still_image_path,
-                   court_corner_tl_x, court_corner_tl_y,
-                   court_corner_tr_x, court_corner_tr_y,
-                   court_corner_bl_x, court_corner_bl_y,
-                   court_corner_br_x, court_corner_br_y,
-                   court_centerline_top_x, court_centerline_top_y,
-                   court_centerline_bottom_x, court_centerline_bottom_y,
-                   court_y200_left_x, court_y200_left_y,
-                   court_y200_right_x, court_y200_right_y,
-                   court_y400_left_x, court_y400_left_y,
-                   court_y400_right_x, court_y400_right_y,
-                   homography_matrix
-            FROM games
-            WHERE game_id = %s
-        """, (template_game_id,))
-        
-        game_row = cursor.fetchone()
+        game_row = db.games.get_game_full_details(template_game_id)
         if not game_row:
             raise ValueError(f"Template game {template_game_id} not found")
         
-        template_team_us_id = game_row[1]
-        template_team_them_id = game_row[2]
-        template_notes = game_row[3]
-        template_video_path = game_row[4]
-        template_still_image_path = game_row[5]
-        template_court_data = game_row[6:]  # All court boundary data
+        template_team_us_id = game_row['team_us_id']
+        template_team_them_id = game_row['team_them_id']
+        template_notes = game_row['notes']
+        template_video_path = game_row['video_file_path']
+        template_still_image_path = game_row['still_image_path']
+        # Extract court boundary data as tuple
+        template_court_data = (
+            game_row['court_corner_tl_x'], game_row['court_corner_tl_y'],
+            game_row['court_corner_tr_x'], game_row['court_corner_tr_y'],
+            game_row['court_corner_bl_x'], game_row['court_corner_bl_y'],
+            game_row['court_corner_br_x'], game_row['court_corner_br_y'],
+            game_row['court_centerline_top_x'], game_row['court_centerline_top_y'],
+            game_row['court_centerline_bottom_x'], game_row['court_centerline_bottom_y'],
+            game_row['court_y200_left_x'], game_row['court_y200_left_y'],
+            game_row['court_y200_right_x'], game_row['court_y200_right_y'],
+            game_row['court_y400_left_x'], game_row['court_y400_left_y'],
+            game_row['court_y400_right_x'], game_row['court_y400_right_y'],
+            game_row['homography_matrix']
+        )
         
         print(f"  Template teams: us={template_team_us_id}, them={template_team_them_id}")
         
         # 2. Get active lineup from template game
-        cursor.execute("""
-            SELECT position_number, player_id, role_code, is_server
-            FROM active_lineup
-            WHERE game_id = %s AND team_id = %s
-            ORDER BY position_number
-        """, (template_game_id, template_team_us_id))
-        
-        lineup_rows = cursor.fetchall()
+        lineup_rows = db.lineup.get_lineup_with_roles(template_game_id, template_team_us_id)
         if len(lineup_rows) != 6:
             raise ValueError(f"Template game must have exactly 6 players in lineup, found {len(lineup_rows)}")
         
         # Build lineup list: [(position, player_id), ...]
-        template_lineup = [(row[0], row[1]) for row in lineup_rows]
-        template_roles = {row[0]: row[2] for row in lineup_rows}
-        template_is_server = {row[0]: bool(row[3]) for row in lineup_rows}
+        template_lineup = [(row['position_number'], row['player_id']) for row in lineup_rows]
+        template_roles = {row['position_number']: row['role_code'] for row in lineup_rows}
+        template_is_server = {row['position_number']: bool(row['is_server']) for row in lineup_rows}
         
         print(f"  Template lineup: {template_lineup}")
         
         # 3. Get rotation state from template game
-        cursor.execute("""
-            SELECT rotation_order, rotation_index, serving, term_of_service_start
-            FROM rotation_state
-            WHERE game_id = %s AND team_id = %s
-        """, (template_game_id, template_team_us_id))
-        
-        rotation_row = cursor.fetchone()
+        rotation_row = db.rotation.get_rotation_state(template_game_id, template_team_us_id)
         if not rotation_row:
             # Rotation state doesn't exist - create defaults from active lineup
             print(f"  WARNING: Template game has no rotation_state, creating defaults from lineup...")
@@ -96,65 +78,35 @@ def setup_new_game_from_template(template_game_id: int = 37):
             template_term_of_service_start = None  # No term of service start
             print(f"  Created default rotation state: index={template_rotation_index}, serving={template_serving}")
         else:
-            template_rotation_order = rotation_row[0]
-            template_rotation_index = rotation_row[1]
-            template_serving = bool(rotation_row[2])
-            template_term_of_service_start = rotation_row[3]
+            template_rotation_order = rotation_row['rotation_order']
+            template_rotation_index = rotation_row['rotation_index']
+            template_serving = bool(rotation_row['serving'])
+            template_term_of_service_start = rotation_row['term_of_service_start']
             print(f"  Template rotation: index={template_rotation_index}, serving={template_serving}")
         
         # 4. Get game_players from template (all players in the game)
-        cursor.execute("""
-            SELECT team_id, player_id
-            FROM game_players
-            WHERE game_id = %s
-            ORDER BY team_id, player_id
-        """, (template_game_id,))
-        
-        template_game_players = cursor.fetchall()
+        template_game_players = db.game_players.get_all_game_players(template_game_id)
         print(f"  Template game_players: {len(template_game_players)} players")
         
         # 4a. Get libero_actions from template game
-        cursor.execute("""
-            SELECT team_id, libero_id, replaced_player_id, replaced_position, action, created_at
-            FROM libero_actions
-            WHERE game_id = %s
-            ORDER BY created_at
-        """, (template_game_id,))
-        
-        template_libero_actions = cursor.fetchall()
+        template_libero_actions = db.substitutions.get_libero_actions(template_game_id)
         print(f"  Template libero_actions: {len(template_libero_actions)} actions")
         
         # 5. Create new game
         print(f"\nCreating new game...")
-        new_game_id = db.start_game(template_team_us_id, template_team_them_id, template_notes)
+        new_game_id = db.games.start_game(template_team_us_id, template_team_them_id, template_notes)
         print(f"  New game_id: {new_game_id}")
         
         # 6. Copy court boundaries and video paths if they exist
         if any(template_court_data):
             print(f"  Copying court boundaries and video paths...")
-            cursor.execute("""
-                UPDATE games SET
-                    video_file_path = %s,
-                    still_image_path = %s,
-                    court_corner_tl_x = %s, court_corner_tl_y = %s,
-                    court_corner_tr_x = %s, court_corner_tr_y = %s,
-                    court_corner_bl_x = %s, court_corner_bl_y = %s,
-                    court_corner_br_x = %s, court_corner_br_y = %s,
-                    court_centerline_top_x = %s, court_centerline_top_y = %s,
-                    court_centerline_bottom_x = %s, court_centerline_bottom_y = %s,
-                    court_y200_left_x = %s, court_y200_left_y = %s,
-                    court_y200_right_x = %s, court_y200_right_y = %s,
-                    court_y400_left_x = %s, court_y400_left_y = %s,
-                    court_y400_right_x = %s, court_y400_right_y = %s,
-                    homography_matrix = %s
-                WHERE game_id = %s
-            """, (template_video_path, template_still_image_path) + tuple(template_court_data) + (new_game_id,))
-            db.conn.commit()
+            db.games.update_game_court_and_video(new_game_id, template_video_path, 
+                                                  template_still_image_path, template_court_data)
         
         # 7. Copy game_players
         print(f"  Copying game_players...")
-        for team_id, player_id in template_game_players:
-            db.add_player_to_game(new_game_id, team_id, player_id)
+        for player in template_game_players:
+            db.game_players.add_player_to_game(new_game_id, player['team_id'], player['player_id'])
         print(f"    Added {len(template_game_players)} players to game")
         
         # 8. Initialize lineup using LineupManager
@@ -166,42 +118,29 @@ def setup_new_game_from_template(template_game_id: int = 37):
         print(f"  Updating role_codes...")
         for position, role_code in template_roles.items():
             if role_code:
-                cursor.execute("""
-                    UPDATE active_lineup
-                    SET role_code = %s
-                    WHERE game_id = %s AND team_id = %s AND position_number = %s
-                """, (role_code, new_game_id, template_team_us_id, position))
+                db.lineup.update_lineup_position(new_game_id, template_team_us_id, position, 
+                                                  role_code=role_code)
         
         # 10. Update is_server flags to match template
         print(f"  Updating server flags...")
         for position, is_server in template_is_server.items():
-            cursor.execute("""
-                UPDATE active_lineup
-                SET is_server = %s
-                WHERE game_id = %s AND team_id = %s AND position_number = %s
-            """, (1 if is_server else 0, new_game_id, template_team_us_id, position))
+            db.lineup.update_lineup_server_flag(new_game_id, template_team_us_id, position, is_server)
         
         # 11. Update rotation_state to match template exactly
         print(f"  Updating rotation_state...")
-        cursor.execute("""
-            UPDATE rotation_state
-            SET rotation_order = %s, rotation_index = %s, term_of_service_start = %s
-            WHERE game_id = %s AND team_id = %s
-        """, (template_rotation_order, template_rotation_index, template_term_of_service_start, 
-              new_game_id, template_team_us_id))
-        
-        db.conn.commit()
+        db.rotation.update_rotation_state_full(new_game_id, template_team_us_id, 
+                                                template_rotation_order, template_rotation_index, 
+                                                template_term_of_service_start)
         
         # 12. Copy libero_actions from template game
         if template_libero_actions:
             print(f"  Copying libero_actions...")
-            for team_id, libero_id, replaced_player_id, replaced_position, action, created_at in template_libero_actions:
-                cursor.execute("""
-                    INSERT INTO libero_actions 
-                    (game_id, team_id, libero_id, replaced_player_id, replaced_position, action, created_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
-                """, (new_game_id, team_id, libero_id, replaced_player_id, replaced_position, action, created_at))
-            db.conn.commit()
+            for action in template_libero_actions:
+                db.substitutions.add_libero_action(
+                    new_game_id, action['team_id'], action['libero_id'],
+                    action['replaced_player_id'], action['replaced_position'],
+                    action['action'], action['created_at']
+                )
             print(f"    Copied {len(template_libero_actions)} libero actions")
         else:
             print(f"  No libero_actions to copy from template")

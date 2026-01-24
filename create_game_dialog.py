@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QDate, Signal
 from PySide6.QtGui import QFont
-from database import VideoStatsDB
+from dbstuff.database import VideoStatsDB
 from lineup_manager import LineupManager
 from lineup_models import FRONT_ROW_POSITIONS, BACK_ROW_POSITIONS
 from datetime import datetime
@@ -172,15 +172,7 @@ class CreateGameDialog(QDialog):
     def populate_roster(self, team_id):
         """Populate player dropdowns with team roster."""
         try:
-            cursor = self.db.conn.cursor()
-            cursor.execute("""
-                SELECT player_id, name, jersey, player_number
-                FROM players
-                WHERE team_id = %s
-                ORDER BY name ASC
-            """, (team_id,))
-            
-            players = cursor.fetchall()
+            players = self.db.players.get_team_players_with_jersey(team_id)
             
             # Clear all combos
             for player_combo, _ in self.position_widgets.values():
@@ -270,15 +262,7 @@ class CreateGameDialog(QDialog):
             return
         
         try:
-            cursor = self.db.conn.cursor()
-            cursor.execute("""
-                SELECT player_id, name, jersey, player_number
-                FROM players
-                WHERE team_id = %s
-                ORDER BY name ASC
-            """, (team_id,))
-            
-            players = cursor.fetchall()
+            players = self.db.players.get_team_players_with_jersey(team_id)
             
             for player in players:
                 player_id, name, jersey, player_number = player
@@ -352,15 +336,7 @@ class CreateGameDialog(QDialog):
             return
         
         try:
-            cursor = self.db.conn.cursor()
-            cursor.execute("""
-                SELECT player_id, name, jersey, player_number
-                FROM players
-                WHERE team_id = %s
-                ORDER BY name ASC
-            """, (team_id,))
-            
-            players = cursor.fetchall()
+            players = self.db.players.get_team_players_with_jersey(team_id)
             
             # Get currently selected players for each position
             current_selections = {}
@@ -448,15 +424,7 @@ class CreateGameDialog(QDialog):
         try:
             if not self.db.conn:
                 self.db.connect()
-            cursor = self.db.conn.cursor()
-            cursor.execute("""
-                SELECT player_id, name, jersey, player_number
-                FROM players
-                WHERE team_id = %s
-                ORDER BY name ASC
-            """, (team_id,))
-            
-            all_players = cursor.fetchall()
+            all_players = self.db.players.get_team_players_with_jersey(team_id)
             
             # Filter to non-starter players (exclude starting lineup and libero)
             non_starter_players = []
@@ -581,15 +549,13 @@ class CreateGameDialog(QDialog):
     
     def get_or_create_opp1_team(self):
         """Get or create the Opp1 team."""
-        cursor = self.db.conn.cursor()
-        cursor.execute("SELECT team_id FROM teams WHERE name = 'Opp1'")
-        result = cursor.fetchone()
+        team_id = self.db.teams.get_team_id_by_name("Opp1")
         
-        if result:
-            return result[0]
+        if team_id:
+            return team_id
         else:
             # Create Opp1 team
-            return self.db.add_team("Opp1")
+            return self.db.teams.add_team("Opp1")
     
     def create_game_and_start(self):
         """Create the game, initialize lineup, and launch data entry."""
@@ -635,44 +601,27 @@ class CreateGameDialog(QDialog):
             
             # Update game with opponent alias in notes field
             if opponent_alias != "Opp1":
-                cursor = self.db.conn.cursor()
-                cursor.execute(
-                    "UPDATE games SET notes = %s WHERE game_id = %s",
-                    (f"Opponent: {opponent_alias}", self.game_id)
-                )
-                self.db.conn.commit()
+                self.db.games.update_game_notes(self.game_id, f"Opponent: {opponent_alias}")
             
             # Initialize lineup using LineupManager
             lineup_manager = LineupManager(self.db)
             lineup_manager.initialize_game(self.game_id, team_us_id, lineup, serving=serving)
             
             # Update role_code in active_lineup for each position based on user selection
-            cursor = self.db.conn.cursor()
             for pos, player_id, role in lineup_data:
                 if role:
-                    cursor.execute("""
-                        UPDATE active_lineup
-                        SET role_code = %s
-                        WHERE team_id = %s AND position_number = %s AND player_id = %s
-                    """, (role, team_us_id, pos, player_id))
+                    self.db.lineup.update_lineup_position(
+                        self.game_id, team_us_id, pos, player_id=player_id, role_code=role
+                    )
             
             # Update libero role in players table if selected
             libero_id = self.libero_combo.currentData()
             if libero_id:
-                cursor.execute(
-                    "UPDATE players SET role_code = 'Lib' WHERE player_id = %s",
-                    (libero_id,)
-                )
-            
-            self.db.conn.commit()
+                self.db.players.update_player_role(libero_id, 'Lib')
             
             # Populate game_players for team_us (all roster players)
             # This makes all players available for substitutions and libero replacements
-            cursor = self.db.conn.cursor()
-            cursor.execute("""
-                SELECT player_id FROM players WHERE team_id = %s
-            """, (team_us_id,))
-            team_us_roster = cursor.fetchall()
+            team_us_roster = self.db.players.get_team_roster_ids(team_us_id)
             
             # Get role codes for starting lineup players
             starting_roles = {}
@@ -691,7 +640,7 @@ class CreateGameDialog(QDialog):
             if libero_id:
                 non_starter_roles[libero_id] = 'Lib'
             
-            for (player_id,) in team_us_roster:
+            for player_id in team_us_roster:
                 try:
                     # Get role code for this player
                     game_role_code = None
@@ -700,29 +649,18 @@ class CreateGameDialog(QDialog):
                     elif player_id in non_starter_roles:
                         game_role_code = non_starter_roles[player_id]
                     
-                    self.db.add_player_to_game(self.game_id, team_us_id, player_id, game_role_code)
+                    self.db.game_players.add_player_to_game(self.game_id, team_us_id, player_id, game_role_code)
                 except Exception as e:
                     # Player might already be in game - log but continue
                     print(f"Warning: Could not add team_us player {player_id} to game: {e}")
             
-            self.db.conn.commit()
-            
             # Update initial_setup event to use game_role_code instead of role_code
             # The initial_setup event was created before game_players was populated,
             # so we need to update it now that game_role_code is available
-            cursor = self.db.conn.cursor()
-            cursor.execute("""
-                SELECT id, payload
-                FROM events
-                WHERE game_id = %s AND team_id = %s AND event_type = 'initial_setup'
-                ORDER BY created_at DESC, id DESC
-                LIMIT 1
-            """, (self.game_id, team_us_id))
-            event_result = cursor.fetchone()
-            if event_result:
-                event_id, payload_json = event_result
+            event = self.db.events.get_initial_setup_event(self.game_id, team_us_id)
+            if event:
                 try:
-                    payload = json.loads(payload_json) if isinstance(payload_json, str) else payload_json
+                    payload = event['payload']
                     lineup_snapshot = payload.get('lineup', {})
                     
                     # Update each player's role_code in the snapshot to use game_role_code
@@ -731,27 +669,18 @@ class CreateGameDialog(QDialog):
                         player_id = player_data.get('player_id')
                         if player_id:
                             # Get game_role_code from game_players
-                            cursor.execute("""
-                                SELECT game_role_code
-                                FROM game_players
-                                WHERE game_id = %s AND team_id = %s AND player_id = %s
-                            """, (self.game_id, team_us_id, player_id))
-                            result = cursor.fetchone()
-                            if result and result[0]:
+                            game_role = self.db.game_players.get_game_role_code(
+                                self.game_id, team_us_id, player_id
+                            )
+                            if game_role:
                                 # Update role_code in snapshot to use game_role_code
-                                player_data['role_code'] = result[0]
+                                player_data['role_code'] = game_role
                                 updated = True
                     
                     # If we updated any roles, save the updated payload back to the event
                     if updated:
-                        updated_payload_json = json.dumps(payload)
-                        cursor.execute("""
-                            UPDATE events
-                            SET payload = %s
-                            WHERE id = %s
-                        """, (updated_payload_json, event_id))
-                        self.db.conn.commit()
-                        print(f"DEBUG: Updated initial_setup event {event_id} to use game_role_code")
+                        self.db.events.update_event_payload(event['id'], payload)
+                        print(f"DEBUG: Updated initial_setup event {event['id']} to use game_role_code")
                 except Exception as e:
                     print(f"Warning: Could not update initial_setup event: {e}")
                     # Don't fail the whole operation if this update fails
@@ -776,9 +705,7 @@ class CreateGameDialog(QDialog):
             # Store values for caller
             self.team_us_id = team_us_id
             self.team_them_id = team_them_id
-            cursor = self.db.conn.cursor()
-            cursor.execute("SELECT name FROM teams WHERE team_id = %s", (team_us_id,))
-            self.team_us_name = cursor.fetchone()[0]
+            self.team_us_name = self.db.teams.get_team_name(team_us_id)
             self.team_them_name = opponent_alias
             
             # Launch coordinate mapper (data entry window created but not shown)

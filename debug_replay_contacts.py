@@ -14,7 +14,7 @@ from PySide6.QtCore import Qt, QPointF, QUrl, QTimer, QRectF
 from PySide6.QtGui import QPen, QBrush, QColor, QFont, QPainter, QPolygonF
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
-from database import VideoStatsDB
+from dbstuff.database import VideoStatsDB
 
 
 class DebugReplayContactsWindow(QMainWindow):

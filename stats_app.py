@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHeaderView, QPushButton, QMessageBox)
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont, QColor
-from database import VideoStatsDB
+from dbstuff.database import VideoStatsDB
 
 
 class StatsApp(QMainWindow):

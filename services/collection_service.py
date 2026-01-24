@@ -5,7 +5,7 @@ Service for managing clip collections.
 from typing import List, Optional, Tuple
 from datetime import datetime
 from models.clip_models import ClipCollection, VideoClip
-from database import VideoStatsDB
+from dbstuff.database import VideoStatsDB
 
 
 class CollectionService:
@@ -71,11 +71,6 @@ class CollectionService:
                 """, (collection.name, collection.description, collection.created_at))
                 collection_id = cursor.lastrowid
             
-            # Check if is_selected column exists
-            cursor.execute("PRAGMA table_info(collection_clips)")
-            columns = [row[1] for row in cursor.fetchall()]
-            has_is_selected = 'is_selected' in columns
-            
             # Insert clips with order and selection state
             for order_index, clip in enumerate(clips):
                 # Get is_selected from clip dict if available (not part of VideoClip model)
@@ -84,17 +79,10 @@ class CollectionService:
                 if isinstance(clip, dict):
                     is_selected = clip.get('is_selected', True)  # Default to True (selected)
                 
-                if has_is_selected:
-                    cursor.execute("""
-                        INSERT INTO collection_clips (collection_id, contact_id, game_id, order_index, is_selected)
-                        VALUES (%s, %s, %s, %s, %s)
-                    """, (collection_id, clip.contact_id, clip.game_id, order_index, 1 if is_selected else 0))
-                else:
-                    # Fallback if column doesn't exist yet
-                    cursor.execute("""
-                        INSERT INTO collection_clips (collection_id, contact_id, game_id, order_index)
-                        VALUES (%s, %s, %s, %s)
-                    """, (collection_id, clip.contact_id, clip.game_id, order_index))
+                cursor.execute("""
+                    INSERT INTO collection_clips (collection_id, contact_id, game_id, order_index, is_selected)
+                    VALUES (%s, %s, %s, %s, %s)
+                """, (collection_id, clip.contact_id, clip.game_id, order_index, 1 if is_selected else 0))
             
             self.db.conn.commit()
             return collection_id
@@ -137,51 +125,23 @@ class CollectionService:
             clip_ids=[]
         )
         
-        # Check if is_selected column exists
-        has_is_selected = False
-        try:
-            cursor.execute("PRAGMA table_info(collection_clips)")
-            columns = [row[1] for row in cursor.fetchall()]
-            has_is_selected = 'is_selected' in columns
-        except Exception as e:
-            print(f"Error checking for is_selected column: {e}")
-            has_is_selected = False
-        
         # Get clips in order with selection state
         try:
-            if has_is_selected:
-                cursor.execute("""
-                    SELECT cc.contact_id, cc.game_id, cc.order_index, COALESCE(cc.is_selected, 1) as is_selected,
-                           c.timecode, c.contact_type, c.outcome, c.rating,
-                           p.player_id, p.player_number, p.name as player_name,
-                           r.rally_number, c.sequence_number,
-                           g.video_file_path, g.notes, t2.name as team_them_name
-                    FROM collection_clips cc
-                    INNER JOIN contacts c ON cc.contact_id = c.contact_id
-                    INNER JOIN rallies r ON c.rally_id = r.rally_id
-                    LEFT JOIN players p ON c.player_id = p.player_id
-                    INNER JOIN games g ON r.game_id = g.game_id
-                    INNER JOIN teams t2 ON g.team_them_id = t2.team_id
-                    WHERE cc.collection_id = %s
-                    ORDER BY cc.order_index
-                """, (collection_id,))
-            else:
-                # Fallback if is_selected column doesn't exist yet
-                cursor.execute("""
-                    SELECT cc.contact_id, cc.game_id, cc.order_index,
-                           c.timecode, c.contact_type, c.outcome, c.rating,
-                           p.player_id, p.player_number, p.name as player_name,
-                           r.rally_number, c.sequence_number,
-                           g.video_file_path, g.notes, t2.name as team_them_name
-                    FROM collection_clips cc
-                    INNER JOIN contacts c ON cc.contact_id = c.contact_id
-                    INNER JOIN rallies r ON c.rally_id = r.rally_id
-                    LEFT JOIN players p ON c.player_id = p.player_id
-                    INNER JOIN games g ON r.game_id = g.game_id
-                    INNER JOIN teams t2 ON g.team_them_id = t2.team_id
-                    WHERE cc.collection_id = %s
-                    ORDER BY cc.order_index
-                """, (collection_id,))
+            cursor.execute("""
+                SELECT cc.contact_id, cc.game_id, cc.order_index, COALESCE(cc.is_selected, 1) as is_selected,
+                       c.timecode, c.contact_type, c.outcome, c.rating,
+                       p.player_id, p.player_number, p.name as player_name,
+                       r.rally_number, c.sequence_number,
+                       g.video_file_path, g.notes, t2.name as team_them_name
+                FROM collection_clips cc
+                INNER JOIN contacts c ON cc.contact_id = c.contact_id
+                INNER JOIN rallies r ON c.rally_id = r.rally_id
+                LEFT JOIN players p ON c.player_id = p.player_id
+                INNER JOIN games g ON r.game_id = g.game_id
+                INNER JOIN teams t2 ON g.team_them_id = t2.team_id
+                WHERE cc.collection_id = %s
+                ORDER BY cc.order_index
+            """, (collection_id,))
             
             clip_rows = cursor.fetchall()
         except Exception as e:
@@ -228,12 +188,8 @@ class CollectionService:
                 order_index=row['order_index']
             )
             # Store is_selected as an attribute (not part of VideoClip model, but preserved in dict)
-            # Default to True if column doesn't exist (all loaded clips should be selected)
             try:
-                if has_is_selected and 'is_selected' in row.keys():
-                    clip.is_selected = bool(row.get('is_selected', 1))  # Default to 1 (selected) for loaded clips
-                else:
-                    clip.is_selected = True  # All loaded clips are selected if column doesn't exist
+                clip.is_selected = bool(row.get('is_selected', 1))  # Default to 1 (selected) for loaded clips
             except (KeyError, AttributeError):
                 clip.is_selected = True  # Default to selected if there's any error
             clips.append(clip)

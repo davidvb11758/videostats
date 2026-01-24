@@ -4,7 +4,7 @@ Service for fetching and managing video clips.
 
 from typing import List, Optional, Dict
 from models.clip_models import VideoClip
-from database import VideoStatsDB
+from dbstuff.database import VideoStatsDB
 
 
 class ClipService:
@@ -187,9 +187,12 @@ class ClipService:
         cursor = self.db.conn.cursor()
         
         try:
+            # PostgreSQL syntax for INSERT ... ON CONFLICT
             cursor.execute("""
-                INSERT OR REPLACE INTO clip_star_ratings (contact_id, game_id, star_rating, updated_at)
+                INSERT INTO clip_star_ratings (contact_id, game_id, star_rating, updated_at)
                 VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
+                ON CONFLICT (contact_id, game_id) 
+                DO UPDATE SET star_rating = EXCLUDED.star_rating, updated_at = CURRENT_TIMESTAMP
             """, (contact_id, game_id, star_rating))
             self.db.conn.commit()
             return True
@@ -227,17 +230,7 @@ class ClipService:
         if not self.db.conn:
             self.db.connect()
         
-        cursor = self.db.conn.cursor()
-        cursor.execute("""
-            SELECT g.game_id, g.game_date, 
-                   t1.name as team_us_name, t2.name as team_them_name,
-                   g.team_us_id, g.team_them_id, g.notes
-            FROM games g
-            INNER JOIN teams t1 ON g.team_us_id = t1.team_id
-            INNER JOIN teams t2 ON g.team_them_id = t2.team_id
-            ORDER BY g.game_date DESC, g.game_id DESC
-        """)
-        games = cursor.fetchall()
+        games = self.db.games.get_all_games_with_teams()
         
         result = []
         for game in games:

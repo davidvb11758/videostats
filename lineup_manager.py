@@ -7,7 +7,7 @@ import json
 import psycopg2.extras
 from datetime import datetime, timezone
 from typing import List, Tuple, Optional, Dict
-from database import VideoStatsDB
+from dbstuff.database import VideoStatsDB
 from lineup_models import (
     Position, Player, LineupEntry, RotationState, Substitution, LiberoAction,
     FRONT_ROW_POSITIONS, BACK_ROW_POSITIONS, ALL_POSITIONS,
@@ -34,31 +34,21 @@ class LineupManager:
         """
         if game_id is None:
             raise ValueError("game_id is required for logging events")
-        cursor = self.db.conn.cursor()
-        cursor.execute(
-            "INSERT INTO events (game_id, team_id, event_type, payload) VALUES (%s, %s, %s, %s)",
-            (game_id, team_id, event_type, json.dumps(payload))
-        )
-        self.db.conn.commit()
+        self.db.events.log_event(game_id, team_id, event_type, payload)
     
     def _get_active_lineup(self, game_id: int, team_id: int) -> Dict[int, LineupEntry]:
         """Get current active lineup as dict position -> LineupEntry."""
-        cursor = self.db.conn.cursor()
-        cursor.execute("""
-            SELECT position_number, player_id, role_code, is_server, placed_at
-            FROM active_lineup
-            WHERE game_id = %s AND team_id = %s
-        """, (game_id, team_id))
+        rows = self.db.lineup.get_active_lineup(game_id, team_id)
         
         lineup = {}
-        for row in cursor.fetchall():
-            pos = row[0]
+        for row in rows:
+            pos = row['position_number']
             lineup[pos] = LineupEntry(
                 position=pos,
-                player_id=row[1],
-                role_code=row[2],
-                is_server=bool(row[3]),
-                placed_at=datetime.fromisoformat(row[4]) if isinstance(row[4], str) else row[4]
+                player_id=row['player_id'],
+                role_code=row['role_code'],
+                is_server=bool(row['is_server']),
+                placed_at=datetime.fromisoformat(row['placed_at']) if isinstance(row['placed_at'], str) else row['placed_at']
             )
         return lineup
     
@@ -79,27 +69,20 @@ class LineupManager:
     
     def _get_rotation_state(self, game_id: int, team_id: int) -> Optional[RotationState]:
         """Get current rotation state for team."""
-        cursor = self.db.conn.cursor()
-        cursor.execute("""
-            SELECT rotation_order, rotation_index, serving, term_of_service_start
-            FROM rotation_state
-            WHERE game_id = %s AND team_id = %s
-        """, (game_id, team_id))
-        
-        row = cursor.fetchone()
+        row = self.db.rotation.get_rotation_state(game_id, team_id)
         if not row:
             return None
         
-        rotation_order = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+        rotation_order = row['rotation_order']
         term_start = None
-        if row[3]:
-            term_start = datetime.fromisoformat(row[3]) if isinstance(row[3], str) else row[3]
+        if row['term_of_service_start']:
+            term_start = datetime.fromisoformat(row['term_of_service_start']) if isinstance(row['term_of_service_start'], str) else row['term_of_service_start']
         
         return RotationState(
             team_id=team_id,
             rotation_order=rotation_order,
-            rotation_index=row[1],
-            serving=bool(row[2]),
+            rotation_index=row['rotation_index'],
+            serving=bool(row['serving']),
             term_of_service_start=term_start
         )
     
@@ -132,38 +115,22 @@ class LineupManager:
         Returns:
             Role code string or None
         """
-        cursor = self.db.conn.cursor()
-        
         # If game_id and team_id are provided, check if it's team_us and use game_role_code
         if game_id is not None and team_id is not None:
             # Check if this team_id is team_us for this game
-            cursor.execute("""
-                SELECT team_us_id FROM games WHERE game_id = %s
-            """, (game_id,))
-            result = cursor.fetchone()
-            if result and result[0] == team_id:
+            game_teams = self.db.games.get_game_teams(game_id)
+            if game_teams and game_teams[0] == team_id:
                 # This is team_us - use game_role_code from game_players
-                cursor.execute("""
-                    SELECT game_role_code FROM game_players
-                    WHERE game_id = %s AND team_id = %s AND player_id = %s
-                """, (game_id, team_id, player_id))
-                row = cursor.fetchone()
-                if row and row[0]:
-                    return row[0]
+                role = self.db.game_players.get_player_game_role(game_id, team_id, player_id)
+                if role:
+                    return role
         
         # Fallback to role_code from players table (for team_them or when game_id not provided)
-        cursor.execute("SELECT role_code FROM players WHERE player_id = %s", (player_id,))
-        row = cursor.fetchone()
-        return row[0] if row and row[0] else None
+        return self.db.players.get_player_role(player_id)
     
     def _update_player_active(self, player_id: int, is_active: bool):
         """Update player's is_active status."""
-        cursor = self.db.conn.cursor()
-        cursor.execute(
-            "UPDATE players SET is_active = %s WHERE player_id = %s",
-            (1 if is_active else 0, player_id)
-        )
-        self.db.conn.commit()
+        self.db.players.update_player_active_status(player_id, is_active)
     
     def _normalize_role_code(self, role_code: str) -> str:
         """Normalize role code (RH -> RS)."""

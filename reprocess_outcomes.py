@@ -16,7 +16,7 @@ Note: Contacts with outcome_manual = 1 will not be updated.
 
 import psycopg2.extras
 import argparse
-from database import VideoStatsDB
+from dbstuff.database import VideoStatsDB
 
 def assign_rally_outcomes(db, rally_id: int, point_winner_id: int, team_us_id: int, team_them_id: int):
     """Apply the assign_rally_outcomes logic to a specific rally."""

@@ -1,5 +1,5 @@
 from flask import Flask, render_template
-from database import VideoStatsDB
+from dbstuff.database import VideoStatsDB
 from api.routes import api
 from api.title_builder_routes import title_builder_api
 

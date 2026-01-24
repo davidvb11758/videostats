@@ -68,6 +68,26 @@ class RotationQueries:
         )
         self.conn.commit()
     
+    def update_rotation_state_full(self, game_id: int, team_id: int, rotation_order: str, 
+                                    rotation_index: int, term_of_service_start: Optional[int]):
+        """
+        Update rotation_state with all fields.
+        
+        Args:
+            game_id: The game ID
+            team_id: The team ID
+            rotation_order: JSON string of rotation order
+            rotation_index: Current rotation index
+            term_of_service_start: Term of service start rally number
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            UPDATE rotation_state
+            SET rotation_order = %s, rotation_index = %s, term_of_service_start = %s
+            WHERE game_id = %s AND team_id = %s
+        """, (rotation_order, rotation_index, term_of_service_start, game_id, team_id))
+        self.conn.commit()
+    
     def delete_rotation_state(self, game_id: int):
         """Delete rotation state for a game."""
         cursor = self.conn.cursor()

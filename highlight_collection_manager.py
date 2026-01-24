@@ -4,7 +4,7 @@ Main entry point for Highlight Collection Manager.
 
 import sys
 from PySide6.QtWidgets import QApplication
-from database import VideoStatsDB
+from dbstuff.database import VideoStatsDB
 from ui.highlight_manager import HighlightCollectionManager
 
 

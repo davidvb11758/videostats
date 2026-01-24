@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
     QGroupBox, QHeaderView, QComboBox
 )
 from PySide6.QtCore import Qt
-from database import VideoStatsDB
+from dbstuff.database import VideoStatsDB
 
 
 class AddPlayersDialog(QDialog):
@@ -221,17 +221,11 @@ class AddPlayersDialog(QDialog):
         if not self.db.conn:
             self.db.connect()
         
-        cursor = self.db.conn.cursor()
-        cursor.execute(
-            "SELECT player_number, name FROM players WHERE player_id = %s AND team_id = %s",
-            (player_id, team_id)
-        )
-        result = cursor.fetchone()
+        player = self.db.players.get_player_by_id(player_id)
         
-        if result:
-            player_number, player_name = result
-            number_field.setText(str(player_number))
-            name_field.setText(player_name or "")
+        if player and player['team_id'] == team_id:
+            number_field.setText(str(player['player_number']))
+            name_field.setText(player.get('name') or "")
     
     def load_team_players(self, team_id: int, table: QTableWidget):
         """Load players for a specific team in this game into the table."""

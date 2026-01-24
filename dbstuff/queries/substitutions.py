@@ -57,16 +57,38 @@ class SubstitutionQueries:
         self.conn.commit()
     
     # Libero Actions
-    def add_libero_action(self, team_id: int, libero_id: int, replaced_player_id: int,
-                         replaced_position: int, action: str, game_id: int) -> int:
-        """Record a libero action (enter/exit)."""
+    def add_libero_action(self, game_id: int, team_id: int, libero_id: int, replaced_player_id: int,
+                         replaced_position: int, action: str, created_at=None) -> int:
+        """
+        Record a libero action (enter/exit).
+        
+        Args:
+            game_id: The game ID
+            team_id: The team ID
+            libero_id: The libero player ID
+            replaced_player_id: The player being replaced
+            replaced_position: The position being replaced
+            action: The action ('enter' or 'exit')
+            created_at: Optional timestamp for the action
+            
+        Returns:
+            The new libero_action ID
+        """
         cursor = self.conn.cursor()
-        cursor.execute(
-            """INSERT INTO libero_actions 
-               (team_id, libero_id, replaced_player_id, replaced_position, action, game_id)
-               VALUES (%s, %s, %s, %s, %s, %s) RETURNING id""",
-            (team_id, libero_id, replaced_player_id, replaced_position, action, game_id)
-        )
+        if created_at:
+            cursor.execute(
+                """INSERT INTO libero_actions 
+                   (game_id, team_id, libero_id, replaced_player_id, replaced_position, action, created_at)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+                (game_id, team_id, libero_id, replaced_player_id, replaced_position, action, created_at)
+            )
+        else:
+            cursor.execute(
+                """INSERT INTO libero_actions 
+                   (game_id, team_id, libero_id, replaced_player_id, replaced_position, action)
+                   VALUES (%s, %s, %s, %s, %s, %s) RETURNING id""",
+                (game_id, team_id, libero_id, replaced_player_id, replaced_position, action)
+            )
         action_id = cursor.fetchone()[0]
         self.conn.commit()
         return action_id
@@ -121,3 +143,15 @@ class SubstitutionQueries:
             (game_id,)
         )
         self.conn.commit()
+    
+    def get_libero_actions(self, game_id: int) -> List[dict]:
+        """
+        Get all libero actions for a game (alias for get_libero_actions_for_game).
+        
+        Args:
+            game_id: The game ID
+            
+        Returns:
+            List of libero_action records
+        """
+        return self.get_libero_actions_for_game(game_id)

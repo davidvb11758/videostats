@@ -140,3 +140,28 @@ class EventQueries:
                 (game_id,)
             )
         return cursor.fetchone()[0]
+    
+    def get_initial_setup_events(self, game_id: int, team_id: int) -> List[dict]:
+        """
+        Get all initial_setup events for a specific game and team.
+        
+        Args:
+            game_id: The game ID
+            team_id: The team ID
+            
+        Returns:
+            List of event records with parsed payloads
+        """
+        cursor = self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cursor.execute("""
+            SELECT id, payload
+            FROM events
+            WHERE game_id = %s AND team_id = %s AND event_type = 'initial_setup'
+            ORDER BY created_at
+        """, (game_id, team_id))
+        events = cursor.fetchall()
+        # Parse JSON payloads
+        for event in events:
+            if 'payload' in event and isinstance(event['payload'], str):
+                event['payload'] = json.loads(event['payload'])
+        return events

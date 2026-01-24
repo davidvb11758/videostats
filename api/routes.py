@@ -13,7 +13,7 @@ from datetime import datetime
 from flask import Blueprint, request, jsonify, g, send_file, Response, current_app, session
 from typing import Dict, List
 
-from database import VideoStatsDB
+from dbstuff.database import VideoStatsDB
 from services.clip_service import ClipService
 from services.collection_service import CollectionService
 from services.filter_service import FilterService
@@ -38,18 +38,6 @@ def get_db():
         g.db = VideoStatsDB(str(get_database_path()))
         g.db.initialize_database()
         g.db.connect()
-        g.db.create_collection_tables()
-        # Ensure is_selected column exists (migration)
-        try:
-            cursor = g.db.conn.cursor()
-            cursor.execute("PRAGMA table_info(collection_clips)")
-            columns = [row[1] for row in cursor.fetchall()]
-            if 'is_selected' not in columns:
-                cursor.execute("ALTER TABLE collection_clips ADD COLUMN is_selected INTEGER DEFAULT 0")
-                g.db.conn.commit()
-        except Exception as e:
-            # Column might already exist, ignore error
-            g.db.conn.rollback()
     return g.db
 
 

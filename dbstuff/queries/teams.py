@@ -75,3 +75,32 @@ class TeamQueries:
         cursor.execute("SELECT name FROM teams WHERE team_id = %s", (team_id,))
         result = cursor.fetchone()
         return result[0] if result else None
+    
+    def get_team_by_name(self, name: str) -> Optional[dict]:
+        """
+        Get team by name.
+        
+        Args:
+            name: The team name
+            
+        Returns:
+            Team record or None if not found
+        """
+        cursor = self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cursor.execute("SELECT * FROM teams WHERE name = %s", (name,))
+        return cursor.fetchone()
+    
+    def get_team_id_by_name(self, name: str) -> Optional[int]:
+        """
+        Get team_id by name.
+        
+        Args:
+            name: The team name
+            
+        Returns:
+            team_id or None if not found
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT team_id FROM teams WHERE name = %s", (name,))
+        result = cursor.fetchone()
+        return result[0] if result else None

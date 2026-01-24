@@ -160,3 +160,58 @@ class GamePlayerQueries:
             (game_id, team_id, player_id)
         )
         return cursor.fetchone()[0]
+    
+    def get_player_game_role(self, game_id: int, team_id: int, player_id: int) -> Optional[str]:
+        """
+        Get the game_role_code for a player in a specific game.
+        
+        Args:
+            game_id: The game ID
+            team_id: The team ID
+            player_id: The player ID
+            
+        Returns:
+            game_role_code or None if not found
+        """
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """SELECT game_role_code FROM game_players 
+               WHERE game_id = %s AND team_id = %s AND player_id = %s""",
+            (game_id, team_id, player_id)
+        )
+        result = cursor.fetchone()
+        return result[0] if result and result[0] else None
+    
+    def get_all_game_players(self, game_id: int) -> List[dict]:
+        """
+        Get all players in a game (all teams).
+        
+        Args:
+            game_id: The game ID
+            
+        Returns:
+            List of game_player records
+        """
+        cursor = self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cursor.execute(
+            """SELECT team_id, player_id, game_role_code 
+               FROM game_players 
+               WHERE game_id = %s 
+               ORDER BY team_id, player_id""",
+            (game_id,)
+        )
+        return cursor.fetchall()
+    
+    def count_game_players(self, game_id: int) -> int:
+        """
+        Count players in a game.
+        
+        Args:
+            game_id: The game ID
+            
+        Returns:
+            Number of players
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM game_players WHERE game_id = %s", (game_id,))
+        return cursor.fetchone()[0] or 0

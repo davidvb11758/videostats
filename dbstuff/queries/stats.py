@@ -96,3 +96,23 @@ class StatsQueries:
             (game_id,)
         )
         return cursor.fetchone()[0]
+    
+    def get_all_games_with_rallies(self) -> List[int]:
+        """Get list of all game IDs that have rallies."""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT DISTINCT game_id FROM rallies ORDER BY game_id")
+        return [row[0] for row in cursor.fetchall()]
+    
+    def count_player_stats(self, game_id: int) -> int:
+        """
+        Count player stat records for a game.
+        
+        Args:
+            game_id: The game ID
+            
+        Returns:
+            Number of player stat records
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM player_stats WHERE game_id = %s", (game_id,))
+        return cursor.fetchone()[0] or 0

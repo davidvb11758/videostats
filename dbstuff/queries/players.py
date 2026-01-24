@@ -163,3 +163,71 @@ class PlayerQueries:
             (team_id,)
         )
         return cursor.fetchall()
+    
+    def get_player_number_and_name(self, player_id: int) -> Optional[tuple]:
+        """
+        Get player number and name.
+        
+        Args:
+            player_id: The player ID
+            
+        Returns:
+            Tuple of (player_number, name) or None if not found
+        """
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT player_number, name FROM players WHERE player_id = %s",
+            (player_id,)
+        )
+        return cursor.fetchone()
+    
+    def get_player_role(self, player_id: int) -> Optional[str]:
+        """
+        Get player's role code from players table.
+        
+        Args:
+            player_id: The player ID
+            
+        Returns:
+            role_code or None if not found
+        """
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT role_code FROM players WHERE player_id = %s",
+            (player_id,)
+        )
+        result = cursor.fetchone()
+        return result[0] if result and result[0] else None
+    
+    def get_team_players_with_jersey(self, team_id: int) -> List[dict]:
+        """
+        Get all players for a team with jersey information.
+        
+        Args:
+            team_id: The team ID
+            
+        Returns:
+            List of player records with name, jersey, player_number
+        """
+        cursor = self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cursor.execute("""
+            SELECT player_id, name, jersey, player_number
+            FROM players
+            WHERE team_id = %s
+            ORDER BY name ASC
+        """, (team_id,))
+        return cursor.fetchall()
+    
+    def get_team_roster_ids(self, team_id: int) -> List[int]:
+        """
+        Get all player_ids for a team.
+        
+        Args:
+            team_id: The team ID
+            
+        Returns:
+            List of player_ids
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT player_id FROM players WHERE team_id = %s", (team_id,))
+        return [row[0] for row in cursor.fetchall()]

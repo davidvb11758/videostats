@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QMessageBox, QComboBox, QHeaderView
 )
 from PySide6.QtCore import Qt
-from database import VideoStatsDB
+from dbstuff.database import VideoStatsDB
 from typing import Optional
 
 
@@ -138,38 +138,22 @@ class CreateTeamDialog(QDialog):
         
         try:
             # Create team
-            self.team_id = self.db.add_team(team_name)
+            self.team_id = self.db.teams.add_team(team_name)
             
             # Add players
             for jersey, name, role in players:
-                player_id = self.db.add_player(self.team_id, jersey, name if name else None)
+                player_id = self.db.players.add_player(self.team_id, jersey, name if name else None)
                 
-                # Set role_code and jersey if provided
-                if role or jersey:
-                    cursor = self.db.conn.cursor()
-                    updates = []
-                    params = []
-                    
-                    if role:
-                        updates.append("role_code = %s")
-                        params.append(role)
-                    
-                    # Try to convert jersey to integer for jersey column
-                    try:
-                        jersey_int = int(jersey)
-                        updates.append("jersey = %s")
-                        params.append(jersey_int)
-                    except ValueError:
-                        pass  # Keep jersey as text in player_number
-                    
-                    if updates:
-                        params.append(player_id)
-                        cursor.execute(
-                            f"UPDATE players SET {', '.join(updates)} WHERE player_id = %s",
-                            params
-                        )
-            
-            self.db.conn.commit()
+                # Set role_code if provided
+                if role:
+                    self.db.players.update_player_role(player_id, role)
+                
+                # Try to convert jersey to integer for jersey column
+                try:
+                    jersey_int = int(jersey)
+                    self.db.players.update_player_jersey(player_id, jersey_int)
+                except ValueError:
+                    pass  # Keep jersey as text in player_number
             
             self.team_name = team_name
             self.player_count = len(players)

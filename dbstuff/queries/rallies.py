@@ -251,3 +251,106 @@ class RallyQueries:
         self.conn.commit()
         
         return (contacts_deleted, rallies_deleted)
+    
+    def get_score_summary(self, game_id: int) -> dict:
+        """
+        Get score summary for a game (completed rallies grouped by winner).
+        
+        Args:
+            game_id: The game ID
+            
+        Returns:
+            Dictionary with point_winner_id -> count mapping
+        """
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """SELECT point_winner_id, COUNT(*) 
+               FROM rallies 
+               WHERE game_id = %s AND point_winner_id IS NOT NULL
+               GROUP BY point_winner_id""",
+            (game_id,)
+        )
+        results = cursor.fetchall()
+        return {point_winner_id: count for point_winner_id, count in results}
+    
+    def get_max_rally_number(self, game_id: int) -> Optional[int]:
+        """
+        Get the maximum rally number for a game.
+        
+        Args:
+            game_id: The game ID
+            
+        Returns:
+            Maximum rally number or None if no rallies exist
+        """
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT MAX(rally_number) FROM rallies WHERE game_id = %s",
+            (game_id,)
+        )
+        result = cursor.fetchone()
+        return result[0] if result and result[0] else None
+    
+    def get_incomplete_rally(self, game_id: int, rally_number: int) -> Optional[dict]:
+        """
+        Get an incomplete rally (point_winner_id is NULL) for a specific rally number.
+        
+        Args:
+            game_id: The game ID
+            rally_number: The rally number
+            
+        Returns:
+            Rally record as dict or None if not found
+        """
+        cursor = self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cursor.execute(
+            """SELECT rally_id, serving_team_id 
+               FROM rallies 
+               WHERE game_id = %s AND rally_number = %s AND point_winner_id IS NULL""",
+            (game_id, rally_number)
+        )
+        return cursor.fetchone()
+    
+    def get_rally_point_winner(self, rally_id: int) -> Optional[int]:
+        """
+        Get the point_winner_id for a rally.
+        
+        Args:
+            rally_id: The rally ID
+            
+        Returns:
+            point_winner_id or None if rally not ended
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT point_winner_id FROM rallies WHERE rally_id = %s", (rally_id,))
+        result = cursor.fetchone()
+        return result[0] if result else None
+    
+    def get_rally_number_by_id(self, rally_id: int) -> Optional[int]:
+        """
+        Get the rally_number for a rally.
+        
+        Args:
+            rally_id: The rally ID
+            
+        Returns:
+            rally_number or None if not found
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT rally_number FROM rallies WHERE rally_id = %s", (rally_id,))
+        result = cursor.fetchone()
+        return result[0] if result else None
+    
+    def count_rallies(self, game_id: int) -> int:
+        """
+        Count rallies for a game.
+        
+        Args:
+            game_id: The game ID
+            
+        Returns:
+            Number of rallies
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM rallies WHERE game_id = %s", (game_id,))
+        return cursor.fetchone()[0] or 0

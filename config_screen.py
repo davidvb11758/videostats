@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (QDialog, QMessageBox, QVBoxLayout, QHBoxLayout,
                                QLabel, QLineEdit, QPushButton, QSpacerItem, QSizePolicy,
                                QComboBox)
 from PySide6.QtCore import Qt
-from database import VideoStatsDB
+from dbstuff.database import VideoStatsDB
 
 
 class ConfigScreen(QDialog):

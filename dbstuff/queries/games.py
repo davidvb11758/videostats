@@ -379,6 +379,25 @@ class GameQueries:
             'scene_height': scene_height
         }
     
+    def get_all_games_with_teams(self) -> List[dict]:
+        """
+        Get all games with team names included.
+        
+        Returns:
+            List of game records with team information
+        """
+        cursor = self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cursor.execute("""
+            SELECT g.game_id, g.game_date, 
+                   t1.name as team_us_name, t2.name as team_them_name,
+                   g.team_us_id, g.team_them_id
+            FROM games g
+            INNER JOIN teams t1 ON g.team_us_id = t1.team_id
+            INNER JOIN teams t2 ON g.team_them_id = t2.team_id
+            ORDER BY g.game_date DESC, g.game_id DESC
+        """)
+        return cursor.fetchall()
+    
     def delete_game(self, game_id: int) -> dict:
         """
         Delete a single game and all related data.
@@ -453,3 +472,78 @@ class GameQueries:
         except Exception as e:
             self.conn.rollback()
             raise Exception(f"Failed to delete game {game_id}: {str(e)}")
+    
+    def update_game_notes(self, game_id: int, notes: str):
+        """
+        Update the notes field for a game.
+        
+        Args:
+            game_id: The game ID
+            notes: The notes text
+        """
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "UPDATE games SET notes = %s WHERE game_id = %s",
+            (notes, game_id)
+        )
+        self.conn.commit()
+    
+    def get_game_full_details(self, game_id: int) -> Optional[dict]:
+        """
+        Get full game details including court boundaries and video paths.
+        
+        Args:
+            game_id: The game ID
+            
+        Returns:
+            Dictionary with all game fields or None if not found
+        """
+        cursor = self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cursor.execute("""
+            SELECT game_id, team_us_id, team_them_id, notes,
+                   video_file_path, still_image_path,
+                   court_corner_tl_x, court_corner_tl_y,
+                   court_corner_tr_x, court_corner_tr_y,
+                   court_corner_bl_x, court_corner_bl_y,
+                   court_corner_br_x, court_corner_br_y,
+                   court_centerline_top_x, court_centerline_top_y,
+                   court_centerline_bottom_x, court_centerline_bottom_y,
+                   court_y200_left_x, court_y200_left_y,
+                   court_y200_right_x, court_y200_right_y,
+                   court_y400_left_x, court_y400_left_y,
+                   court_y400_right_x, court_y400_right_y,
+                   homography_matrix
+            FROM games
+            WHERE game_id = %s
+        """, (game_id,))
+        return cursor.fetchone()
+    
+    def update_game_court_and_video(self, game_id: int, video_path: str, still_image_path: str, court_data: tuple):
+        """
+        Update game with court boundaries and video paths.
+        
+        Args:
+            game_id: The game ID
+            video_path: Video file path
+            still_image_path: Still image path
+            court_data: Tuple of court boundary coordinates
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            UPDATE games SET
+                video_file_path = %s,
+                still_image_path = %s,
+                court_corner_tl_x = %s, court_corner_tl_y = %s,
+                court_corner_tr_x = %s, court_corner_tr_y = %s,
+                court_corner_bl_x = %s, court_corner_bl_y = %s,
+                court_corner_br_x = %s, court_corner_br_y = %s,
+                court_centerline_top_x = %s, court_centerline_top_y = %s,
+                court_centerline_bottom_x = %s, court_centerline_bottom_y = %s,
+                court_y200_left_x = %s, court_y200_left_y = %s,
+                court_y200_right_x = %s, court_y200_right_y = %s,
+                court_y400_left_x = %s, court_y400_left_y = %s,
+                court_y400_right_x = %s, court_y400_right_y = %s,
+                homography_matrix = %s
+            WHERE game_id = %s
+        """, (video_path, still_image_path) + court_data + (game_id,))
+        self.conn.commit()

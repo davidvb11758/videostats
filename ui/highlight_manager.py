@@ -23,7 +23,7 @@ from PySide6.QtCore import QUrl, QRectF
 from PySide6.QtGui import QPainter
 from PySide6.QtWidgets import QGraphicsScene, QGraphicsView, QSlider
 
-from database import VideoStatsDB
+from dbstuff.database import VideoStatsDB
 from models.clip_models import VideoClip, ClipCollection
 from services.clip_service import ClipService
 from services.collection_service import CollectionService

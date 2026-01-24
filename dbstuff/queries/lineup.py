@@ -38,6 +38,113 @@ class LineupQueries:
         )
         self.conn.commit()
     
+    def get_players_with_lineup_and_role(self, game_id: int, team_id: int) -> List[dict]:
+        """
+        Get players with their active lineup positions and roles.
+        
+        Args:
+            game_id: The game ID
+            team_id: The team ID
+            
+        Returns:
+            List of player records with position and role information
+        """
+        cursor = self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cursor.execute("""
+            SELECT p.player_id, 
+                   COALESCE(p.jersey, p.player_number) as player_number,
+                   p.name,
+                   al.position_number,
+                   al.role_code,
+                   al.is_server
+            FROM active_lineup al
+            INNER JOIN players p ON al.player_id = p.player_id
+            WHERE al.game_id = %s AND al.team_id = %s
+            ORDER BY al.position_number
+        """, (game_id, team_id))
+        return cursor.fetchall()
+    
+    def get_server_from_lineup(self, game_id: int, team_id: int) -> Optional[dict]:
+        """
+        Get the current server from active lineup.
+        
+        Args:
+            game_id: The game ID
+            team_id: The team ID
+            
+        Returns:
+            Player record or None if no server found
+        """
+        cursor = self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cursor.execute("""
+            SELECT al.player_id, COALESCE(p.jersey, p.player_number) as player_number, p.name
+            FROM active_lineup al
+            INNER JOIN players p ON al.player_id = p.player_id
+            WHERE al.game_id = %s AND al.team_id = %s AND al.is_server = 1
+            LIMIT 1
+        """, (game_id, team_id))
+        return cursor.fetchone()
+    
+    def get_player_at_position(self, game_id: int, team_id: int, position_number: int) -> Optional[dict]:
+        """
+        Get player at a specific position.
+        
+        Args:
+            game_id: The game ID
+            team_id: The team ID
+            position_number: The position number (1-6)
+            
+        Returns:
+            Player record or None if position is empty
+        """
+        cursor = self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cursor.execute("""
+            SELECT p.player_id, p.player_number, p.name, p.jersey
+            FROM active_lineup al
+            INNER JOIN players p ON al.player_id = p.player_id
+            WHERE al.game_id = %s AND al.team_id = %s AND al.position_number = %s
+            LIMIT 1
+        """, (game_id, team_id, position_number))
+        return cursor.fetchone()
+    
+    def get_lineup_with_roles(self, game_id: int, team_id: int) -> List[dict]:
+        """
+        Get lineup with role_code and is_server flags.
+        
+        Args:
+            game_id: The game ID
+            team_id: The team ID
+            
+        Returns:
+            List of lineup records with position, player_id, role_code, is_server
+        """
+        cursor = self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cursor.execute("""
+            SELECT position_number, player_id, role_code, is_server
+            FROM active_lineup
+            WHERE game_id = %s AND team_id = %s
+            ORDER BY position_number
+        """, (game_id, team_id))
+        return cursor.fetchall()
+    
+    def update_lineup_server_flag(self, game_id: int, team_id: int, position_number: int, is_server: bool):
+        """
+        Update is_server flag for a position.
+        
+        Args:
+            game_id: The game ID
+            team_id: The team ID
+            position_number: The position number
+            is_server: Whether this position is the server
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            UPDATE active_lineup
+            SET is_server = %s
+            WHERE game_id = %s AND team_id = %s AND position_number = %s
+        """, (1 if is_server else 0, game_id, team_id, position_number))
+        self.conn.commit()
+    
     def clear_lineup(self, game_id: int, team_id: int):
         """Clear all lineup positions for a team."""
         cursor = self.conn.cursor()

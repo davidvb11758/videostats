@@ -7,7 +7,7 @@ from PySide6.QtCore import Qt, QEvent, QPoint, Signal, QObject, QThread
 from PySide6.QtGui import QMouseEvent, QFont, QKeyEvent
 from PySide6.QtUiTools import QUiLoader
 from pathlib import Path
-from database import VideoStatsDB
+from dbstuff.database import VideoStatsDB
 from datetime import datetime
 from typing import Optional
 from coordinate_mapper import CoordinateMapper
@@ -469,17 +469,7 @@ class DataEntryWindow(QMainWindow):
         if not self.db.conn:
             self.db.connect()
         
-        cursor = self.db.conn.cursor()
-        cursor.execute("""
-            SELECT g.game_id, g.game_date, 
-                   t1.name as team_us_name, t2.name as team_them_name,
-                   g.team_us_id, g.team_them_id
-            FROM games g
-            INNER JOIN teams t1 ON g.team_us_id = t1.team_id
-            INNER JOIN teams t2 ON g.team_them_id = t2.team_id
-            ORDER BY g.game_date DESC, g.game_id DESC
-        """)
-        games = cursor.fetchall()
+        games = self.db.games.get_all_games_with_teams()
         
         self.ui.comboBox.clear()
         
@@ -603,52 +593,24 @@ class DataEntryWindow(QMainWindow):
         if not self.db.conn:
             self.db.connect()
         
-        cursor = self.db.conn.cursor()
-        cursor.execute(
-            """SELECT point_winner_id, COUNT(*) 
-               FROM rallies 
-               WHERE game_id = %s AND point_winner_id IS NOT NULL
-               GROUP BY point_winner_id""",
-            (self.game_id,)
-        )
-        results = cursor.fetchall()
+        score_summary = self.db.rallies.get_score_summary(self.game_id)
         
-        self.score_us = 0
-        self.score_them = 0
-        
-        for point_winner_id, count in results:
-            if point_winner_id == self.team_us_id:
-                self.score_us = count
-            elif point_winner_id == self.team_them_id:
-                self.score_them = count
+        self.score_us = score_summary.get(self.team_us_id, 0)
+        self.score_them = score_summary.get(self.team_them_id, 0)
         
         # Get current rally number
-        cursor.execute(
-            "SELECT MAX(rally_number) FROM rallies WHERE game_id = %s",
-            (self.game_id,)
-        )
-        result = cursor.fetchone()
-        if result and result[0]:
-            self.current_rally_number = result[0]
+        max_rally = self.db.rallies.get_max_rally_number(self.game_id)
+        if max_rally:
+            self.current_rally_number = max_rally
             # Check if there's an incomplete rally
-            cursor.execute(
-                """SELECT rally_id, serving_team_id 
-                   FROM rallies 
-                   WHERE game_id = %s AND rally_number = %s AND point_winner_id IS NULL""",
-                (self.game_id, self.current_rally_number)
-            )
-            incomplete = cursor.fetchone()
+            incomplete = self.db.rallies.get_incomplete_rally(self.game_id, self.current_rally_number)
             if incomplete:
-                self.current_rally_id = incomplete[0]
-                self.serving_team_id = incomplete[1]
+                self.current_rally_id = incomplete['rally_id']
+                self.serving_team_id = incomplete['serving_team_id']
                 self.rally_in_progress = True
                 # Get current sequence
-                cursor.execute(
-                    "SELECT MAX(sequence_number) FROM contacts WHERE rally_id = %s",
-                    (self.current_rally_id,)
-                )
-                seq_result = cursor.fetchone()
-                self.current_sequence = (seq_result[0] or 0) + 1
+                max_seq = self.db.contacts.get_max_sequence_number(self.current_rally_id)
+                self.current_sequence = (max_seq or 0) + 1
             else:
                 # Start new rally - determine serving team
                 self.current_rally_number += 1
@@ -662,13 +624,8 @@ class DataEntryWindow(QMainWindow):
             # Note: rotation_state is only initialized for team_us, so:
             # - If team_us has serving=1, team_us serves first
             # - If team_us has serving=0 or no entry, team_them serves first
-            cursor.execute("""
-                SELECT team_id, serving
-                FROM rotation_state 
-                WHERE game_id = %s AND team_id = %s
-            """, (self.game_id, self.team_us_id))
-            team_us_rotation = cursor.fetchone()
-            if team_us_rotation and team_us_rotation[1] == 1:
+            team_us_rotation = self.db.rotation.get_rotation_state(self.game_id, self.team_us_id)
+            if team_us_rotation and team_us_rotation.get('serving') == 1:
                 # team_us has serving=1, so team_us serves first
                 self.serving_team_id = self.team_us_id
             else:
