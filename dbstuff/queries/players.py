@@ -231,3 +231,53 @@ class PlayerQueries:
         cursor = self.conn.cursor()
         cursor.execute("SELECT player_id FROM players WHERE team_id = %s", (team_id,))
         return [row[0] for row in cursor.fetchall()]
+    
+    def get_active_lineup_players_by_number_or_jersey(self, game_id: int, team_id: int, 
+                                                       number_or_jersey: str) -> Optional[dict]:
+        """
+        Find a player in active lineup by player_number or jersey.
+        
+        Args:
+            game_id: The game ID
+            team_id: The team ID
+            number_or_jersey: The player number or jersey to search for
+            
+        Returns:
+            Player record or None if not found
+        """
+        cursor = self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cursor.execute("""
+            SELECT p.player_id, p.player_number, p.name, p.jersey
+            FROM active_lineup al
+            INNER JOIN players p ON al.player_id = p.player_id
+            WHERE al.game_id = %s AND al.team_id = %s 
+            AND (p.player_number = %s OR CAST(p.jersey AS TEXT) = %s)
+            LIMIT 1
+        """, (game_id, team_id, str(number_or_jersey), str(number_or_jersey)))
+        return cursor.fetchone()
+    
+    def get_game_players_sorted(self, game_id: int, team_id: int) -> List[dict]:
+        """
+        Get players for a game from game_players table, sorted by number.
+        
+        Args:
+            game_id: The game ID
+            team_id: The team ID
+            
+        Returns:
+            List of player records
+        """
+        cursor = self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cursor.execute("""
+            SELECT p.player_id, p.player_number, p.name
+            FROM players p
+            INNER JOIN game_players gp ON p.player_id = gp.player_id
+            WHERE gp.game_id = %s AND gp.team_id = %s
+            ORDER BY CASE 
+                WHEN p.player_number ~ '^[0-9]+$' 
+                THEN CAST(p.player_number AS INTEGER)
+                ELSE 999999
+            END,
+            p.player_number
+        """, (game_id, team_id))
+        return cursor.fetchall()

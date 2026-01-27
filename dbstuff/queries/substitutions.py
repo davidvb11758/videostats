@@ -155,3 +155,57 @@ class SubstitutionQueries:
             List of libero_action records
         """
         return self.get_libero_actions_for_game(game_id)
+    
+    def get_last_libero_replaced_player(self, game_id: int, team_id: int, 
+                                        replaced_position: Optional[int] = None) -> Optional[int]:
+        """
+        Get the replaced_player_id from the most recent libero enter action.
+        
+        Args:
+            game_id: The game ID
+            team_id: The team ID
+            replaced_position: Optional position number to filter by
+            
+        Returns:
+            replaced_player_id or None if not found
+        """
+        cursor = self.conn.cursor()
+        if replaced_position is not None:
+            cursor.execute("""
+                SELECT replaced_player_id 
+                FROM libero_actions 
+                WHERE game_id = %s AND team_id = %s AND replaced_position = %s AND action = 'enter'
+                ORDER BY created_at DESC
+                LIMIT 1
+            """, (game_id, team_id, replaced_position))
+        else:
+            cursor.execute("""
+                SELECT replaced_player_id 
+                FROM libero_actions 
+                WHERE game_id = %s AND team_id = %s AND action = 'enter'
+                ORDER BY created_at DESC
+                LIMIT 1
+            """, (game_id, team_id))
+        result = cursor.fetchone()
+        return result[0] if result else None
+    
+    def get_last_libero_action_info(self, game_id: int, team_id: int) -> Optional[dict]:
+        """
+        Get info from the most recent libero enter action.
+        
+        Args:
+            game_id: The game ID
+            team_id: The team ID
+            
+        Returns:
+            Dict with replaced_player_id and replaced_position, or None
+        """
+        cursor = self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cursor.execute("""
+            SELECT replaced_player_id, replaced_position
+            FROM libero_actions 
+            WHERE game_id = %s AND team_id = %s AND action = 'enter'
+            ORDER BY created_at DESC
+            LIMIT 1
+        """, (game_id, team_id))
+        return cursor.fetchone()

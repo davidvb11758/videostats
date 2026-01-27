@@ -647,6 +647,24 @@ class ContactQueries:
         """, (rally_id, sequence_number))
         return cursor.fetchone()
     
+    def get_contact_full_details_by_id(self, contact_id: int) -> Optional[dict]:
+        """
+        Get full contact details by contact_id.
+        
+        Args:
+            contact_id: The contact ID
+            
+        Returns:
+            Contact record with all fields or None if not found
+        """
+        cursor = self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cursor.execute("""
+            SELECT contact_id, rally_id, sequence_number, player_id, contact_type, team_id, outcome
+            FROM contacts
+            WHERE contact_id = %s
+        """, (contact_id,))
+        return cursor.fetchone()
+    
     def count_team_contacts_after_sequence(self, rally_id: int, team_id: int, after_sequence: int) -> int:
         """
         Count contacts by a team after a specific sequence number.
@@ -705,3 +723,135 @@ class ContactQueries:
             WHERE r.game_id = %s
         """, (game_id,))
         return cursor.fetchone()[0] or 0
+    
+    def count_contacts_by_game(self, game_id: int) -> int:
+        """Alias for count_contacts_for_game for consistency."""
+        return self.count_contacts_for_game(game_id)
+    
+    def count_team_contacts_excluding_down(self, rally_id: int, team_id: int) -> int:
+        """
+        Count contacts by a team in a rally, excluding 'down' contacts.
+        
+        Args:
+            rally_id: The rally ID
+            team_id: The team ID
+            
+        Returns:
+            Number of contacts (excluding 'down')
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT COUNT(*) 
+            FROM contacts 
+            WHERE rally_id = %s AND team_id = %s AND contact_type != 'down'
+        """, (rally_id, team_id))
+        return cursor.fetchone()[0] or 0
+    
+    def get_first_contact_in_rally(self, rally_id: int) -> Optional[dict]:
+        """
+        Get the first contact in a rally (usually the serve).
+        
+        Args:
+            rally_id: The rally ID
+            
+        Returns:
+            Contact record or None if no contacts
+        """
+        cursor = self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cursor.execute("""
+            SELECT contact_type, team_id 
+            FROM contacts 
+            WHERE rally_id = %s 
+            ORDER BY sequence_number ASC 
+            LIMIT 1
+        """, (rally_id,))
+        return cursor.fetchone()
+    
+    def get_last_contact_excluding_down(self, rally_id: int) -> Optional[dict]:
+        """
+        Get the most recent non-down contact in a rally.
+        
+        Args:
+            rally_id: The rally ID
+            
+        Returns:
+            Contact record or None if no contacts
+        """
+        cursor = self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cursor.execute("""
+            SELECT contact_type, team_id 
+            FROM contacts 
+            WHERE rally_id = %s AND contact_type != 'down'
+            ORDER BY sequence_number DESC 
+            LIMIT 1
+        """, (rally_id,))
+        return cursor.fetchone()
+    
+    def get_last_team_contact_excluding_down(self, rally_id: int, team_id: int) -> Optional[dict]:
+        """
+        Get the last contact by a team, excluding 'down' contacts.
+        
+        Args:
+            rally_id: The rally ID
+            team_id: The team ID
+            
+        Returns:
+            Contact record or None if not found
+        """
+        cursor = self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cursor.execute("""
+            SELECT team_id 
+            FROM contacts 
+            WHERE rally_id = %s AND contact_type != 'down'
+            ORDER BY sequence_number DESC 
+            LIMIT 1
+        """, (rally_id,))
+        return cursor.fetchone()
+    
+    def get_previous_contact_by_type(self, rally_id: int, sequence_number: int, 
+                                      contact_types: List[str]) -> Optional[dict]:
+        """
+        Get the previous contact before a sequence number with specific contact types.
+        
+        Args:
+            rally_id: The rally ID
+            sequence_number: The sequence number to search before
+            contact_types: List of contact types to match
+            
+        Returns:
+            Contact record or None if not found
+        """
+        cursor = self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        # Build placeholders for the IN clause
+        placeholders = ','.join(['%s'] * len(contact_types))
+        query = f"""
+            SELECT contact_id, contact_type, outcome
+            FROM contacts
+            WHERE rally_id = %s AND sequence_number < %s 
+            AND contact_type IN ({placeholders})
+            ORDER BY sequence_number DESC
+            LIMIT 1
+        """
+        params = [rally_id, sequence_number] + contact_types
+        cursor.execute(query, params)
+        return cursor.fetchone()
+    
+    def get_serve_contact_by_rally(self, rally_id: int) -> Optional[dict]:
+        """
+        Get the serve contact for a rally.
+        
+        Args:
+            rally_id: The rally ID
+            
+        Returns:
+            Serve contact record or None if not found
+        """
+        cursor = self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cursor.execute("""
+            SELECT contact_type, team_id 
+            FROM contacts 
+            WHERE rally_id = %s AND contact_type = 'serve'
+            ORDER BY sequence_number ASC 
+            LIMIT 1
+        """, (rally_id,))
+        return cursor.fetchone()

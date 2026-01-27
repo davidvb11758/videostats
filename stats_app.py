@@ -250,7 +250,7 @@ class StatsApp(QMainWindow):
         if not self.db.conn:
             self.db.connect()
         cursor = self.db.conn.cursor()
-        teams = cursor.execute('SELECT team_id, name FROM teams ORDER BY name').fetchall()
+        teams = self.db.teams.get_all_teams()
         
         self.team_combo.clear()
         self.team_combo.addItem('-- Select a Team --', None)
@@ -272,10 +272,7 @@ class StatsApp(QMainWindow):
         if not self.db.conn:
             self.db.connect()
         cursor = self.db.conn.cursor()
-        games = cursor.execute(
-            'SELECT game_id, game_date, team_us_id, team_them_id, notes FROM games WHERE team_us_id = %s OR team_them_id = %s ORDER BY game_date DESC',
-            (team_id, team_id)
-        ).fetchall()
+        games = self.db.games.get_all_games(team_id)
         
         self.game_list.clear()
         for game in games:

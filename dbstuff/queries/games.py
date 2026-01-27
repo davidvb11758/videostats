@@ -379,6 +379,28 @@ class GameQueries:
             'scene_height': scene_height
         }
     
+    def get_game_with_teams(self, game_id: int) -> Optional[dict]:
+        """
+        Get a single game with team names included.
+        
+        Args:
+            game_id: The game ID
+            
+        Returns:
+            Game record with team information or None
+        """
+        cursor = self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cursor.execute("""
+            SELECT g.game_id, g.game_date, 
+                   t1.name as team_us_name, t2.name as team_them_name,
+                   g.team_us_id, g.team_them_id, g.notes
+            FROM games g
+            INNER JOIN teams t1 ON g.team_us_id = t1.team_id
+            INNER JOIN teams t2 ON g.team_them_id = t2.team_id
+            WHERE g.game_id = %s
+        """, (game_id,))
+        return cursor.fetchone()
+    
     def get_all_games_with_teams(self) -> List[dict]:
         """
         Get all games with team names included.

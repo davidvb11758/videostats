@@ -252,6 +252,39 @@ class RallyQueries:
         
         return (contacts_deleted, rallies_deleted)
     
+    def get_completed_rallies(self, game_id: int) -> List[dict]:
+        """
+        Get all completed rallies for a game.
+        
+        Args:
+            game_id: The game ID
+            
+        Returns:
+            List of completed rally records
+        """
+        cursor = self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cursor.execute("""
+            SELECT rally_id, point_winner_id
+            FROM rallies
+            WHERE game_id = %s AND point_winner_id IS NOT NULL
+            ORDER BY rally_id
+        """, (game_id,))
+        return cursor.fetchall()
+    
+    def count_rallies_by_game(self, game_id: int) -> int:
+        """
+        Count total rallies for a game.
+        
+        Args:
+            game_id: The game ID
+            
+        Returns:
+            Number of rallies
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM rallies WHERE game_id = %s", (game_id,))
+        return cursor.fetchone()[0] or 0
+    
     def get_score_summary(self, game_id: int) -> dict:
         """
         Get score summary for a game (completed rallies grouped by winner).
@@ -354,3 +387,82 @@ class RallyQueries:
         cursor = self.conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM rallies WHERE game_id = %s", (game_id,))
         return cursor.fetchone()[0] or 0
+    
+    def get_last_rally_by_game(self, game_id: int) -> Optional[dict]:
+        """
+        Get the most recent rally for a game (by rally_id).
+        
+        Args:
+            game_id: The game ID
+            
+        Returns:
+            Rally record or None if no rallies exist
+        """
+        cursor = self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cursor.execute("""
+            SELECT rally_id 
+            FROM rallies 
+            WHERE game_id = %s
+            ORDER BY rally_id DESC
+            LIMIT 1
+        """, (game_id,))
+        return cursor.fetchone()
+    
+    def get_last_incomplete_rally_by_game(self, game_id: int) -> Optional[dict]:
+        """
+        Get the most recent incomplete rally (point_winner_id is NULL) for a game.
+        
+        Args:
+            game_id: The game ID
+            
+        Returns:
+            Rally record or None if no incomplete rallies exist
+        """
+        cursor = self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cursor.execute("""
+            SELECT rally_id 
+            FROM rallies 
+            WHERE game_id = %s AND point_winner_id IS NULL
+            ORDER BY rally_id DESC
+            LIMIT 1
+        """, (game_id,))
+        return cursor.fetchone()
+    
+    def get_last_rally_with_winner(self, game_id: int, team_id: int) -> Optional[dict]:
+        """
+        Get the most recent rally won by a specific team.
+        
+        Args:
+            game_id: The game ID
+            team_id: The team ID that won
+            
+        Returns:
+            Rally record or None if no rallies found
+        """
+        cursor = self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cursor.execute("""
+            SELECT rally_id, serving_team_id, rally_number
+            FROM rallies 
+            WHERE game_id = %s AND point_winner_id = %s
+            ORDER BY rally_number DESC
+            LIMIT 1
+        """, (game_id, team_id))
+        return cursor.fetchone()
+    
+    def get_rally_end_time(self, rally_id: int) -> Optional[dict]:
+        """
+        Get rally_end_time for a rally.
+        
+        Args:
+            rally_id: The rally ID
+            
+        Returns:
+            Dict with rally_id and rally_end_time, or None if not found
+        """
+        cursor = self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cursor.execute("""
+            SELECT rally_id, rally_end_time
+            FROM rallies
+            WHERE rally_id = %s
+        """, (rally_id,))
+        return cursor.fetchone()

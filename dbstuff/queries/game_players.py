@@ -215,3 +215,31 @@ class GamePlayerQueries:
         cursor = self.conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM game_players WHERE game_id = %s", (game_id,))
         return cursor.fetchone()[0] or 0
+    
+    def get_players_info_with_roles(self, game_id: int, team_id: int, 
+                                    player_ids: List[int]) -> dict:
+        """
+        Get jersey numbers and role codes for multiple players.
+        
+        Args:
+            game_id: The game ID
+            team_id: The team ID
+            player_ids: List of player IDs to get info for
+            
+        Returns:
+            Dict mapping player_id to (jersey_number, role_code)
+        """
+        if not player_ids:
+            return {}
+        
+        cursor = self.conn.cursor()
+        placeholders = ','.join(['%s'] * len(player_ids))
+        cursor.execute(f"""
+            SELECT p.player_id, 
+                   COALESCE(p.jersey, p.player_number) as jersey_number,
+                   COALESCE(gp.game_role_code, '') as role_code
+            FROM players p
+            INNER JOIN game_players gp ON p.player_id = gp.player_id
+            WHERE gp.game_id = %s AND gp.team_id = %s AND p.player_id IN ({placeholders})
+        """, [game_id, team_id] + player_ids)
+        return {row[0]: (row[1], row[2]) for row in cursor.fetchall()}

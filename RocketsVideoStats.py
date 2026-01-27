@@ -145,17 +145,10 @@ class RocketsVideoStatsWindow(QMainWindow):
         if not self.db.conn:
             self.db.connect()
         
-        cursor = self.db.conn.cursor()
-        cursor.execute("""
-            SELECT g.game_id, g.game_date, 
-                   t1.name as team_us_name, t2.name as team_them_name,
-                   g.team_us_id, g.team_them_id, g.notes
-            FROM games g
-            INNER JOIN teams t1 ON g.team_us_id = t1.team_id
-            INNER JOIN teams t2 ON g.team_them_id = t2.team_id
-            ORDER BY g.game_date DESC, g.game_id DESC
-        """)
-        games = cursor.fetchall()
+        games_dict = self.db.games.get_all_games_with_teams()
+        # Convert to tuples for backward compatibility
+        games = [(g['game_id'], g['game_date'], g['team_us_name'], g['team_them_name'],
+                 g['team_us_id'], g['team_them_id'], g.get('notes')) for g in games_dict]
         
         combo = self.ui.combo_select_game
         combo.clear()
@@ -386,20 +379,9 @@ class RocketsVideoStatsWindow(QMainWindow):
         if not self.db.conn:
             self.db.connect()
         
-        cursor = self.db.conn.cursor()
-        cursor.execute("""
-            SELECT g.game_id, g.game_date, 
-                   t1.name as team_us_name, t2.name as team_them_name,
-                   g.team_us_id, g.team_them_id, g.notes
-            FROM games g
-            JOIN teams t1 ON g.team_us_id = t1.team_id
-            JOIN teams t2 ON g.team_them_id = t2.team_id
-            WHERE g.game_id = %s
-        """, (game_id,))
+        game = self.db.games.get_game_with_teams(game_id)
         
-        result = cursor.fetchone()
-        
-        if not result:
+        if not game:
             QMessageBox.warning(
                 self,
                 "Game Not Found",
@@ -407,7 +389,13 @@ class RocketsVideoStatsWindow(QMainWindow):
             )
             return
         
-        game_id_db, game_date, team_us_name, team_them_name, team_us_id, team_them_id, notes = result
+        game_id_db = game['game_id']
+        game_date = game['game_date']
+        team_us_name = game['team_us_name']
+        team_them_name = game['team_them_name']
+        team_us_id = game['team_us_id']
+        team_them_id = game['team_them_id']
+        notes = game.get('notes')
         
         # Load data entry UI
         ui_file = resource_path("inputTouchesVoice.ui")
@@ -532,14 +520,9 @@ class RocketsVideoStatsWindow(QMainWindow):
         try:
             # Step 1: Reprocess outcomes
             # Get all completed rallies for this game
-            cursor.execute("""
-                SELECT r.rally_id, r.point_winner_id
-                FROM rallies r
-                WHERE r.game_id = %s AND r.point_winner_id IS NOT NULL
-                ORDER BY r.rally_id
-            """, (game_id,))
-            
-            rallies = cursor.fetchall()
+            completed_rallies_dict = self.db.rallies.get_completed_rallies(game_id)
+            # Convert to tuples for backward compatibility
+            rallies = [(r['rally_id'], r['point_winner_id']) for r in completed_rallies_dict]
             
             if rallies:
                 # Reset all outcomes to 'continue' first (except 'down' and manual outcomes)
@@ -563,16 +546,8 @@ class RocketsVideoStatsWindow(QMainWindow):
             stats_calculator.calculate_game_stats(self.db, game_id)
             
             # Step 3: Get final statistics for display
-            cursor.execute("SELECT COUNT(*) FROM rallies WHERE game_id = %s", (game_id,))
-            num_rallies = cursor.fetchone()[0] or 0
-            
-            cursor.execute("""
-                SELECT COUNT(*) 
-                FROM contacts c
-                INNER JOIN rallies r ON c.rally_id = r.rally_id
-                WHERE r.game_id = %s
-            """, (game_id,))
-            num_contacts = cursor.fetchone()[0] or 0
+            num_rallies = self.db.rallies.count_rallies_by_game(game_id)
+            num_contacts = self.db.contacts.count_contacts_by_game(game_id)
             
             cursor.execute("""
                 SELECT point_winner_id, COUNT(*) 
@@ -640,17 +615,10 @@ class RocketsVideoStatsWindow(QMainWindow):
         team_us_id, team_them_id, team_us_name, team_them_name = game_info
         
         # Count rallies
-        cursor.execute("SELECT COUNT(*) FROM rallies WHERE game_id = %s", (game_id,))
-        num_rallies = cursor.fetchone()[0] or 0
+        num_rallies = self.db.rallies.count_rallies_by_game(game_id)
         
         # Count contacts
-        cursor.execute("""
-            SELECT COUNT(*) 
-            FROM contacts c
-            INNER JOIN rallies r ON c.rally_id = r.rally_id
-            WHERE r.game_id = %s
-        """, (game_id,))
-        num_contacts = cursor.fetchone()[0] or 0
+        num_contacts = self.db.contacts.count_contacts_by_game(game_id)
         
         # Count points for Us and Them
         cursor.execute("""
@@ -740,14 +708,9 @@ class RocketsVideoStatsWindow(QMainWindow):
                 # Automatically run reprocess stats
                 # Step 1: Reprocess outcomes
                 cursor = self.db.conn.cursor()
-                cursor.execute("""
-                    SELECT r.rally_id, r.point_winner_id
-                    FROM rallies r
-                    WHERE r.game_id = %s AND r.point_winner_id IS NOT NULL
-                    ORDER BY r.rally_id
-                """, (game_id,))
-                
-                rallies = cursor.fetchall()
+                completed_rallies_dict = self.db.rallies.get_completed_rallies(game_id)
+                # Convert to tuples for backward compatibility
+                rallies = [(r['rally_id'], r['point_winner_id']) for r in completed_rallies_dict]
                 
                 if rallies:
                     # Reset all outcomes to 'continue' first (except 'down' and manual outcomes)

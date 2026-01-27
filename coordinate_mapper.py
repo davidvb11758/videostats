@@ -620,14 +620,10 @@ class CoordinateMapper(QMainWindow):
         try:
             if not self.db.conn:
                 self.db.connect()
-            cursor = self.db.conn.cursor()
-            cursor.execute(
-                "SELECT team_us_id, team_them_id FROM games WHERE game_id = %s",
-                (self.game_id,)
-            )
-            result = cursor.fetchone()
-            if result:
-                self.team_us_id, self.team_them_id = result
+            game = self.db.games.get_game_by_id(self.game_id)
+            if game:
+                self.team_us_id = game['team_us_id']
+                self.team_them_id = game['team_them_id']
         except Exception as e:
             print(f"Warning: Failed to load team IDs: {e}")
     
@@ -640,20 +636,12 @@ class CoordinateMapper(QMainWindow):
             if not self.db.conn:
                 self.db.connect()
             
-            cursor = self.db.conn.cursor()
-            cursor.execute(
-                """SELECT point_winner_id, COUNT(*) 
-                   FROM rallies 
-                   WHERE game_id = %s AND point_winner_id IS NOT NULL
-                   GROUP BY point_winner_id""",
-                (self.game_id,)
-            )
-            results = cursor.fetchall()
+            results = self.db.rallies.get_score_summary(self.game_id)
             
             self.score_us = 0
             self.score_them = 0
             
-            for point_winner_id, count in results:
+            for point_winner_id, count in results.items():
                 if point_winner_id == self.team_us_id:
                     self.score_us = count
                 elif point_winner_id == self.team_them_id:
@@ -689,12 +677,10 @@ class CoordinateMapper(QMainWindow):
             
             # Get team names
             cursor = self.db.conn.cursor()
-            cursor.execute("SELECT name FROM teams WHERE team_id = %s", (self.team_us_id,))
-            result = cursor.fetchone()
-            team_us_name = result[0] if result else "Us"
-            cursor.execute("SELECT name FROM teams WHERE team_id = %s", (self.team_them_id,))
-            result = cursor.fetchone()
-            team_them_name = result[0] if result else "Them"
+            team_us = self.db.teams.get_team_by_id(self.team_us_id)
+            team_us_name = team_us['name'] if team_us else "Us"
+            team_them = self.db.teams.get_team_by_id(self.team_them_id)
+            team_them_name = team_them['name'] if team_them else "Them"
             
             self.score_label.setText(f"Score: {team_us_name} {self.score_us} - {self.score_them} {team_them_name}")
         except Exception as e:
@@ -2098,27 +2084,16 @@ class CoordinateMapper(QMainWindow):
                 return
         
         cursor = self.db.conn.cursor()
-        cursor.execute("""
-            SELECT position_number 
-            FROM active_lineup 
-            WHERE game_id = %s AND team_id = %s AND player_id = %s
-        """, (self.game_id, self.team_us_id, libero_id))
+        active_lineup = self.db.lineup.get_active_lineup(self.game_id, self.team_us_id)
         
-        libero_positions = cursor.fetchall()
+        libero_positions = [p['position_number'] for p in active_lineup if p['player_id'] == libero_id]
         if not libero_positions:
             QMessageBox.warning(self, "Libero Not On Court", "The libero is not currently on the court.")
             return
         
         # Get the most recent libero_actions record for this game (regardless of position)
-        cursor.execute("""
-            SELECT replaced_player_id, replaced_position
-            FROM libero_actions 
-            WHERE game_id = %s AND team_id = %s AND action = 'enter'
-            ORDER BY created_at DESC
-            LIMIT 1
-        """, (self.game_id, self.team_us_id))
+        result = self.db.substitutions.get_last_libero_action_info(self.game_id, self.team_us_id)
         
-        result = cursor.fetchone()
         if not result:
             QMessageBox.warning(self, "Error", 
                                "Could not find libero_actions record for this game.\n"
@@ -2143,12 +2118,7 @@ class CoordinateMapper(QMainWindow):
                 target_position = current_positions[0]
         
         # Get player info for the replaced player
-        cursor.execute("""
-            SELECT COALESCE(p.jersey, p.player_number) as player_number, p.name
-            FROM players p
-            WHERE p.player_id = %s
-        """, (replaced_player_id,))
-        player_info = cursor.fetchone()
+        player_info = self.db.players.get_player_info(replaced_player_id)
         if not player_info:
             QMessageBox.warning(self, "Error", 
                                f"Could not find player {replaced_player_id} in database.")
@@ -2829,9 +2799,8 @@ class CoordinateMapper(QMainWindow):
                     if not self.db.conn:
                         self.db.connect()
                     cursor = self.db.conn.cursor()
-                    cursor.execute("SELECT name FROM teams WHERE team_id = %s", (point_winner_id,))
-                    team_result = cursor.fetchone()
-                    team_display = team_result[0] if team_result else f"Team {point_winner_id}"
+                    team = self.db.teams.get_team_by_id(point_winner_id)
+                    team_display = team['name'] if team else f"Team {point_winner_id}"
                     score = "%s"
                 
                 result += f"point: {team_display}={score}"

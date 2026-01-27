@@ -416,41 +416,29 @@ class LineupManager:
         cursor = self.db.conn.cursor()
         
         # Validate in_player exists
-        cursor.execute("SELECT player_id FROM players WHERE player_id = %s", (in_player_id,))
-        if not cursor.fetchone():
+        in_player = self.db.players.get_player_by_id(in_player_id)
+        if not in_player:
             raise ValueError(f"Player {in_player_id} not found")
         
         # Validate in_player is on bench (not in active_lineup)
-        cursor.execute("""
-            SELECT player_id FROM active_lineup
-            WHERE game_id = %s AND team_id = %s AND player_id = %s
-        """, (game_id, team_id, in_player_id))
-        if cursor.fetchone():
+        active_lineup = self.db.lineup.get_active_lineup(game_id, team_id)
+        if any(p['player_id'] == in_player_id for p in active_lineup):
             raise ValueError(f"Player {in_player_id} is already on court")
         
         # Validate out_player exists
-        cursor.execute("SELECT player_id FROM players WHERE player_id = %s", (out_player_id,))
-        if not cursor.fetchone():
+        out_player = self.db.players.get_player_by_id(out_player_id)
+        if not out_player:
             raise ValueError(f"Player {out_player_id} not found")
         
         # Validate out_player is on court (in active_lineup)
-        cursor.execute("""
-            SELECT player_id FROM active_lineup
-            WHERE game_id = %s AND team_id = %s AND player_id = %s
-        """, (game_id, team_id, out_player_id))
-        if not cursor.fetchone():
+        out_player_in_lineup = [p for p in active_lineup if p['player_id'] == out_player_id]
+        if not out_player_in_lineup:
             raise ValueError(f"Player {out_player_id} is not on court")
         
         # Find out_player's current position
-        cursor.execute("""
-            SELECT position_number FROM active_lineup
-            WHERE game_id = %s AND team_id = %s AND player_id = %s
-        """, (game_id, team_id, out_player_id))
-        position_row = cursor.fetchone()
-        if not position_row:
+        actual_out_position = out_player_in_lineup[0]['position_number']
+        if not actual_out_position:
             raise ValueError(f"Player {out_player_id} not found in active lineup")
-        
-        actual_out_position = position_row[0]
         
         # Validate positions if provided
         if out_position and out_position != actual_out_position:

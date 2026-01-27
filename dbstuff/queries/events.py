@@ -165,3 +165,26 @@ class EventQueries:
             if 'payload' in event and isinstance(event['payload'], str):
                 event['payload'] = json.loads(event['payload'])
         return events
+    
+    def get_last_non_setup_event(self, game_id: int) -> Optional[dict]:
+        """
+        Get the most recent event for a game, excluding initial_setup events.
+        
+        Args:
+            game_id: The game ID
+            
+        Returns:
+            Event record with parsed payload, or None if no events found
+        """
+        cursor = self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cursor.execute("""
+            SELECT id, team_id, event_type, payload, created_at
+            FROM events
+            WHERE game_id = %s AND event_type != 'initial_setup'
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+        """, (game_id,))
+        event = cursor.fetchone()
+        if event and 'payload' in event and isinstance(event['payload'], str):
+            event['payload'] = json.loads(event['payload'])
+        return event

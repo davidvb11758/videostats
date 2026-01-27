@@ -217,3 +217,46 @@ class LineupQueries:
             (game_id, team_id, position_number)
         )
         return cursor.fetchone()
+    
+    def get_active_lineup_players(self, team_id: int) -> List[dict]:
+        """
+        Get all active players from active_lineup by team_id only.
+        
+        Args:
+            team_id: The team ID
+            
+        Returns:
+            List of player records with player_id, player_number, name, position
+        """
+        cursor = self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cursor.execute("""
+            SELECT p.player_id, 
+                   COALESCE(p.jersey, p.player_number) as player_number,
+                   p.name
+            FROM active_lineup al
+            INNER JOIN players p ON al.player_id = p.player_id
+            WHERE al.team_id = %s
+            ORDER BY al.position_number
+        """, (team_id,))
+        return cursor.fetchall()
+    
+    def get_position_one_player(self, game_id: int, team_id: int) -> Optional[dict]:
+        """
+        Get the player at position 1.
+        
+        Args:
+            game_id: The game ID
+            team_id: The team ID
+            
+        Returns:
+            Player record or None if position 1 is empty
+        """
+        cursor = self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cursor.execute("""
+            SELECT al.player_id, COALESCE(p.jersey, p.player_number) as player_number, p.name
+            FROM active_lineup al
+            INNER JOIN players p ON al.player_id = p.player_id
+            WHERE al.game_id = %s AND al.team_id = %s AND al.position_number = 1
+            LIMIT 1
+        """, (game_id, team_id))
+        return cursor.fetchone()
