@@ -117,6 +117,7 @@ CREATE TABLE players (
     is_active BOOLEAN DEFAULT FALSE,
     jersey TEXT NOT NULL,
     FOREIGN KEY (team_id) REFERENCES teams(team_id),
+    FOREIGN KEY (role_code) REFERENCES player_roles(role_code),
     UNIQUE(team_id, player_number)
 );
 
