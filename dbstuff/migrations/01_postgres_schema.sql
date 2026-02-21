@@ -319,3 +319,17 @@ CREATE TABLE player_stats (
 
 CREATE INDEX idx_player_stats_game ON player_stats(game_id);
 CREATE INDEX idx_player_stats_player ON player_stats(player_id);
+
+
+CREATE TABLE player_roles (
+    role_id SERIAL PRIMARY KEY,
+    role_code TEXT NOT NULL,
+    role_description TEXT NOT NULL
+);
+
+INSERT INTO player_roles(role_code, role_description) values ('S', 'Setter');
+INSERT INTO player_roles(role_code, role_description) values ('OH', 'Outside Hitter');
+INSERT INTO player_roles(role_code, role_description) values ('Lib', 'Libero');
+INSERT INTO player_roles(role_code, role_description) values ('MH', 'Middle Hitter');
+INSERT INTO player_roles(role_code, role_description) values ('RS', 'Rightside Hitter');
+INSERT INTO player_roles(role_code, role_description) values ('OTH', 'Other');
