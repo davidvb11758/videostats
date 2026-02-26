@@ -36,14 +36,14 @@ class TeamQueries:
         self.conn.commit()
         return team_id
     
-    def get_all_teams(self) -> List[tuple]:
+    def get_all_teams(self) -> List[dict]:
         """
         Get all teams from the database.
         
         Returns:
-            List of tuples (team_id, name) ordered by name
+            List of team records as dictionaries ordered by name
         """
-        cursor = self.conn.cursor()
+        cursor = self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cursor.execute("SELECT team_id, name FROM teams ORDER BY name")
         return cursor.fetchall()
     

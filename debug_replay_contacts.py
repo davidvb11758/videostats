@@ -172,7 +172,7 @@ class DebugReplayContactsWindow(QMainWindow):
             return
         
         # Get court boundaries and homography matrix
-        self.court_boundaries = self.db.get_game_court_boundaries(self.game_id)
+        self.court_boundaries = self.db.games.get_game_court_boundaries(self.game_id)
         if self.court_boundaries and self.court_boundaries.get('homography_matrix') is not None:
             self.homography_matrix = self.court_boundaries['homography_matrix']
         else:

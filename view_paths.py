@@ -6,6 +6,7 @@ Displays contacts as dots connected by lines with arrowheads.
 import sys
 import math
 import subprocess
+import psycopg2.extras
 from pathlib import Path
 from datetime import datetime
 from PySide6.QtWidgets import (
@@ -646,7 +647,7 @@ class ContactEditDialog(QDialog):
                     dot_center_y = new_y + dot_rect.height() / 2
                     
                     # Get court boundaries to access video dimensions and offsets
-                    court_boundaries = self.parent_dialog.db.get_game_court_boundaries(self.parent_dialog.game_id)
+                    court_boundaries = self.parent_dialog.db.games.get_game_court_boundaries(self.parent_dialog.game_id)
                     if court_boundaries:
                         video_offset_x = court_boundaries.get('video_offset_x', 0)
                         video_offset_y = court_boundaries.get('video_offset_y', 0)
@@ -961,7 +962,7 @@ class ContactEditDialog(QDialog):
             self.db.connect()
         
         # Get court boundaries from database
-        court_boundaries = self.db.get_game_court_boundaries(self.game_id)
+        court_boundaries = self.db.games.get_game_court_boundaries(self.game_id)
         if not court_boundaries:
             return
         
@@ -1037,7 +1038,7 @@ class ContactEditDialog(QDialog):
         import numpy as np
         
         # Get court boundaries to access video dimensions and offsets
-        court_boundaries = self.db.get_game_court_boundaries(self.game_id)
+        court_boundaries = self.db.games.get_game_court_boundaries(self.game_id)
         if not court_boundaries:
             print("Warning: Court boundaries not available for coordinate mapping")
             return
@@ -1196,7 +1197,7 @@ class ContactEditDialog(QDialog):
             self.db.connect()
         
         # Get court boundaries from database
-        court_boundaries = self.db.get_game_court_boundaries(self.game_id)
+        court_boundaries = self.db.games.get_game_court_boundaries(self.game_id)
         if not court_boundaries:
             print("DEBUG: No court boundaries found to draw")
             return
@@ -1347,9 +1348,6 @@ class ContactEditDialog(QDialog):
         if not players:
             players = self.db.players.get_players_by_team(team_us_id)
         
-        # Convert to tuples for compatibility (player_id, player_number, name)
-        players = [(p['player_id'], p.get('player_number', p.get('jersey', '')), p.get('name', '')) for p in players]
-        
         # Add "Floor" option (no player)
         floor_rb = QRadioButton("Floor")
         floor_rb.setFont(QFont('Arial', 8))
@@ -1359,7 +1357,10 @@ class ContactEditDialog(QDialog):
             floor_rb.setChecked(True)
         
         # Add team_us players
-        for player_id, player_number, player_name in players:
+        for player in players:
+            player_id = player['player_id']
+            player_number = player.get('player_number', player.get('jersey', ''))
+            player_name = player.get('name', '')
             rb = QRadioButton(f"#{player_number} {player_name}")
             rb.setFont(QFont('Arial', 8))
             rb.setProperty('player_id', player_id)
@@ -2040,7 +2041,7 @@ class ContactPathViewer(QMainWindow):
         if not self.db.conn:
             self.db.connect()
         
-        cursor = self.db.conn.cursor()
+        cursor = self.db.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cursor.execute("""
             SELECT g.game_id, g.game_date, 
                    t1.name as team_us_name, t2.name as team_them_name,
@@ -2060,7 +2061,13 @@ class ContactPathViewer(QMainWindow):
             self.ui.comboBox.setItemData(0, None, Qt.UserRole)
             
             for game in games:
-                game_id, game_date, team_us_name, team_them_name, team_us_id, team_them_id, notes = game
+                game_id = game['game_id']
+                game_date = game['game_date']
+                team_us_name = game['team_us_name']
+                team_them_name = game['team_them_name']
+                team_us_id = game['team_us_id']
+                team_them_id = game['team_them_id']
+                notes = game['notes']
                 
                 # Format game date to show only the date (YYYY-MM-DD)
                 date_display = game_date
@@ -2119,7 +2126,7 @@ class ContactPathViewer(QMainWindow):
             self.db.connect()
         
         # Get players for our team in this game
-        players = self.db.get_game_players(self.game_id, self.team_us_id)
+        players = self.db.game_players.get_game_players(self.game_id, self.team_us_id)
         
         self.player_list_widget.clear()
         
@@ -2140,7 +2147,9 @@ class ContactPathViewer(QMainWindow):
         # Prepare player list with format "Player name (jersey #)" and sort alphabetically
         player_items = []
         for player in players:
-            player_id, player_number, player_name, team_id = player
+            player_id = player['player_id']
+            player_number = player['player_number']
+            player_name = player.get('name')
             if player_name:
                 display_text = f"{player_name} ({player_number})"
             else:
@@ -2498,7 +2507,7 @@ class ContactPathViewer(QMainWindow):
         if not self.db.conn:
             self.db.connect()
         
-        cursor = self.db.conn.cursor()
+        cursor = self.db.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         
         # First, get the selected player's contacts (filtered)
         query_filtered = """
@@ -2560,7 +2569,7 @@ class ContactPathViewer(QMainWindow):
         
         # Now get ALL contacts in the same rallies (to find next contact after each filtered contact)
         # Get unique rally_ids from filtered contacts
-        rally_ids = [contact[1] for contact in filtered_contacts]
+        rally_ids = [contact['rally_id'] for contact in filtered_contacts]
         rally_ids_str = ','.join(['%s'] * len(rally_ids))
         
         query_all = f"""
@@ -2596,8 +2605,8 @@ class ContactPathViewer(QMainWindow):
         # Create a lookup map: (rally_id, sequence_number) -> contact
         all_contacts_map = {}
         for contact in all_contacts:
-            rally_id = contact[1]
-            seq_num = contact[2]
+            rally_id = contact['rally_id']
+            seq_num = contact['sequence_number']
             all_contacts_map[(rally_id, seq_num)] = contact
         
         # Draw contacts and connecting lines
@@ -2709,7 +2718,7 @@ class ContactPathViewer(QMainWindow):
         if not self.db.conn:
             self.db.connect()
         
-        cursor = self.db.conn.cursor()
+        cursor = self.db.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         
         query = """
             SELECT 
@@ -2784,8 +2793,14 @@ class ContactPathViewer(QMainWindow):
         for row_idx, contact in enumerate(contacts):
             if row_idx < 3:  # Log first 3 rows
                 print(f"DEBUG: Processing row {row_idx}: {contact}")
-            (contact_id, timecode_ms, player_number, player_name, 
-             contact_type, outcome, rally_number, sequence_number) = contact
+            contact_id = contact['contact_id']
+            timecode_ms = contact['timecode']
+            player_number = contact['player_number']
+            player_name = contact['player_name']
+            contact_type = contact['contact_type']
+            outcome = contact['outcome']
+            rally_number = contact['rally_number']
+            sequence_number = contact['sequence_number']
             
             # Format timecode as HH:MM:SS.mmm
             timecode_str = self.format_timecode(timecode_ms) if timecode_ms is not None else "--:--:--.---"
@@ -2901,15 +2916,15 @@ class ContactPathViewer(QMainWindow):
         if not self.db.conn:
             self.db.connect()
         
-        cursor = self.db.conn.cursor()
+        cursor = self.db.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cursor.execute("SELECT video_file_path FROM games WHERE game_id = %s", (self.game_id,))
         result = cursor.fetchone()
         
-        if not result or not result[0]:
+        if not result or not result['video_file_path']:
             QMessageBox.warning(self, "No Video", "No video file associated with this game.")
             return
         
-        video_path = result[0]
+        video_path = result['video_file_path']
         
         # Check if video file exists
         if not Path(video_path).exists():
@@ -3009,15 +3024,15 @@ class ContactPathViewer(QMainWindow):
         if not self.db.conn:
             self.db.connect()
         
-        cursor = self.db.conn.cursor()
+        cursor = self.db.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cursor.execute("SELECT video_file_path FROM games WHERE game_id = %s", (self.game_id,))
         result = cursor.fetchone()
         
-        if not result or not result[0]:
+        if not result or not result['video_file_path']:
             QMessageBox.warning(self, "No Video", "No video file associated with this game.")
             return
         
-        video_path = result[0]
+        video_path = result['video_file_path']
         
         # Check if video file exists
         if not Path(video_path).exists():
@@ -3221,15 +3236,15 @@ class ContactPathViewer(QMainWindow):
         if not self.db.conn:
             self.db.connect()
         
-        cursor = self.db.conn.cursor()
+        cursor = self.db.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cursor.execute("SELECT video_file_path FROM games WHERE game_id = %s", (self.game_id,))
         result = cursor.fetchone()
         
-        if not result or not result[0]:
+        if not result or not result['video_file_path']:
             QMessageBox.warning(self, "No Video", "No video file associated with this game.")
             return
         
-        video_path = result[0]
+        video_path = result['video_file_path']
         
         # Check if video file exists
         if not Path(video_path).exists():
@@ -3315,8 +3330,8 @@ class ContactPathViewer(QMainWindow):
         # This helps us determine if a contact should be drawn as a dot
         filtered_contacts_set = set()
         for contact in filtered_contacts:
-            rally_id = contact[1]
-            seq_num = contact[2]
+            rally_id = contact['rally_id']
+            seq_num = contact['sequence_number']
             filtered_contacts_set.add((rally_id, seq_num))
         
         # Find min and max sequence numbers for each rally to identify first/last contacts
@@ -3337,8 +3352,21 @@ class ContactPathViewer(QMainWindow):
         scale_y = court_height / db_court_height  # 748/600 = 1.247 (was 1.467)
         
         for contact in filtered_contacts:
-            (contact_id, rally_id, seq_num, contact_type, x, y, 
-             rally_number, player_number, player_name, team_id, team_name, outcome, rating, timecode, player_id) = contact
+            contact_id = contact['contact_id']
+            rally_id = contact['rally_id']
+            seq_num = contact['sequence_number']
+            contact_type = contact['contact_type']
+            x = contact['x']
+            y = contact['y']
+            rally_number = contact['rally_number']
+            player_number = contact['player_number']
+            player_name = contact['player_name']
+            team_id = contact['team_id']
+            team_name = contact['team_name']
+            outcome = contact['outcome']
+            rating = contact['rating']
+            timecode = contact['timecode']
+            player_id = contact['player_id']
             
             # Check if this is a floor contact (ball hit the floor - has coordinates but no player)
             is_floor_contact = (player_number is None and player_name is None)
@@ -3439,9 +3467,21 @@ class ContactPathViewer(QMainWindow):
             
             if next_contact:
                 # Get next contact coordinates (even if it doesn't match the filter)
-                (next_contact_id, next_rally_id, next_seq_num, next_contact_type, 
-                 next_x, next_y, next_rally_number, next_player_number, 
-                 next_player_name, next_team_id, next_team_name, next_outcome, next_rating, next_timecode, next_player_id) = next_contact
+                next_contact_id = next_contact['contact_id']
+                next_rally_id = next_contact['rally_id']
+                next_seq_num = next_contact['sequence_number']
+                next_contact_type = next_contact['contact_type']
+                next_x = next_contact['x']
+                next_y = next_contact['y']
+                next_rally_number = next_contact['rally_number']
+                next_player_number = next_contact['player_number']
+                next_player_name = next_contact['player_name']
+                next_team_id = next_contact['team_id']
+                next_team_name = next_contact['team_name']
+                next_outcome = next_contact['outcome']
+                next_rating = next_contact['rating']
+                next_timecode = next_contact['timecode']
+                next_player_id = next_contact['player_id']
                 
                 # Scale and convert coordinates (same as above)
                 next_scaled_x = next_x * scale_x
@@ -3595,7 +3635,7 @@ class ContactPathViewer(QMainWindow):
             try:
                 if not self.db.conn:
                     self.db.connect()
-                cursor = self.db.conn.cursor()
+                cursor = self.db.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
                 # Count completed rallies (with point_winner_id) up to and including this rally
                 cursor.execute("""
                     SELECT point_winner_id, COUNT(*) 
@@ -3609,7 +3649,9 @@ class ContactPathViewer(QMainWindow):
                 
                 score_us = 0
                 score_them = 0
-                for point_winner_id, count in results:
+                for result in results:
+                    point_winner_id = result['point_winner_id']
+                    count = result['count']
                     if point_winner_id == self.team_us_id:
                         score_us = count
                     elif point_winner_id == self.team_them_id:

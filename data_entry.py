@@ -660,7 +660,7 @@ class DataEntryWindow(QMainWindow):
             return
         
         # Get court boundaries from database
-        court_boundaries = self.db.get_game_court_boundaries(self.game_id)
+        court_boundaries = self.db.games.get_game_court_boundaries(self.game_id)
         
         if court_boundaries:
             self.logger.debug(f"Loading court boundaries for game {self.game_id}")

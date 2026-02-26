@@ -620,8 +620,8 @@ def get_game_players(game_id):
         team_them_id = result['team_them_id']
         
         # Get players for both teams
-        players_us = db.get_game_players(game_id, team_us_id)
-        players_them = db.get_game_players(game_id, team_them_id)
+        players_us = db.game_players.get_game_players(game_id, team_us_id)
+        players_them = db.game_players.get_game_players(game_id, team_them_id)
         
         return jsonify({
             'team_us': [

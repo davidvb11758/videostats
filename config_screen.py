@@ -96,16 +96,16 @@ class ConfigScreen(QDialog):
             if not self.db.conn:
                 self.db.connect()
             
-            teams = self.db.get_all_teams()
+            teams = self.db.teams.get_all_teams()
             
             # Clear and populate both dropdowns
             self.ui.comboBoxOurTeam.clear()
             self.ui.comboBoxOpponent.clear()
             
             # Add teams to both dropdowns
-            for team_id, team_name in teams:
-                self.ui.comboBoxOurTeam.addItem(team_name, team_id)
-                self.ui.comboBoxOpponent.addItem(team_name, team_id)
+            for team in teams:
+                self.ui.comboBoxOurTeam.addItem(team['name'], team['team_id'])
+                self.ui.comboBoxOpponent.addItem(team['name'], team['team_id'])
             
         except Exception as e:
             QMessageBox.warning(self, "Warning", 

@@ -1,4 +1,5 @@
 import sys
+import psycopg2.extras
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QLabel, QComboBox, QListWidget, 
                              QTabWidget, QTableWidget, QTableWidgetItem, 
@@ -249,7 +250,7 @@ class StatsApp(QMainWindow):
     def load_teams(self):
         if not self.db.conn:
             self.db.connect()
-        cursor = self.db.conn.cursor()
+        # cursor = self.db.conn.cursor()
         teams = self.db.teams.get_all_teams()
         
         self.team_combo.clear()
@@ -271,22 +272,30 @@ class StatsApp(QMainWindow):
     def load_games(self, team_id):
         if not self.db.conn:
             self.db.connect()
-        cursor = self.db.conn.cursor()
+        # cursor = self.db.conn.cursor()
         games = self.db.games.get_all_games(team_id)
         
         self.game_list.clear()
         for game in games:
             from datetime import datetime
             try:
-                # Try parsing ISO format
-                if 'T' in game['game_date']:
-                    date_obj = datetime.fromisoformat(game['game_date'].replace(' ', 'T'))
+                game_date = game['game_date']
+                # Check if it's already a datetime object
+                if isinstance(game_date, datetime):
+                    date_str = game_date.strftime('%Y-%m-%d')
+                elif isinstance(game_date, str):
+                    # Try parsing ISO format
+                    if 'T' in game_date:
+                        date_obj = datetime.fromisoformat(game_date.replace(' ', 'T'))
+                    else:
+                        # Try parsing space-separated format
+                        date_obj = datetime.strptime(game_date, '%Y-%m-%d %H:%M:%S')
+                    date_str = date_obj.strftime('%Y-%m-%d')
                 else:
-                    # Try parsing space-separated format
-                    date_obj = datetime.strptime(game['game_date'], '%Y-%m-%d %H:%M:%S')
-                date_str = date_obj.strftime('%Y-%m-%d')
-            except:
-                date_str = game['game_date'][:10] if len(game['game_date']) >= 10 else game['game_date']
+                    date_str = str(game_date)[:10] if game_date else 'N/A'
+            except Exception as e:
+                # Fallback: try to convert to string
+                date_str = str(game['game_date'])[:10] if game['game_date'] else 'N/A'
             
             # Extract opponent alias from notes field
             notes = game['notes'] if game['notes'] is not None else ''
@@ -317,12 +326,12 @@ class StatsApp(QMainWindow):
         
         if not self.db.conn:
             self.db.connect()
-        cursor = self.db.conn.cursor()
+        cursor = self.db.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         
         # Get players and stats - ONLY for players on the selected team
         # Filter by team_id to ensure we only get players from the selected team
-        placeholders = ','.join('%s' * len(self.selected_game_ids))
-        query = f'''
+        placeholders = ','.join(['%s'] * len(self.selected_game_ids))
+        query = '''
             SELECT 
                 p.player_id,
                 p.player_number,
@@ -351,18 +360,19 @@ class StatsApp(QMainWindow):
                 ps.block_solo
             FROM players p
             LEFT JOIN player_stats ps ON p.player_id = ps.player_id 
-                AND ps.game_id IN ({placeholders})
+                AND ps.game_id IN (''' + placeholders + ''')
             WHERE p.team_id = %s
             ORDER BY CAST(p.player_number AS INTEGER), p.player_number
         '''
         
         # Execute query with selected game IDs and team ID
         # This ensures we only get players from the selected team
-        players = cursor.execute(query, self.selected_game_ids + [self.selected_team_id]).fetchall()
+        cursor.execute(query, self.selected_game_ids + [self.selected_team_id])
+        players = cursor.fetchall()
         
         # Calculate team totals - ONLY for players on the selected team
         # Filter by team_id to ensure totals only include stats from the selected team
-        totals_query = f'''
+        totals_query = '''
             SELECT 
                 SUM(ps.receive_attempts) as receive_attempts,
                 SUM(ps.receive_0) as receive_0,
@@ -392,12 +402,13 @@ class StatsApp(QMainWindow):
                 SUM(ps.block_solo) as block_solo
             FROM player_stats ps
             INNER JOIN players p ON ps.player_id = p.player_id
-            WHERE p.team_id = %s AND ps.game_id IN ({placeholders})
+            WHERE p.team_id = %s AND ps.game_id IN (''' + placeholders + ''')
         '''
         
         # Execute totals query with team ID and selected game IDs
         # This ensures totals only include stats from players on the selected team
-        totals = cursor.execute(totals_query, [self.selected_team_id] + self.selected_game_ids).fetchone()
+        cursor.execute(totals_query, [self.selected_team_id] + self.selected_game_ids)
+        totals = cursor.fetchone()
         
         # Aggregate stats by player
         # Note: All players in the result set are already filtered by team_id in the query

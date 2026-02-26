@@ -741,9 +741,11 @@ class HighlightCollectionManager(QMainWindow):
         # Get players from all selected games
         all_players = set()
         for game_id in self.selected_game_ids:
-            players = self.db.get_game_players(game_id, self.team_us_id)
+            players = self.db.game_players.get_game_players(game_id, self.team_us_id)
             for player in players:
-                player_id, player_number, player_name, team_id = player
+                player_id = player['player_id']
+                player_number = player['player_number']
+                player_name = player.get('name')
                 all_players.add((player_id, player_number, player_name))
         
         # Add "All Players" option (don't auto-select - user must choose)

@@ -57,11 +57,11 @@ class EditTeamDialog(QDialog):
     def populate_teams(self):
         """Populate team dropdown."""
         try:
-            teams = self.db.get_all_teams()
+            teams = self.db.teams.get_all_teams()
             self.team_combo.clear()
             self.team_combo.addItem("-- Select Team --", None)
-            for team_id, team_name in teams:
-                self.team_combo.addItem(team_name, team_id)
+            for team in teams:
+                self.team_combo.addItem(team['name'], team['team_id'])
         except Exception as e:
             QMessageBox.warning(self, "Error", f"Failed to load teams: {str(e)}")
     

@@ -412,7 +412,8 @@ class GameQueries:
         cursor.execute("""
             SELECT g.game_id, g.game_date, 
                    t1.name as team_us_name, t2.name as team_them_name,
-                   g.team_us_id, g.team_them_id
+                   g.team_us_id, g.team_them_id,
+                   g.video_file_path, g.notes, g.is_ended
             FROM games g
             INNER JOIN teams t1 ON g.team_us_id = t1.team_id
             INNER JOIN teams t2 ON g.team_them_id = t2.team_id
