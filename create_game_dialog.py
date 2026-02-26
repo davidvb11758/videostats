@@ -687,7 +687,7 @@ class CreateGameDialog(QDialog):
                         player_id = player_data.get('player_id')
                         if player_id:
                             # Get game_role_code from game_players
-                            game_role = self.db.game_players.get_game_role_code(
+                            game_role = self.db.game_players.get_player_game_role(
                                 self.game_id, team_us_id, player_id
                             )
                             if game_role:

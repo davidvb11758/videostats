@@ -721,6 +721,12 @@ class CoordinateMapper(QMainWindow):
             result = cursor.fetchone()
             return result['count'] > 0 if result else False
         except Exception as e:
+            # Rollback so connection is not left in aborted state (avoids "commands ignored until end of transaction block")
+            try:
+                if self.db and self.db.conn:
+                    self.db.conn.rollback()
+            except Exception:
+                pass
             print(f"Error checking for events to undo: {e}")
             return False
     
@@ -1335,7 +1341,7 @@ class CoordinateMapper(QMainWindow):
     
     def update_point_position(self, index, x, y):
         """Update the position of a corner point."""
-        self.corner_points[index] = [x, y]
+        self.corner_points[index] = [float(x), float(y)]
         # Recompute homography if we have all 10 points
         if len(self.corner_points) >= 10:
             self._compute_homography()
@@ -1386,15 +1392,15 @@ class CoordinateMapper(QMainWindow):
         # Position the moving point
         new_point = fixed_point + new_line_length * line_unitvec
         
-        # Update the corner point
-        self.corner_points[self.dragging_line_point] = [new_point[0], new_point[1]]
+        # Update the corner point (coerce to native float so no numpy in stored points)
+        self.corner_points[self.dragging_line_point] = [float(new_point[0]), float(new_point[1])]
         self._redraw_plane()
     
     def on_click(self, x, y):
         """Handle a click at the given scene coordinates."""
         if len(self.corner_points) < 10 and self.mode == 'setup':
-            # Still defining the corners and midpoints
-            self.corner_points.append([x, y])
+            # Still defining the corners and midpoints (coerce to native float)
+            self.corner_points.append([float(x), float(y)])
             
             # Draw a circle at the point
             radius = 5
@@ -1612,7 +1618,9 @@ class CoordinateMapper(QMainWindow):
                 #     f"Latest point: [{logical_coords[0]:.2f}, {logical_coords[1]:.2f}]"
                 # )
                 
-                self.mapped_points.append([x, y, logical_coords[0], logical_coords[1]])
+                # Coerce to native float so no numpy reaches data_entry or DB
+                lx, ly = float(logical_coords[0]), float(logical_coords[1])
+                self.mapped_points.append([x, y, lx, ly])
                 
                 # Get current video timecode in milliseconds
                 timecode_ms = self.media_player.position()
@@ -1623,7 +1631,7 @@ class CoordinateMapper(QMainWindow):
                     parent = self.parent()
                     if (parent and hasattr(parent, 'rally_in_progress') and parent.rally_in_progress and
                         hasattr(parent, 'team_us_id') and parent.team_us_id and
-                        logical_coords[1] <= 300):
+                        ly <= 300):
                         # Add incomplete contact to pending_contacts queue
                         if hasattr(parent, 'pending_contacts'):
                             parent.pending_contacts.append({
@@ -1631,23 +1639,23 @@ class CoordinateMapper(QMainWindow):
                                 'player_id': None,
                                 'player_number': None,
                                 'contact_type': None,
-                                'x': logical_coords[0],
-                                'y': logical_coords[1],
+                                'x': lx,
+                                'y': ly,
                                 'timecode_ms': timecode_ms,
                                 'is_complete': False
                             })
                             self.message_display.setText(f"Location captured ({len([c for c in parent.pending_contacts if not c['is_complete']])} pending). Speak: [player number] [action]")
                         else:
                             # Fallback to old voice_input_queue if pending_contacts not available
-                            self.voice_input_queue.append((logical_coords[0], logical_coords[1], timecode_ms))
+                            self.voice_input_queue.append((lx, ly, timecode_ms))
                             self.message_display.setText(f"Location captured ({len(self.voice_input_queue)} pending). Speak: [player number] [action]")
                     else:
                         # Not team_us or no rally in progress, use old queue
-                        self.voice_input_queue.append((logical_coords[0], logical_coords[1], timecode_ms))
+                        self.voice_input_queue.append((lx, ly, timecode_ms))
                         self.message_display.setText(f"Location captured ({len(self.voice_input_queue)} pending). Speak: [player number] [action]")
                 
                 # Emit signal with mapped coordinates and timecode
-                self.coordinate_mapped.emit(logical_coords[0], logical_coords[1], x, y, timecode_ms)
+                self.coordinate_mapped.emit(lx, ly, x, y, timecode_ms)
                 
                 # Update undo button state after coordinates are mapped
                 # Use QTimer with delay to allow contact recording to complete in data_entry
@@ -2107,8 +2115,8 @@ class CoordinateMapper(QMainWindow):
         
         replaced_player_id, original_position = result
         
-        # Get the current position(s) where libero is on court
-        current_positions = [pos[0] for pos in libero_positions]
+        # libero_positions is already a list of position numbers (ints)
+        current_positions = libero_positions
         
         # If libero is in multiple positions, use the position from the most recent libero_actions record
         # Otherwise, use the single position where libero is
@@ -2465,8 +2473,9 @@ class CoordinateMapper(QMainWindow):
             # Get current video timecode in milliseconds
             timecode_ms = self.media_player.position()
             
-            # Emit double-click signal
-            self.double_click_mapped.emit(logical_coords[0], logical_coords[1], x, y, timecode_ms)
+            # Emit double-click signal (coerce to native float)
+            lx, ly = float(logical_coords[0]), float(logical_coords[1])
+            self.double_click_mapped.emit(lx, ly, x, y, timecode_ms)
             
             # Update undo button state after a short delay (to allow contact to be recorded)
             QTimer.singleShot(1000, self._update_undo_button_state)

@@ -227,7 +227,7 @@ class LineupManager:
                 cursor.execute("""
                     INSERT INTO active_lineup (game_id, team_id, position_number, player_id, role_code, is_server, placed_at)
                     VALUES (%s, %s, %s, %s, %s, %s, %s)
-                """, (game_id, team_id, pos, player_id, role, 1 if is_server else 0, now))
+                """, (game_id, team_id, pos, player_id, role, is_server, now))
                 
                 # Mark player as active
                 self._update_player_active(player_id, True)
@@ -240,10 +240,16 @@ class LineupManager:
             term_start = now if serving else None
             
             cursor.execute("""
-                INSERT OR REPLACE INTO rotation_state 
+                INSERT INTO rotation_state 
                 (game_id, team_id, rotation_order, rotation_index, serving, term_of_service_start)
                 VALUES (%s, %s, %s, %s, %s, %s)
-            """, (game_id, team_id, rotation_order_json, 0, 1 if serving else 0, term_start))
+                ON CONFLICT (team_id)
+                DO UPDATE SET game_id = EXCLUDED.game_id,
+                              rotation_order = EXCLUDED.rotation_order,
+                              rotation_index = EXCLUDED.rotation_index,
+                              serving = EXCLUDED.serving,
+                              term_of_service_start = EXCLUDED.term_of_service_start
+            """, (game_id, team_id, rotation_order_json, 0, serving, term_start))
             
             # Run role adjustment check
             self.role_adjustment_check(game_id, team_id)
@@ -307,7 +313,7 @@ class LineupManager:
                     INSERT INTO active_lineup 
                     (game_id, team_id, position_number, player_id, role_code, is_server, placed_at)
                     VALUES (%s, %s, %s, %s, %s, %s, %s)
-                """, (game_id, team_id, new_pos, entry.player_id, entry.role_code, 1 if is_server else 0, now))
+                """, (game_id, team_id, new_pos, entry.player_id, entry.role_code, is_server, now))
             
             # Update rotation_index
             new_rotation_index = (rotation_state.rotation_index + 1) % 6
@@ -363,14 +369,14 @@ class LineupManager:
         # Set is_server for position 1
         cursor.execute("""
             UPDATE active_lineup
-            SET is_server = 1
+            SET is_server = TRUE
             WHERE game_id = %s AND team_id = %s AND position_number = 1
         """, (game_id, team_id))
         
         # Clear is_server for other positions
         cursor.execute("""
             UPDATE active_lineup
-            SET is_server = 0
+            SET is_server = FALSE
             WHERE game_id = %s AND team_id = %s AND position_number != 1
         """, (game_id, team_id))
         
@@ -379,7 +385,7 @@ class LineupManager:
             now = datetime.now(timezone.utc)
             cursor.execute("""
                 UPDATE rotation_state
-                SET serving = 1, term_of_service_start = %s
+                SET serving = TRUE, term_of_service_start = %s
                 WHERE game_id = %s AND team_id = %s
             """, (now, game_id, team_id))
         
@@ -706,7 +712,7 @@ class LineupManager:
                 placeholders = ','.join('%s' * len(current_active_players))
                 cursor.execute(f"""
                     UPDATE players 
-                    SET is_active = 0 
+                    SET is_active = FALSE 
                     WHERE player_id IN ({placeholders})
                 """, current_active_players)
             
@@ -724,7 +730,7 @@ class LineupManager:
                 cursor.execute("""
                     INSERT INTO active_lineup (game_id, team_id, position_number, player_id, role_code, is_server, placed_at)
                     VALUES (%s, %s, %s, %s, %s, %s, %s)
-                """, (game_id, team_id, int(pos), player_id, role_code, 1 if is_server else 0, now))
+                """, (game_id, team_id, int(pos), player_id, role_code, is_server, now))
                 
                 # Mark player as active
                 self._update_player_active(player_id, True)
@@ -736,10 +742,16 @@ class LineupManager:
             term_start = now if serving else None
             
             cursor.execute("""
-                INSERT OR REPLACE INTO rotation_state 
+                INSERT INTO rotation_state 
                 (game_id, team_id, rotation_order, rotation_index, serving, term_of_service_start)
                 VALUES (%s, %s, %s, %s, %s, %s)
-            """, (game_id, team_id, rotation_order_json, 0, 1 if serving else 0, term_start))
+                ON CONFLICT (team_id)
+                DO UPDATE SET game_id = EXCLUDED.game_id,
+                              rotation_order = EXCLUDED.rotation_order,
+                              rotation_index = EXCLUDED.rotation_index,
+                              serving = EXCLUDED.serving,
+                              term_of_service_start = EXCLUDED.term_of_service_start
+            """, (game_id, team_id, rotation_order_json, 0, serving, term_start))
             
             # Delete all substitutions for this game
             cursor.execute("DELETE FROM substitutions WHERE game_id = %s", (game_id,))
@@ -773,7 +785,7 @@ class LineupManager:
         # Mark all players from this team as inactive first
         cursor.execute("""
             UPDATE players 
-            SET is_active = 0 
+            SET is_active = FALSE 
             WHERE team_id = %s
         """, (team_id,))
         
@@ -788,7 +800,7 @@ class LineupManager:
             cursor.execute("""
                 INSERT INTO active_lineup (game_id, team_id, position_number, player_id, role_code, is_server, placed_at)
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
-            """, (game_id, team_id, pos, player_id, role_code, 1 if is_server else 0, now))
+            """, (game_id, team_id, pos, player_id, role_code, is_server, now))
             
             # Mark player as active
             self._update_player_active(player_id, True)
@@ -818,10 +830,16 @@ class LineupManager:
         rotation_order_json = json.dumps(rotation_order)
         
         cursor.execute("""
-            INSERT OR REPLACE INTO rotation_state 
+            INSERT INTO rotation_state 
             (game_id, team_id, rotation_order, rotation_index, serving, term_of_service_start)
             VALUES (%s, %s, %s, %s, %s, %s)
-        """, (game_id, team_id, rotation_order_json, rotation_index, 1 if serving else 0, term_start))
+            ON CONFLICT (team_id)
+            DO UPDATE SET game_id = EXCLUDED.game_id,
+                          rotation_order = EXCLUDED.rotation_order,
+                          rotation_index = EXCLUDED.rotation_index,
+                          serving = EXCLUDED.serving,
+                          term_of_service_start = EXCLUDED.term_of_service_start
+        """, (game_id, team_id, rotation_order_json, rotation_index, serving, term_start))
     
     def _delete_substitution(self, substitution_id: int):
         """Delete a substitution record.

@@ -236,6 +236,12 @@ class GameQueries:
             court_points: Dictionary with keys like 'corner_tl', 'corner_tr', etc.
             homography_matrix: Optional numpy array (3x3) representing the homography matrix
         """
+        def _py_float(v):
+            return float(v) if v is not None else None
+
+        def _py_int(v):
+            return int(v) if v is not None else None
+
         cursor = self.conn.cursor()
         
         # Get scroll offsets (default to 0 if not provided)
@@ -273,33 +279,58 @@ class GameQueries:
             homography_list = homography_matrix.tolist()
             homography_json = json.dumps(homography_list)
         
-        cursor.execute("""
-            UPDATE games SET
-                court_corner_tl_x = %s, court_corner_tl_y = %s,
-                court_corner_tr_x = %s, court_corner_tr_y = %s,
-                court_corner_bl_x = %s, court_corner_bl_y = %s,
-                court_corner_br_x = %s, court_corner_br_y = %s,
-                court_centerline_top_x = %s, court_centerline_top_y = %s,
-                court_centerline_bottom_x = %s, court_centerline_bottom_y = %s,
-                court_y200_left_x = %s, court_y200_left_y = %s,
-                court_y200_right_x = %s, court_y200_right_y = %s,
-                court_y400_left_x = %s, court_y400_left_y = %s,
-                court_y400_right_x = %s, court_y400_right_y = %s,
-                homography_matrix = %s,
-                scroll_offset_x = %s,
-                scroll_offset_y = %s,
-                video_offset_x = %s,
-                video_offset_y = %s,
-                video_width = %s,
-                video_height = %s,
-                scene_width = %s,
-                scene_height = %s
-            WHERE game_id = %s
-        """, (tl_x, tl_y, tr_x, tr_y, bl_x, bl_y, br_x, br_y, ct_x, ct_y, cb_x, cb_y,
-              y200l_x, y200l_y, y200r_x, y200r_y, y400l_x, y400l_y, y400r_x, y400r_y,
-              homography_json, scroll_offset_x, scroll_offset_y, video_offset_x, video_offset_y,
-              video_width, video_height, scene_width, scene_height, game_id))
-        self.conn.commit()
+        # Coerce all numerics to native Python types for psycopg2 (avoid numpy "schema np" error)
+        tl_x, tl_y = _py_float(tl_x), _py_float(tl_y)
+        tr_x, tr_y = _py_float(tr_x), _py_float(tr_y)
+        bl_x, bl_y = _py_float(bl_x), _py_float(bl_y)
+        br_x, br_y = _py_float(br_x), _py_float(br_y)
+        ct_x, ct_y = _py_float(ct_x), _py_float(ct_y)
+        cb_x, cb_y = _py_float(cb_x), _py_float(cb_y)
+        y200l_x, y200l_y = _py_float(y200l_x), _py_float(y200l_y)
+        y200r_x, y200r_y = _py_float(y200r_x), _py_float(y200r_y)
+        y400l_x, y400l_y = _py_float(y400l_x), _py_float(y400l_y)
+        y400r_x, y400r_y = _py_float(y400r_x), _py_float(y400r_y)
+        scroll_offset_x = _py_int(scroll_offset_x)
+        scroll_offset_y = _py_int(scroll_offset_y)
+        video_offset_x = _py_int(video_offset_x)
+        video_offset_y = _py_int(video_offset_y)
+        video_width = _py_float(video_width)
+        video_height = _py_float(video_height)
+        scene_width = _py_float(scene_width)
+        scene_height = _py_float(scene_height)
+        game_id = int(game_id)
+        
+        try:
+            cursor.execute("""
+                UPDATE games SET
+                    court_corner_tl_x = %s, court_corner_tl_y = %s,
+                    court_corner_tr_x = %s, court_corner_tr_y = %s,
+                    court_corner_bl_x = %s, court_corner_bl_y = %s,
+                    court_corner_br_x = %s, court_corner_br_y = %s,
+                    court_centerline_top_x = %s, court_centerline_top_y = %s,
+                    court_centerline_bottom_x = %s, court_centerline_bottom_y = %s,
+                    court_y200_left_x = %s, court_y200_left_y = %s,
+                    court_y200_right_x = %s, court_y200_right_y = %s,
+                    court_y400_left_x = %s, court_y400_left_y = %s,
+                    court_y400_right_x = %s, court_y400_right_y = %s,
+                    homography_matrix = %s,
+                    scroll_offset_x = %s,
+                    scroll_offset_y = %s,
+                    video_offset_x = %s,
+                    video_offset_y = %s,
+                    video_width = %s,
+                    video_height = %s,
+                    scene_width = %s,
+                    scene_height = %s
+                WHERE game_id = %s
+            """, (tl_x, tl_y, tr_x, tr_y, bl_x, bl_y, br_x, br_y, ct_x, ct_y, cb_x, cb_y,
+                  y200l_x, y200l_y, y200r_x, y200r_y, y400l_x, y400l_y, y400r_x, y400r_y,
+                  homography_json, scroll_offset_x, scroll_offset_y, video_offset_x, video_offset_y,
+                  video_width, video_height, scene_width, scene_height, game_id))
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
     
     def get_game_court_boundaries(self, game_id: int) -> Optional[dict]:
         """
@@ -452,7 +483,7 @@ class GameQueries:
                 return {
                     'contacts': 0, 'rallies': 0, 'game_players': 0,
                     'player_stats': 0, 'substitutions': 0, 'libero_actions': 0,
-                    'active_lineup': 0, 'rotation_state': 0, 'game': 0
+                    'active_lineup': 0, 'rotation_state': 0, 'events': 0, 'game': 0
                 }
             
             deleted_counts = {}
@@ -484,6 +515,9 @@ class GameQueries:
             
             cursor.execute("DELETE FROM rotation_state WHERE game_id = %s", (game_id,))
             deleted_counts['rotation_state'] = cursor.rowcount
+            
+            cursor.execute("DELETE FROM events WHERE game_id = %s", (game_id,))
+            deleted_counts['events'] = cursor.rowcount
             
             cursor.execute("DELETE FROM games WHERE game_id = %s", (game_id,))
             deleted_counts['game'] = cursor.rowcount

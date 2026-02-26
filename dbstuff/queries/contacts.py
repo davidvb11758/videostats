@@ -40,6 +40,9 @@ class ContactQueries:
         Returns:
             contact_id of the newly created contact
         """
+        # Coerce x, y to native int so numpy types never reach psycopg2
+        x = int(x) if x is not None else None
+        y = int(y) if y is not None else None
         cursor = self.conn.cursor()
         cursor.execute(
             """INSERT INTO contacts (rally_id, sequence_number, contact_type, team_id, 
@@ -129,6 +132,8 @@ class ContactQueries:
             x: New x coordinate
             y: New y coordinate
         """
+        # Coerce to native int so numpy types never reach psycopg2
+        x, y = int(x), int(y)
         cursor = self.conn.cursor()
         cursor.execute(
             "UPDATE contacts SET x = %s, y = %s WHERE rally_id = %s AND sequence_number = %s",

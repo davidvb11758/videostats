@@ -212,7 +212,7 @@ def create_game_from_87():
                 UPDATE active_lineup
                 SET is_server = %s
                 WHERE game_id = %s AND team_id = %s AND position_number = %s
-            """, (1 if is_server else 0, new_game_id, template_team_us_id, position))
+            """, (is_server, new_game_id, template_team_us_id, position))
         
         # 11. Update rotation_state to match template exactly
         print(f"  Updating rotation_state...")

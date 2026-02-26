@@ -147,6 +147,9 @@ class DataEntryWindow(QMainWindow):
     
     def on_coordinate_mapped(self, logical_x, logical_y, pixel_x, pixel_y, timecode_ms):
         """Handle coordinate mapping from coordinate_mapper."""
+        # Coerce to native float so no numpy in storage/payloads/DB
+        logical_x = float(logical_x) if logical_x is not None else None
+        logical_y = float(logical_y) if logical_y is not None else None
         # Always store coordinates when mapper emits them (if mapper is configured)
         if self.coordinate_mapper and self.coordinate_mapper.is_configured():
             # Store the logical coordinates (these are the perspective-corrected coordinates)
@@ -376,6 +379,9 @@ class DataEntryWindow(QMainWindow):
             losing_team_id = self.team_them_id
             self.logger.debug(f"on_double_click_mapped - DOWN contact at x={logical_x}, y={logical_y}, timecode={timecode_ms}ms (opponent side)")
         
+        # Coerce to native float so no numpy in storage/payloads/DB
+        logical_x = float(logical_x) if logical_x is not None else None
+        logical_y = float(logical_y) if logical_y is not None else None
         # Store the coordinates and timecode
         self.last_clicked_x = logical_x
         self.last_clicked_y = logical_y
@@ -477,7 +483,12 @@ class DataEntryWindow(QMainWindow):
         self.ui.comboBox.addItem("-- Select a Game --", None)
         
         for game in games:
-            game_id, game_date, team_us_name, team_them_name, team_us_id, team_them_id = game
+            game_id = game['game_id']
+            game_date = game['game_date']
+            team_us_name = game['team_us_name']
+            team_them_name = game['team_them_name']
+            team_us_id = game['team_us_id']
+            team_them_id = game['team_them_id']
             # Format display text
             display_text = f"Game {game_id}: {team_us_name} vs {team_them_name} ({game_date})"
             self.ui.comboBox.addItem(display_text)
@@ -2193,8 +2204,8 @@ class DataEntryWindow(QMainWindow):
                         for i, contact in enumerate(self.pending_contacts):
                             if (not contact.get('is_complete', True) and 
                                 contact.get('team_id') == team_id and
-                                abs(contact.get('x', 0) - x_coord) < 0.01 and
-                                abs(contact.get('y', 0) - y_coord) < 0.01):
+                                abs(float(contact.get('x', 0)) - float(x_coord)) < 0.01 and
+                                abs(float(contact.get('y', 0)) - float(y_coord)) < 0.01):
                                 self.pending_contacts.pop(i)
                                 removed = True
                                 self.logger.debug(f"Removed pending contact at index {i}")
@@ -2398,8 +2409,8 @@ class DataEntryWindow(QMainWindow):
                         for i, contact in enumerate(self.pending_contacts):
                             if (not contact.get('is_complete', True) and 
                                 contact.get('team_id') == team_id and
-                                abs(contact.get('x', 0) - x_coord) < 0.01 and
-                                abs(contact.get('y', 0) - y_coord) < 0.01):
+                                abs(float(contact.get('x', 0)) - float(x_coord)) < 0.01 and
+                                abs(float(contact.get('y', 0)) - float(y_coord)) < 0.01):
                                 self.pending_contacts.pop(i)
                                 removed = True
                                 self.logger.debug(f"Removed pending contact at index {i}")

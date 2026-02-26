@@ -80,7 +80,7 @@ class LineupQueries:
             SELECT al.player_id, COALESCE(p.jersey, p.player_number) as player_number, p.name
             FROM active_lineup al
             INNER JOIN players p ON al.player_id = p.player_id
-            WHERE al.game_id = %s AND al.team_id = %s AND al.is_server = 1
+            WHERE al.game_id = %s AND al.team_id = %s AND al.is_server = TRUE
             LIMIT 1
         """, (game_id, team_id))
         return cursor.fetchone()
@@ -142,7 +142,7 @@ class LineupQueries:
             UPDATE active_lineup
             SET is_server = %s
             WHERE game_id = %s AND team_id = %s AND position_number = %s
-        """, (1 if is_server else 0, game_id, team_id, position_number))
+        """, (is_server, game_id, team_id, position_number))
         self.conn.commit()
     
     def clear_lineup(self, game_id: int, team_id: int):
