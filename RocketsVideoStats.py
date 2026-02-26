@@ -367,7 +367,7 @@ class RocketsVideoStatsWindow(QMainWindow):
             return
         
         # Check if game is ended
-        if self.db.is_game_ended(game_id):
+        if self.db.games.is_game_ended(game_id):
             QMessageBox.warning(
                 self,
                 "Game Ended",
@@ -661,7 +661,7 @@ class RocketsVideoStatsWindow(QMainWindow):
             return
         
         # Check if game is already ended
-        if self.db.is_game_ended(game_id):
+        if self.db.games.is_game_ended(game_id):
             QMessageBox.information(
                 self,
                 "Game Already Ended",
@@ -703,7 +703,7 @@ class RocketsVideoStatsWindow(QMainWindow):
         if reply == QMessageBox.StandardButton.Yes:
             try:
                 # Mark game as ended
-                self.db.mark_game_ended(game_id)
+                self.db.games.mark_game_ended(game_id)
                 
                 # Automatically run reprocess stats
                 # Step 1: Reprocess outcomes

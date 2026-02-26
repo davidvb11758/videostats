@@ -336,7 +336,7 @@ class AddPlayersDialog(QDialog):
                 
                 # Remove from game roster (not from players table)
                 team_id = self.team_us_id if team_type == "our" else self.team_them_id
-                self.db.remove_player_from_game(self.game_id, team_id, player_id)
+                self.db.game_players.remove_player_from_game(self.game_id, team_id, player_id)
                 
                 # Refresh the table
                 self.load_team_players(team_id, table)

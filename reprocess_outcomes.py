@@ -74,7 +74,7 @@ def assign_rally_outcomes(db, rally_id: int, point_winner_id: int, team_us_id: i
         losing_outcome_manual = last_losing_team_contact.get('outcome_manual', 0)
         # Only update if outcome is not manually set
         if losing_outcome_manual == 0:
-            db.update_contact_outcome(losing_contact_id, 'error')
+            db.contacts.update_contact_outcome(losing_contact_id, 'error')
     
     # Process the last contact by the winning team
     if last_winning_team_contact:
@@ -92,19 +92,19 @@ def assign_rally_outcomes(db, rally_id: int, point_winner_id: int, team_us_id: i
             if opponent_contacts_after_serve <= 1:
                 # Only update if outcome is not manually set
                 if winning_outcome_manual == 0:
-                    db.update_contact_outcome(contact_id, 'ace')
+                    db.contacts.update_contact_outcome(contact_id, 'ace')
         
         # Check if it's an attack (could be a kill)
         elif contact_type == 'attack':
             # Only update if outcome is not manually set
             if winning_outcome_manual == 0:
-                db.update_contact_outcome(contact_id, 'kill')
+                db.contacts.update_contact_outcome(contact_id, 'kill')
         
         # Check if it's a block (could be a stuff)
         elif contact_type == 'block':
             # Only update if outcome is not manually set
             if winning_outcome_manual == 0:
-                db.update_contact_outcome(contact_id, 'stuff')
+                db.contacts.update_contact_outcome(contact_id, 'stuff')
     
     # Additional rules: Set outcomes for prior contacts based on subsequent errors
     # Refresh contacts to get updated outcomes - ensure we have the latest data
@@ -141,7 +141,7 @@ def assign_rally_outcomes(db, rally_id: int, point_winner_id: int, team_us_id: i
                 if prior_contact_type == 'serve' and prior_contact_team_id == point_winner_id:
                     # Only update if outcome is not manually set
                     if prior_outcome_manual == 0:
-                        db.update_contact_outcome(prior_contact_id, 'ace')
+                        db.contacts.update_contact_outcome(prior_contact_id, 'ace')
                     break
         
         # Rule 2: If this is a pass with error, find prior attack/freeball/block and mark it as kill
@@ -157,7 +157,7 @@ def assign_rally_outcomes(db, rally_id: int, point_winner_id: int, team_us_id: i
                 if prior_contact_type in ['attack', 'freeball', 'block'] and prior_contact_team_id == point_winner_id:
                     # Only update if outcome is not manually set
                     if prior_outcome_manual == 0:
-                        db.update_contact_outcome(prior_contact_id, 'kill')
+                        db.contacts.update_contact_outcome(prior_contact_id, 'kill')
                     break
         
         # Rule 3: If this is a block with stuff outcome, mark prior contact as error
@@ -175,7 +175,7 @@ def assign_rally_outcomes(db, rally_id: int, point_winner_id: int, team_us_id: i
                 # Only update if outcome is not manually set
                 if prior_outcome_manual == 0:
                     # Mark the prior contact as error
-                    db.update_contact_outcome(prior_contact_id, 'error')
+                    db.contacts.update_contact_outcome(prior_contact_id, 'error')
                 break
         
         # Rule 4: If this is a set, check if next contact by same team is attack/freeball with kill outcome
@@ -203,7 +203,7 @@ def assign_rally_outcomes(db, rally_id: int, point_winner_id: int, team_us_id: i
                 if next_contact_team_id == set_team_id:
                     if next_contact_type in ['attack', 'freeball'] and next_contact_outcome == 'kill':
                         # Mark the set as assist
-                        db.update_contact_outcome(set_contact_id, 'assist')
+                        db.contacts.update_contact_outcome(set_contact_id, 'assist')
                         break
                 else:
                     # Different team contacted the ball, stop looking

@@ -191,7 +191,10 @@ class CreateGameDialog(QDialog):
                 added_player_ids = set()
                 player_combo.blockSignals(True)
                 for player in players:
-                    player_id, name, jersey, player_number = player
+                    player_id = player['player_id']
+                    name = player['name']
+                    jersey = player['jersey']
+                    player_number = player['player_number']
                     # Skip if already added (safety check)
                     if player_id in added_player_ids:
                         continue
@@ -213,7 +216,10 @@ class CreateGameDialog(QDialog):
             added_libero_ids = set()
             self.libero_combo.blockSignals(True)
             for player in players:
-                player_id, name, jersey, player_number = player
+                player_id = player['player_id']
+                name = player['name']
+                jersey = player['jersey']
+                player_number = player['player_number']
                 # Skip if already added (safety check)
                 if player_id in added_libero_ids:
                     continue
@@ -265,7 +271,10 @@ class CreateGameDialog(QDialog):
             players = self.db.players.get_team_players_with_jersey(team_id)
             
             for player in players:
-                player_id, name, jersey, player_number = player
+                player_id = player['player_id']
+                name = player['name']
+                jersey = player['jersey']
+                player_number = player['player_number']
                 # Skip if player is in starting lineup
                 if player_id in lineup_player_ids:
                     continue
@@ -350,7 +359,10 @@ class CreateGameDialog(QDialog):
                 player_combo.addItem("-- Select Player --", None)
                 
                 for player in players:
-                    player_id, name, jersey, player_number = player
+                    player_id = player['player_id']
+                    name = player['name']
+                    jersey = player['jersey']
+                    player_number = player['player_number']
                     
                     # Skip if this is the libero
                     if libero_id and player_id == libero_id:
@@ -429,7 +441,10 @@ class CreateGameDialog(QDialog):
             # Filter to non-starter players (exclude starting lineup and libero)
             non_starter_players = []
             for player in all_players:
-                player_id, name, jersey, player_number = player
+                player_id = player['player_id']
+                name = player['name']
+                jersey = player['jersey']
+                player_number = player['player_number']
                 # Skip if in starting lineup or is libero
                 if player_id in starting_player_ids or player_id == libero_id:
                     continue
@@ -440,7 +455,10 @@ class CreateGameDialog(QDialog):
             
             # Create widgets for each non-starter player
             for row, player in enumerate(non_starter_players):
-                player_id, name, jersey, player_number = player
+                player_id = player['player_id']
+                name = player['name']
+                jersey = player['jersey']
+                player_number = player['player_number']
                 player_name = name or 'Unknown'
                 jersey_number = jersey or player_number
                 
@@ -597,7 +615,7 @@ class CreateGameDialog(QDialog):
         
         try:
             # Create game
-            self.game_id = self.db.start_game(team_us_id, team_them_id, game_date=game_date)
+            self.game_id = self.db.games.start_game(team_us_id, team_them_id, game_date=game_date)
             
             # Update game with opponent alias in notes field
             if opponent_alias != "Opp1":
@@ -695,7 +713,7 @@ class CreateGameDialog(QDialog):
             if team_them_id == default_opponent_team_id:
                 for player_id in default_opponent_player_ids:
                     try:
-                        self.db.add_player_to_game(self.game_id, team_them_id, player_id)
+                        self.db.game_players.add_player_to_game(self.game_id, team_them_id, player_id)
                     except Exception as e:
                         # Player might already be in game or not exist - log but continue
                         print(f"Warning: Could not add player {player_id} to game: {e}")

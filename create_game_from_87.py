@@ -146,7 +146,7 @@ def create_game_from_87():
         
         # 5. Create new game
         print(f"\nCreating new game...")
-        new_game_id = db.start_game(template_team_us_id, template_team_them_id, template_notes)
+        new_game_id = db.games.start_game(template_team_us_id, template_team_them_id, template_notes)
         print(f"  New game_id: {new_game_id}")
         
         # 6. Copy court boundaries, video paths, offsets, and dimensions
@@ -187,7 +187,7 @@ def create_game_from_87():
         # 7. Copy game_players (including game_role_code)
         print(f"  Copying game_players...")
         for team_id, player_id, game_role_code in template_game_players:
-            db.add_player_to_game(new_game_id, team_id, player_id, game_role_code)
+            db.game_players.add_player_to_game(new_game_id, team_id, player_id, game_role_code)
         print(f"    Added {len(template_game_players)} players to game")
         
         # 8. Initialize lineup using LineupManager

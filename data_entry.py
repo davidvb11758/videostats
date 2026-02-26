@@ -216,7 +216,7 @@ class DataEntryWindow(QMainWindow):
                         # Get player_id for the opponent player
                         if not self.db.conn:
                             self.db.connect()
-                        player = self.db.get_player_by_number_for_game(self.game_id, self.team_them_id, opponent_player_number)
+                        player = self.db.game_players.get_player_by_number_for_game(self.game_id, self.team_them_id, opponent_player_number)
                         player_id = player['player_id'] if player else None
                         if not player:
                             print(f"Warning: Opponent player {opponent_player_number} not found in game")
@@ -355,7 +355,7 @@ class DataEntryWindow(QMainWindow):
                 self.db.connect()
             
             self.logger.debug(f"Creating rally for DOWN contact - game_id={self.game_id}, rally_number={self.current_rally_number}, serving_team_id={serving_team_id}")
-            self.current_rally_id = self.db.start_rally(
+            self.current_rally_id = self.db.rallies.start_rally(
                 game_id=self.game_id,
                 rally_number=self.current_rally_number,
                 serving_team_id=serving_team_id
@@ -644,7 +644,7 @@ class DataEntryWindow(QMainWindow):
             return
         
         # Get video path from database
-        video_path = self.db.get_game_video_path(self.game_id)
+        video_path = self.db.games.get_game_video_path(self.game_id)
         
         if video_path:
             self.logger.debug(f"Loading video for game {self.game_id}: {video_path}")
@@ -2687,7 +2687,7 @@ class DataEntryWindow(QMainWindow):
             # Get player_id from database for opponent player (always use game_players for opponents)
             if not self.db.conn:
                 self.db.connect()
-            player = self.db.get_player_by_number_for_game(self.game_id, self.team_them_id, opponent_player_number)
+            player = self.db.game_players.get_player_by_number_for_game(self.game_id, self.team_them_id, opponent_player_number)
             if player:
                 self.selected_player_id = player['player_id']
             else:
@@ -2879,7 +2879,7 @@ class DataEntryWindow(QMainWindow):
                 self.db.connect()
             
             self.logger.debug(f"RECORD: Starting new rally - game_id={self.game_id}, rally_number={self.current_rally_number}, serving_team_id={serving_team_id}")
-            self.current_rally_id = self.db.start_rally(
+            self.current_rally_id = self.db.rallies.start_rally(
                 game_id=self.game_id,
                 rally_number=self.current_rally_number,
                 serving_team_id=serving_team_id
@@ -2910,7 +2910,7 @@ class DataEntryWindow(QMainWindow):
             
             # Only recalculate sequence if not in batch write (batch write sets it beforehand)
             if not getattr(self, '_in_batch_write', False):
-                self.current_sequence = self.db.get_current_rally_sequence(self.current_rally_id)
+                self.current_sequence = self.db.contacts.get_current_rally_sequence(self.current_rally_id)
         
         # Add contact to database
         try:
@@ -2995,7 +2995,7 @@ class DataEntryWindow(QMainWindow):
             self.logger.debug(f"RECORD:   timecode={timecode_ms}")
             self.logger.debug(f"RECORD:   outcome='{outcome}'")
             
-            contact_id = self.db.add_contact(
+            contact_id = self.db.contacts.add_contact(
                 rally_id=self.current_rally_id,
                 sequence_number=self.current_sequence,
                 contact_type=contact_type,
@@ -3377,7 +3377,7 @@ class DataEntryWindow(QMainWindow):
             return None
         
         # Un-end the rally
-        self.db.unend_rally(rally_id)
+        self.db.rallies.unend_rally(rally_id)
         self.logger.debug(f"Un-ended rally {rally_id}")
         
         # Restore score
@@ -3399,7 +3399,7 @@ class DataEntryWindow(QMainWindow):
         # Restore rally state
         self.rally_in_progress = True
         self.current_rally_id = rally_id
-        self.current_sequence = self.db.get_current_rally_sequence(rally_id) if self.db else 0
+        self.current_sequence = self.db.contacts.get_current_rally_sequence(rally_id) if self.db else 0
         
         # Update UI
         self.update_score_display()
@@ -3554,7 +3554,7 @@ class DataEntryWindow(QMainWindow):
             self.db.connect()
         
         # Get all contacts in this rally
-        contacts = self.db.get_rally_contacts(rally_id)
+        contacts = self.db.contacts.get_rally_contacts(rally_id)
         
         if not contacts:
             return
@@ -3700,7 +3700,7 @@ class DataEntryWindow(QMainWindow):
                     
                     if prior_contact_type in ['attack', 'freeball', 'block']:
                         # Mark this attack/freeball/block as a kill
-                        self.db.update_contact_outcome(prior_contact_id, 'kill')
+                        self.db.contacts.update_contact_outcome(prior_contact_id, 'kill')
                         self.logger.debug(f"Contact {prior_contact_id} ({prior_contact_type}) assigned outcome 'kill' (subsequent pass error)")
                         break  # Only mark the immediate prior attack/freeball/block
             
@@ -3778,7 +3778,7 @@ class DataEntryWindow(QMainWindow):
                 # Get the next sequence number for this rally
                 if not self.db.conn:
                     self.db.connect()
-                next_sequence = self.db.get_current_rally_sequence(rally_id_to_update)
+                next_sequence = self.db.contacts.get_current_rally_sequence(rally_id_to_update)
                 
                 # Convert coordinates to integers if they are floats (from coordinate mapper)
                 x_coord = int(round(self.last_clicked_x))
@@ -5382,7 +5382,7 @@ class DataEntryWindow(QMainWindow):
         if reply == QMessageBox.Yes:
             try:
                 # Delete all rallies and contacts for this game
-                contacts_deleted, rallies_deleted = self.db.delete_game_rallies_and_contacts(self.game_id)
+                contacts_deleted, rallies_deleted = self.db.rallies.delete_game_rallies_and_contacts(self.game_id)
                 
                 # Delete all events for this game EXCEPT initial_setup events
                 if not self.db.conn:

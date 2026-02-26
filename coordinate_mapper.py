@@ -6,6 +6,7 @@ Uses OpenCV homography for accurate perspective transformation.
 import numpy as np
 import cv2
 import json
+import psycopg2.extras
 from collections import deque
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGraphicsView, QGraphicsScene,
@@ -453,7 +454,7 @@ class CoordinateMapper(QMainWindow):
                     team_id = None
                     incomplete_contacts = []
                     
-                    player = self.db.get_player_by_number_for_game(self.game_id, self.team_us_id, player_number)
+                    player = self.db.game_players.get_player_by_number_for_game(self.game_id, self.team_us_id, player_number)
                     if player:
                         team_id = self.team_us_id
                         # Check if voice input is enabled for team_us
@@ -463,7 +464,7 @@ class CoordinateMapper(QMainWindow):
                             incomplete_contacts = [c for c in parent.pending_contacts if not c['is_complete'] and c['team_id'] == self.team_us_id]
                     else:
                         # Try team_them
-                        player = self.db.get_player_by_number_for_game(self.game_id, self.team_them_id, player_number)
+                        player = self.db.game_players.get_player_by_number_for_game(self.game_id, self.team_them_id, player_number)
                         if player:
                             team_id = self.team_them_id
                             # Check if voice input is enabled for team_them
@@ -545,7 +546,7 @@ class CoordinateMapper(QMainWindow):
                         try:
                             if not self.db.conn:
                                 self.db.connect()
-                            player = self.db.get_player_by_number_for_game(self.game_id, self.team_us_id, player_number)
+                            player = self.db.game_players.get_player_by_number_for_game(self.game_id, self.team_us_id, player_number)
                             if player:
                                 team_id = self.team_us_id
                                 # Check if voice input is enabled for team_us
@@ -560,7 +561,7 @@ class CoordinateMapper(QMainWindow):
                         try:
                             if not self.db.conn:
                                 self.db.connect()
-                            player = self.db.get_player_by_number_for_game(self.game_id, self.team_them_id, player_number)
+                            player = self.db.game_players.get_player_by_number_for_game(self.game_id, self.team_them_id, player_number)
                             if player:
                                 team_id = self.team_them_id
                                 # Check if voice input is enabled for team_them
@@ -648,13 +649,14 @@ class CoordinateMapper(QMainWindow):
                     self.score_them = count
             
             # Get current rally number
+            cursor = self.db.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
             cursor.execute(
-                "SELECT MAX(rally_number) FROM rallies WHERE game_id = %s",
+                "SELECT MAX(rally_number) as max_rally FROM rallies WHERE game_id = %s",
                 (self.game_id,)
             )
             result = cursor.fetchone()
-            if result and result[0]:
-                self.current_rally_number = result[0]
+            if result and result['max_rally']:
+                self.current_rally_number = result['max_rally']
             else:
                 self.current_rally_number = 0
         except Exception as e:
@@ -708,16 +710,16 @@ class CoordinateMapper(QMainWindow):
         try:
             if not self.db.conn:
                 self.db.connect()
-            cursor = self.db.conn.cursor()
+            cursor = self.db.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
             
             # Check if there are any events (any type) for this game, excluding initial_setup
             cursor.execute("""
-                SELECT COUNT(*) 
+                SELECT COUNT(*) as count
                 FROM events 
                 WHERE game_id = %s AND event_type != 'initial_setup'
             """, (self.game_id,))
             result = cursor.fetchone()
-            return result[0] > 0 if result else False
+            return result['count'] > 0 if result else False
         except Exception as e:
             print(f"Error checking for events to undo: {e}")
             return False
@@ -789,7 +791,7 @@ class CoordinateMapper(QMainWindow):
             serving_team_id = point_winner_id
             
             # Find the most recent rally (the one that just ended or was created when "down" was clicked)
-            cursor = self.db.conn.cursor()
+            cursor = self.db.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
             cursor.execute("""
                 SELECT rally_id, rally_number, serving_team_id
                 FROM rallies 
@@ -803,7 +805,9 @@ class CoordinateMapper(QMainWindow):
                 self.set_status_message("Error: No rally found to update!")
                 return
             
-            rally_id, rally_number, prev_serving_team_id = result
+            rally_id = result['rally_id']
+            rally_number = result['rally_number']
+            prev_serving_team_id = result['serving_team_id']
             
             # Check if team_them served in this rally to determine if rotation is needed
             team_them_served_previous = False
@@ -813,7 +817,7 @@ class CoordinateMapper(QMainWindow):
             # Update the rally with the point winner (don't create a new one)
             # Use current time for rally_end_time since we don't have the "down" click timecode here
             from datetime import datetime
-            self.db.end_rally(rally_id, point_winner_id, datetime.now())
+            self.db.rallies.end_rally(rally_id, point_winner_id, datetime.now())
             
             # Update local score
             if team == 'us':
@@ -1116,12 +1120,12 @@ class CoordinateMapper(QMainWindow):
                 print(f"DEBUG: Video dimensions - W: {video_width}, H: {video_height}")
                 print(f"DEBUG: Scene dimensions - W: {scene_width}, H: {scene_height}")
                 # Save homography matrix along with court boundaries
-                self.db.save_game_court_boundaries(self.game_id, court_points_dict, self.homography_matrix)
+                self.db.games.save_game_court_boundaries(self.game_id, court_points_dict, self.homography_matrix)
                 
                 # Save video file path if available
                 if self.video_file_path:
                     try:
-                        self.db.update_game_video_path(self.game_id, self.video_file_path)
+                        self.db.games.update_game_video_path(self.game_id, self.video_file_path)
                         print(f"DEBUG: Video file path stored: {self.video_file_path}")
                     except Exception as e:
                         print(f"Warning: Failed to save video file path: {e}")
@@ -1737,7 +1741,7 @@ class CoordinateMapper(QMainWindow):
             else:
                 return []
         
-        cursor = self.db.conn.cursor()
+        cursor = self.db.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         
         # Get all players in game_players for this team
         cursor.execute("""
@@ -1764,10 +1768,10 @@ class CoordinateMapper(QMainWindow):
             WHERE game_id = %s AND team_id = %s
         """, (self.game_id, team_id))
         
-        active_player_ids = {row[0] for row in cursor.fetchall()}
+        active_player_ids = {row['player_id'] for row in cursor.fetchall()}
         
         # Filter to get bench players (not in active_lineup)
-        bench_players = [(pid, pnum, pname) for pid, pnum, pname in all_players if pid not in active_player_ids]
+        bench_players = [(p['player_id'], p['player_number'], p['name']) for p in all_players if p['player_id'] not in active_player_ids]
         
         return bench_players
     
@@ -1815,7 +1819,7 @@ class CoordinateMapper(QMainWindow):
             else:
                 return None
         
-        cursor = self.db.conn.cursor()
+        cursor = self.db.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cursor.execute("""
             SELECT player_id 
             FROM players 
@@ -1824,7 +1828,7 @@ class CoordinateMapper(QMainWindow):
         """, (team_id,))
         
         result = cursor.fetchone()
-        return result[0] if result else None
+        return result['player_id'] if result else None
     
     def show_substitution_dialog(self):
         """Show dialog for player substitution by calling parent DataEntryWindow's method."""
@@ -2029,7 +2033,7 @@ class CoordinateMapper(QMainWindow):
                 self.libero_replacements[pos] = replaced_player_id
                 
                 # Get player info for message
-                cursor = self.db.conn.cursor()
+                cursor = self.db.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
                 cursor.execute("""
                     SELECT COALESCE(p.jersey, p.player_number) as player_number, p.name
                     FROM players p
@@ -2037,7 +2041,8 @@ class CoordinateMapper(QMainWindow):
                 """, (replaced_player_id,))
                 player_info = cursor.fetchone()
                 if player_info:
-                    player_number, player_name = player_info
+                    player_number = player_info['player_number']
+                    player_name = player_info['name']
                     player_display = f"{player_name or 'Unknown'} ({player_number})"
                 else:
                     player_display = f"Player #{replaced_player_id}"
@@ -2289,7 +2294,7 @@ class CoordinateMapper(QMainWindow):
             # Get player info for message
             if not self.db.conn:
                 self.db.connect()
-            cursor = self.db.conn.cursor()
+            cursor = self.db.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
             cursor.execute("""
                 SELECT COALESCE(p.jersey, p.player_number) as player_number, p.name
                 FROM players p
@@ -2297,7 +2302,8 @@ class CoordinateMapper(QMainWindow):
             """, (replaced_player_id,))
             player_info = cursor.fetchone()
             if player_info:
-                player_number, player_name = player_info
+                player_number = player_info['player_number']
+                player_name = player_info['name']
                 player_display = f"{player_name or 'Unknown'} ({player_number})"
             else:
                 player_display = f"Player #{replaced_player_id}"
@@ -2731,7 +2737,7 @@ class CoordinateMapper(QMainWindow):
         if not self.db.conn:
             self.db.connect()
         
-        cursor = self.db.conn.cursor()
+        cursor = self.db.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cursor.execute("""
             SELECT COALESCE(p.jersey, p.player_number) as player_number, p.name
             FROM players p
@@ -2740,7 +2746,7 @@ class CoordinateMapper(QMainWindow):
         
         result = cursor.fetchone()
         if result:
-            return (result[1], result[0])  # (name, number)
+            return (result['name'], result['player_number'])  # (name, number)
         return (None, None)
     
     def _format_event_history(self, event_id: int, event_type: str, payload: dict, team_id: int):

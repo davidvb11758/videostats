@@ -132,7 +132,7 @@ class ConfigScreen(QDialog):
                 self.db.connect()
             
             # Add team to database
-            team_id = self.db.add_team(new_team_name)
+            team_id = self.db.teams.add_team(new_team_name)
             
             # Add to both dropdowns
             self.ui.comboBoxOurTeam.addItem(new_team_name, team_id)
@@ -193,12 +193,12 @@ class ConfigScreen(QDialog):
             
             # If team_id is None, it means user typed a new team name
             if our_team_id is None:
-                self.team_us_id = self.db.add_team(our_team_name)
+                self.team_us_id = self.db.teams.add_team(our_team_name)
             else:
                 self.team_us_id = our_team_id
             
             if opponent_team_id is None:
-                self.team_them_id = self.db.add_team(opponent_team_name)
+                self.team_them_id = self.db.teams.add_team(opponent_team_name)
             else:
                 self.team_them_id = opponent_team_id
             
@@ -209,7 +209,7 @@ class ConfigScreen(QDialog):
                 return
             
             # Start a new game
-            self.game_id = self.db.start_game(
+            self.game_id = self.db.games.start_game(
                 team_us_id=self.team_us_id,
                 team_them_id=self.team_them_id,
                 notes=None

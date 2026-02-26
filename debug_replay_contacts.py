@@ -158,7 +158,7 @@ class DebugReplayContactsWindow(QMainWindow):
         cursor = self.db.conn.cursor()
         
         # Get video file path using database method
-        video_path = self.db.get_game_video_path(self.game_id)
+        video_path = self.db.games.get_game_video_path(self.game_id)
         if not video_path:
             QMessageBox.warning(self, "No Video", f"Game {self.game_id} does not have a video file path.")
             # Don't return - still show window even without video
